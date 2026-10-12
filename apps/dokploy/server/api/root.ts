@@ -15,6 +15,7 @@ import { dockerDiskUsageRouter } from "./routers/docker-disk-usage";
 import { dockerImageRouter } from "./routers/docker-image";
 import { dockerVolumeRouter } from "./routers/docker-volume";
 import { domainRouter } from "./routers/domain";
+import { envRouter } from "./routers/env";
 import { environmentRouter } from "./routers/environment";
 import { gitProviderRouter } from "./routers/git-provider";
 import { giteaRouter } from "./routers/gitea";
@@ -81,6 +82,7 @@ export const appRouter = createTRPCRouter({
 	dockerImage: dockerImageRouter,
 	dockerVolume: dockerVolumeRouter,
 	domain: domainRouter,
+	env: envRouter,
 	gitea: giteaRouter,
 	gitProvider: gitProviderRouter,
 	github: githubRouter,

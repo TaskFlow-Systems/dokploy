@@ -270,6 +270,8 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"domain.toggleEnable": "write",
 	"domain.update": "write",
 	"domain.validateDomain": "write",
+	"env.applyChanges": "write",
+	"env.keys": "read",
 	"environment.byProjectId": "read",
 	"environment.create": "write",
 	"environment.duplicate": "write",
