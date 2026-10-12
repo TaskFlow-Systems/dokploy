@@ -27,6 +27,7 @@ import {
 	Loader2,
 	LogIn,
 	type LucideIcon,
+	Network,
 	Package,
 	Palette,
 	Server,
@@ -208,6 +209,14 @@ const MENU: Menu = {
 			url: "/dashboard/traefik",
 			icon: GalleryVerticalEnd,
 			// Only enabled for users with access to Traefik files
+			isEnabled: ({ permissions }) => !!permissions?.traefikFiles.read,
+		},
+		{
+			isSingle: true,
+			title: "Domains",
+			url: "/dashboard/domains",
+			icon: Network,
+			// Same gate as domainOverview: the page lists the routes and certificates that readTraefikFile guards
 			isEnabled: ({ permissions }) => !!permissions?.traefikFiles.read,
 		},
 		{
