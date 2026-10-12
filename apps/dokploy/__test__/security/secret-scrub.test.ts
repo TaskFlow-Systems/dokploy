@@ -106,6 +106,15 @@ describe("scrubSecretOutput", () => {
 		});
 	});
 
+	it("never rewrites image references", () => {
+		const value = {
+			dockerImage: "auth-service:release-2",
+			Image: "registry.example.test/team/token-api:main",
+		};
+
+		expect(scrubSecretOutput(value)).toEqual(value);
+	});
+
 	it("never rewrites identifiers and names", () => {
 		const matcher = buildKnownSecretMatcher(["svc-auth-Prod1"]);
 		const value = {
@@ -225,8 +234,32 @@ describe("scrubSecretText", () => {
 		"SMTP_HOST: mail.auth.example:587",
 		"upstream token-service:8080 is healthy",
 		"listening on port 3000, workers: 4",
-	])("does not read a host and port as a key and value in %s", (input) => {
-		expect(scrubSecretText(input)).toBe(input);
+		"image: auth-service:1.2.3-alpine",
+		"image: session-store:latest",
+		'ports:\n  - "auth-proxy:8443"',
+	])(
+		"does not read a host, port or image tag as a key and value in %s",
+		(input) => {
+			expect(scrubSecretText(input)).toBe(input);
+		},
+	);
+
+	it("leaves the structure of YAML and JSON with secret-looking names", () => {
+		const yaml = [
+			"http:",
+			"  routers:",
+			"    auth-service-router:",
+			"      rule: Host(`app.example.test`)",
+			"      service: auth-service",
+			"services:",
+			"  session-store:",
+			"    image: redis:7",
+		].join("\n");
+		const json =
+			'{\n  "auth": {\n    "user": "app"\n  },\n  "tokens": ["a"]\n}';
+
+		expect(scrubSecretText(yaml)).toBe(yaml);
+		expect(scrubSecretText(json)).toBe(json);
 	});
 
 	it.each([

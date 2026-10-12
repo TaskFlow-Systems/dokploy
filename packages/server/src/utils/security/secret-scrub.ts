@@ -30,9 +30,11 @@ const SENSITIVE_OUTPUT_KEY =
 const DESCRIPTIVE_KEY_SUFFIX =
 	/(?:Id|Ids|Name|Names|Path|Type|Count|At|Enabled|Status|Length|Prefix)$/;
 
-// Identifiers and revisions are never secrets, and a caller that gets one back
-// mangled can no longer address the resource or pass the revision on.
-const IDENTITY_KEY = /(?:^id$|Id$|Ids$|^name$|Name$|^revision$|Revision$)/;
+// Identifiers, revisions and image references are never secrets, and a caller
+// that gets one back mangled can no longer address the resource or pass the
+// revision on.
+const IDENTITY_KEY =
+	/(?:^id$|Id$|Ids$|^name$|Name$|^revision$|Revision$|^image$|Image$)/;
 
 const SECRET_ENV_NAME =
 	/(?:^|_)(?:AUTH|CERT|CONNECTION_STRING|COOKIE|CREDENTIALS?|DSN|ENCRYPTION|JWT|KEYS?|LICENSE|MNEMONIC|PASS|PASSPHRASE|PASSWD|PASSWORD|PRIVATE|PW|PWD|SALT|SECRETS?|SEED|SESSION|SIGNATURE|TOKENS?|WEBHOOK)(?:$|_)/i;

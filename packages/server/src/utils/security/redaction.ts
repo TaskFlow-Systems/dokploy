@@ -435,11 +435,15 @@ const BROAD_SENSITIVE_KEY_PATTERN =
 const BRACED_VALUE_PATTERN = String.raw`(?:\$\{\{[^}\s]*\}\}|\$\{[^}\s]*\})+`;
 const KEY_VALUE_PATTERN = `${BRACED_VALUE_PATTERN}|"[^"]*"|'[^']*'|[^\\s,}\\]]+`;
 
+// What follows `name:` in an image reference or a host is a tag or a port.
+const TAG_OR_PORT_PATTERN = String.raw`(?:\d{1,5}|v?\d+(?:\.\d+)+[\w.-]*|latest|stable|main|master|canary|edge|nightly)(?:[/\s"',)\]]|$)`;
+
 // The broad patterns run over whole logs and files, so each one anchors on the
 // keyword and bounds what surrounds it: scanning a free prefix from every word
 // boundary is quadratic on a long line without spaces. A key also has to look
-// like a key, or the short keywords would read `auth-db:5432` in a URL as the
-// key `auth-db` with the value `5432`.
+// like a key with a scalar value on the same line. Otherwise the short
+// keywords would read `auth-db:5432` in a URL, the image `auth-api:1.2.3` or
+// the YAML mapping `auth-router:` as a secret.
 const BROAD_KEY_PATTERNS: KeyPatterns = {
 	beforeAuthorization: [
 		new RegExp(
@@ -449,11 +453,11 @@ const BROAD_KEY_PATTERNS: KeyPatterns = {
 	],
 	afterAuthorization: [
 		new RegExp(
-			`(${BROAD_SENSITIVE_KEY_PATTERN}[^"'\\n]{0,80}["']\\s*:\\s*)(${KEY_VALUE_PATTERN})`,
+			`(${BROAD_SENSITIVE_KEY_PATTERN}[^"'\\n]{0,80}["'][ \\t]*:[ \\t]*)(?![{[])(${KEY_VALUE_PATTERN})`,
 			"gi",
 		),
 		new RegExp(
-			`(?<=(?<![\\w.@/-])[\\w.-]{0,60})(${BROAD_SENSITIVE_KEY_PATTERN}[\\w.-]{0,80}\\s*:\\s*)(?!\\d{1,5}(?:[/\\s"',)\\]]|$))(${KEY_VALUE_PATTERN})`,
+			`(?<=(?<![\\w.@/-])[\\w.-]{0,60})(${BROAD_SENSITIVE_KEY_PATTERN}[\\w.-]{0,80}[ \\t]*:[ \\t]*)(?![{[]|${TAG_OR_PORT_PATTERN})(${KEY_VALUE_PATTERN})`,
 			"gi",
 		),
 		new RegExp(
