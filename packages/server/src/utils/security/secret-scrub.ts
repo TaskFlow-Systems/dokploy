@@ -1,16 +1,17 @@
+import { createHmac } from "node:crypto";
 import { parse } from "dotenv";
+import { betterAuthSecret } from "../../lib/auth-secret";
 import {
 	isVariableReference,
 	REDACTED_SECRET_VALUE,
 	redactSensitiveText,
+	SECRET_TOKEN_PATTERN,
 } from "./redaction";
 
 /**
- * What leaves the panel towards an AI (an API key response, a prompt for the
- * AI provider) never carries secret values: fields that hold secrets are
- * blanked, and every other string (logs, compose files, mounted files,
- * commands) is scrubbed of known secret values and of text that looks like a
- * credential.
+ * Text that leaves the panel towards an AI (an API key response, a prompt for
+ * the AI provider) is scrubbed of the secret values the panel stores and of
+ * anything that looks like a credential.
  */
 
 export type KnownSecretMatcher = {
@@ -23,28 +24,12 @@ export const EMPTY_KNOWN_SECRET_MATCHER: KnownSecretMatcher = {
 	pattern: null,
 };
 
-const SENSITIVE_OUTPUT_KEY =
-	/(?:env$|buildargs$|buildsecrets$|password|passwd|passphrase|secret|tokens?$|private_?key|api_?key$|access_?key|credential|authorization|^cookie$|dsn$|connection_?string|webhook_?url$|^dockerauth$|license_?key$|^userkey$|^headers$)/i;
-
-// `secretName`, `apiKeyId` or `tokenType` describe a secret without holding it.
-const DESCRIPTIVE_KEY_SUFFIX =
-	/(?:Id|Ids|Name|Names|Path|Type|Count|At|Enabled|Status|Length|Prefix)$/;
-
-// Identifiers, revisions and image references are never secrets, and a caller
-// that gets one back mangled can no longer address the resource or pass the
-// revision on.
-const IDENTITY_KEY =
-	/(?:^id$|Id$|Ids$|^name$|Name$|^revision$|Revision$|^image$|Image$)/;
-
 const SECRET_ENV_NAME =
 	/(?:^|_)(?:AUTH|CERT|CONNECTION_STRING|COOKIE|CREDENTIALS?|DSN|ENCRYPTION|JWT|KEYS?|LICENSE|MNEMONIC|PASS|PASSPHRASE|PASSWD|PASSWORD|PRIVATE|PW|PWD|SALT|SECRETS?|SEED|SESSION|SIGNATURE|TOKENS?|WEBHOOK)(?:$|_)/i;
 
 const MIN_KNOWN_SECRET_LENGTH = 8;
 const OPAQUE_VALUE = /^[A-Za-z0-9+/_=-]{32,}$/;
 const URL_USERINFO = /^[a-z][a-z0-9+.-]*:\/\/([^@\s/?#]+)@/i;
-
-export const isSensitiveOutputKey = (key: string) =>
-	SENSITIVE_OUTPUT_KEY.test(key) && !DESCRIPTIVE_KEY_SUFFIX.test(key);
 
 // A value only goes on the scrub list when replacing it everywhere cannot
 // mangle ordinary output: dictionary-like words and plain numbers stay out.
@@ -101,6 +86,62 @@ export const collectEnvSecretValues = (
 const escapeRegExp = (value: string) =>
 	value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+type TrieNode = { children: Map<string, TrieNode>; terminal: boolean };
+
+// One alternation per secret makes the regex engine try every secret at every
+// position. A prefix tree keeps a scan of a large log proportional to its size
+// however many secrets the panel stores, and prefers the longest secret.
+const toTriePattern = (node: TrieNode): string => {
+	const branches = [...node.children].map(
+		([character, child]) => `${escapeRegExp(character)}${toTriePattern(child)}`,
+	);
+	if (branches.length === 0) {
+		return "";
+	}
+	if (node.terminal) {
+		return `(?:${branches.join("|")})?`;
+	}
+	return branches.length === 1 ? branches[0]! : `(?:${branches.join("|")})`;
+};
+
+const buildTriePattern = (values: Iterable<string>) => {
+	const root: TrieNode = { children: new Map(), terminal: false };
+	for (const value of values) {
+		let node = root;
+		for (const character of value) {
+			let child = node.children.get(character);
+			if (!child) {
+				child = { children: new Map(), terminal: false };
+				node.children.set(character, child);
+			}
+			node = child;
+		}
+		node.terminal = true;
+	}
+	root.terminal = false;
+	return toTriePattern(root);
+};
+
+const MIN_ENCODED_FORM_LENGTH = 16;
+
+// A secret printed in base64 or hex is still the secret. Base64 text depends on
+// where the value starts inside the encoded data, so each of the three
+// alignments is covered, without the characters that mix in neighbouring bytes.
+const encodedForms = (value: string) => {
+	const bytes = Buffer.from(value, "utf8");
+	const hex = bytes.toString("hex");
+	const forms = [hex, hex.toUpperCase()];
+	for (let shift = 0; shift < 3; shift++) {
+		const encoded = Buffer.concat([Buffer.alloc(shift), bytes])
+			.toString("base64")
+			.replace(/=+$/, "");
+		const dangling = ((shift + bytes.length) * 8) % 6 === 0 ? 0 : 1;
+		const core = encoded.slice([0, 2, 3][shift], encoded.length - dangling);
+		forms.push(core, core.replace(/\+/g, "-").replace(/\//g, "_"));
+	}
+	return forms.filter((form) => form.length >= MIN_ENCODED_FORM_LENGTH);
+};
+
 export const buildKnownSecretMatcher = (
 	values: Iterable<string>,
 ): KnownSecretMatcher => {
@@ -108,13 +149,53 @@ export const buildKnownSecretMatcher = (
 	if (unique.length === 0) {
 		return EMPTY_KNOWN_SECRET_MATCHER;
 	}
-	// Longest first, so a secret that contains another one is replaced whole.
-	unique.sort((a, b) => b.length - a.length);
 	return {
 		size: unique.length,
-		pattern: new RegExp(unique.map(escapeRegExp).join("|"), "g"),
+		pattern: new RegExp(
+			buildTriePattern([...unique, ...unique.flatMap(encodedForms)]),
+			"g",
+		),
 	};
 };
+
+const TOKEN_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+
+// A token is the placeholder plus an id of the hidden value. The id is keyed
+// with a server secret, so it says nothing about the value, and it is the same
+// each time the value is hidden, so a token read earlier still resolves.
+export const secretTokenFor = (value: string) => {
+	const digest = createHmac("sha256", betterAuthSecret)
+		.update("secret-token-v1\0")
+		.update(value)
+		.digest();
+	let id = "";
+	for (let index = 0; index < 12; index++) {
+		id += TOKEN_ALPHABET[digest[index]! & 31];
+	}
+	return `${REDACTED_SECRET_VALUE}${id}__`;
+};
+
+const SECRET_TOKEN = new RegExp(SECRET_TOKEN_PATTERN, "g");
+const WHOLE_SECRET_TOKEN = new RegExp(`^${SECRET_TOKEN_PATTERN}$`);
+// The token comes first: a token starts with the plain placeholder.
+const ANY_PLACEHOLDER = new RegExp(
+	`${SECRET_TOKEN_PATTERN}|${escapeRegExp(REDACTED_SECRET_VALUE)}|\\[REDACTED\\]`,
+	"g",
+);
+
+export const findSecretTokens = (text: string) =>
+	text.match(SECRET_TOKEN) ?? [];
+
+// A plain placeholder carries no id, so the value behind it cannot be put back.
+export const hasUnrestorablePlaceholder = (text: string) =>
+	(text.match(ANY_PLACEHOLDER) ?? []).some(
+		(placeholder) => !WHOLE_SECRET_TOKEN.test(placeholder),
+	);
+
+export const replaceSecretTokens = (
+	text: string,
+	resolve: (token: string) => string,
+) => text.replace(SECRET_TOKEN, resolve);
 
 const PRIVATE_KEY_BLOCK =
 	/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
@@ -183,98 +264,49 @@ const splitLongLine = (line: string) => {
 	return pieces;
 };
 
-const scrubCredentialPatterns = (text: string) => {
+type SecretReplacement = (secret: string) => string;
+
+const scrubCredentialPatterns = (
+	text: string,
+	replacement: SecretReplacement | undefined,
+) => {
+	const hide = replacement ?? (() => REDACTED_SECRET_VALUE);
 	let scrubbed = text;
 	for (const shape of TOKEN_SHAPES) {
-		scrubbed = scrubbed.replace(shape, REDACTED_SECRET_VALUE);
+		scrubbed = scrubbed.replace(shape, (secret) => hide(secret));
 	}
 	return redactSensitiveText(scrubbed, {
 		broadKeys: true,
 		keepVariableReferences: true,
+		replacement,
 	});
 };
 
+// With `replacement` every hidden value becomes whatever it returns for that
+// value, which is how restorable tokens are produced.
 export const scrubSecretText = (
 	text: string,
 	matcher: KnownSecretMatcher = EMPTY_KNOWN_SECRET_MATCHER,
+	replacement?: SecretReplacement,
 ) => {
 	if (text === "") {
 		return text;
 	}
+	const hide = replacement ?? (() => REDACTED_SECRET_VALUE);
 	const scrubbed = (
 		matcher.pattern
-			? text.replace(matcher.pattern, REDACTED_SECRET_VALUE)
+			? text.replace(matcher.pattern, (secret) => hide(secret))
 			: text
-	).replace(PRIVATE_KEY_BLOCK, REDACTED_SECRET_VALUE);
+	).replace(PRIVATE_KEY_BLOCK, (secret) => hide(secret));
 	if (!hasLongLine(scrubbed)) {
-		return scrubCredentialPatterns(scrubbed);
+		return scrubCredentialPatterns(scrubbed, replacement);
 	}
 	return scrubbed
 		.split("\n")
-		.map((line) => splitLongLine(line).map(scrubCredentialPatterns).join(""))
+		.map((line) =>
+			splitLongLine(line)
+				.map((piece) => scrubCredentialPatterns(piece, replacement))
+				.join(""),
+		)
 		.join("\n");
 };
-
-const isPlainObject = (value: unknown): value is Record<string, unknown> => {
-	if (value === null || typeof value !== "object") {
-		return false;
-	}
-	const prototype = Object.getPrototypeOf(value);
-	return prototype === Object.prototype || prototype === null;
-};
-
-const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
-
-// Under a secret-bearing key every value is blanked. The names in a list of
-// assignments (a docker `Env` array) and the keys of a map stay readable.
-const blankSecretValue = (value: unknown, listItem = false): unknown => {
-	if (typeof value === "string") {
-		if (value === "") {
-			return value;
-		}
-		const assignment = listItem ? ENV_ASSIGNMENT.exec(value) : null;
-		return assignment
-			? `${assignment[1]}=${REDACTED_SECRET_VALUE}`
-			: REDACTED_SECRET_VALUE;
-	}
-	if (Array.isArray(value)) {
-		return value.map((item) => blankSecretValue(item, true));
-	}
-	if (isPlainObject(value)) {
-		return Object.fromEntries(
-			Object.entries(value).map(([key, item]) => [key, blankSecretValue(item)]),
-		);
-	}
-	return value;
-};
-
-const scrubValue = (
-	value: unknown,
-	key: string | null,
-	matcher: KnownSecretMatcher,
-): unknown => {
-	if (typeof value === "string") {
-		return key !== null && IDENTITY_KEY.test(key)
-			? value
-			: scrubSecretText(value, matcher);
-	}
-	if (Array.isArray(value)) {
-		return value.map((item) => scrubValue(item, key, matcher));
-	}
-	if (!isPlainObject(value)) {
-		return value;
-	}
-	return Object.fromEntries(
-		Object.entries(value).map(([childKey, child]) => [
-			childKey,
-			isSensitiveOutputKey(childKey)
-				? blankSecretValue(child)
-				: scrubValue(child, childKey, matcher),
-		]),
-	);
-};
-
-export const scrubSecretOutput = <T>(
-	value: T,
-	matcher: KnownSecretMatcher = EMPTY_KNOWN_SECRET_MATCHER,
-): T => scrubValue(value, null, matcher) as T;

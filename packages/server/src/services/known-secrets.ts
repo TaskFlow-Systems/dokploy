@@ -12,6 +12,7 @@ import {
 	redis,
 	registry,
 } from "@dokploy/server/db/schema";
+import { collectComposeSecretValues } from "@dokploy/server/utils/security/compose-secrets";
 import {
 	buildKnownSecretMatcher,
 	collectEnvSecretValues,
@@ -51,7 +52,9 @@ const loadKnownSecretValues = async () => {
 				password: applications.password,
 			})
 			.from(applications),
-		db.select({ env: compose.env }).from(compose),
+		db
+			.select({ env: compose.env, composeFile: compose.composeFile })
+			.from(compose),
 		db
 			.select({ env: postgres.env, password: postgres.databasePassword })
 			.from(postgres),
@@ -102,7 +105,11 @@ const loadKnownSecretValues = async () => {
 		);
 		addPassword(row.password);
 	}
-	for (const row of [...composeRows, ...projectRows, ...environmentRows]) {
+	for (const row of composeRows) {
+		addEnv(row.env);
+		values.push(...collectComposeSecretValues(row.composeFile));
+	}
+	for (const row of [...projectRows, ...environmentRows]) {
 		addEnv(row.env);
 	}
 	for (const row of [

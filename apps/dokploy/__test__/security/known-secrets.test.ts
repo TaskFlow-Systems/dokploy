@@ -50,7 +50,18 @@ describe("getKnownSecretMatcher", () => {
 				password: "App-Registry-Pass-1",
 			},
 		]);
-		state.rows.set(schema.compose, [{ env: "JWT_SECRET=Compose-Value-1" }]);
+		state.rows.set(schema.compose, [
+			{
+				env: "JWT_SECRET=Compose-Value-1",
+				composeFile:
+					"services:\n  api:\n    environment:\n      API_TOKEN: Compose-Inline-1\n      - bad",
+			},
+			{
+				env: null,
+				composeFile:
+					"services:\n  api:\n    environment:\n      API_TOKEN: Compose-Inline-2\n      COLOUR: teal\n    build:\n      args:\n        - NPM_TOKEN=Compose-Inline-3\n",
+			},
+		]);
 		state.rows.set(schema.postgres, [
 			{ env: null, password: "Postgres-Pass-1" },
 		]);
@@ -79,6 +90,8 @@ describe("getKnownSecretMatcher", () => {
 			"App-PreviewSecret-Value-1",
 			"App-Registry-Pass-1",
 			"Compose-Value-1",
+			"Compose-Inline-2",
+			"Compose-Inline-3",
 			"Postgres-Pass-1",
 			"Mysql-Pass-1",
 			"Mysql-Root-1",

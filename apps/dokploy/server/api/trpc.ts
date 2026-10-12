@@ -179,7 +179,7 @@ const apiKeyOutputGuard = t.middleware(
 		if (viaApiKey) {
 			assertProcedureAllowedForApiKey(path);
 			if (type === "mutation") {
-				assertNoRedactedTextInInput(await getRawInput());
+				assertNoRedactedTextInInput(path, await getRawInput());
 			}
 		}
 		const result = await next();

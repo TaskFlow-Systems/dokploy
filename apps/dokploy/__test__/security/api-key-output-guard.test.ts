@@ -51,7 +51,67 @@ const secretReader = protectedProcedure.mutation(() => {
 	return { env: SENTINEL };
 });
 
+const storedCompose = [
+	"services:",
+	"  api:",
+	"    image: api:1",
+	"    environment:",
+	`      FAVOURITE_COLOUR: ${SENTINEL}`,
+	"      NEUTRAL_NAME: plain-neutral-value",
+	"",
+].join("\n");
+const storedMount = `user=app\npassword=${SENTINEL}\nport=8080\n`;
+const saved = vi.fn();
+
+const { restoreApiKeyText } = await import(
+	"@/server/api/utils/api-key-output-guard"
+);
+
 const testRouter = createTRPCRouter({
+	compose: createTRPCRouter({
+		one: protectedProcedure.query(() => ({
+			composeId: "compose-1",
+			composeFile: storedCompose,
+		})),
+		getConvertedCompose: protectedProcedure.query(() => storedCompose),
+		update: protectedProcedure
+			.input(
+				z.object({
+					composeFile: z.string(),
+					description: z.string().optional(),
+				}),
+			)
+			.mutation(async ({ input, ctx }) => {
+				saved(
+					await restoreApiKeyText(
+						ctx.session,
+						"compose",
+						input.composeFile,
+						storedCompose,
+					),
+				);
+				return true;
+			}),
+	}),
+	mounts: createTRPCRouter({
+		one: protectedProcedure.query(() => ({
+			mountId: "m-1",
+			content: storedMount,
+		})),
+		update: protectedProcedure
+			.input(z.object({ content: z.string() }))
+			.mutation(async ({ input, ctx }) => {
+				saved(
+					await restoreApiKeyText(
+						ctx.session,
+						"file",
+						input.content,
+						storedMount,
+					),
+				);
+				return true;
+			}),
+	}),
 	application: createTRPCRouter({
 		one: protectedProcedure.query(() => service),
 		readLogs: protectedProcedure.query(
@@ -231,6 +291,98 @@ describe("procedures that return raw secrets", () => {
 		for (const path of reveals) {
 			expect(isProcedureDeniedForApiKey(path), path).toBe(true);
 		}
+	});
+});
+
+describe("texts an API key may edit", () => {
+	const TOKEN = /__DOKPLOY_REDACTED_SECRET__[A-Z2-7]{12}__/g;
+
+	it("shows a compose file with every literal value behind a token", async () => {
+		const { composeFile } = await apiKey().compose.one();
+		const converted = await apiKey().compose.getConvertedCompose();
+
+		for (const text of [composeFile, converted]) {
+			expect(text).not.toContain(SENTINEL);
+			expect(text).not.toContain("plain-neutral-value");
+			expect(text).toContain("image: api:1");
+			expect(text.match(TOKEN)).toHaveLength(2);
+		}
+	});
+
+	it("puts the values back when the edited compose file is saved", async () => {
+		const { composeFile } = await apiKey().compose.one();
+
+		await apiKey().compose.update({
+			composeFile: composeFile.replace("image: api:1", "image: api:2"),
+		});
+
+		expect(saved).toHaveBeenCalledTimes(1);
+		const restored = saved.mock.calls[0]?.[0] as string;
+		expect(restored).toContain("image: api:2");
+		expect(restored).toContain(SENTINEL);
+		expect(restored).toContain("plain-neutral-value");
+		expect(restored.match(TOKEN)).toBeNull();
+	});
+
+	it("does the same for a mounted file", async () => {
+		const { content } = await apiKey().mounts.one();
+		expect(content).not.toContain(SENTINEL);
+
+		await apiKey().mounts.update({
+			content: content.replace("port=8080", "port=9090"),
+		});
+
+		expect(saved).toHaveBeenCalledWith(
+			storedMount.replace("port=8080", "port=9090"),
+		);
+	});
+
+	it("rejects a compose file whose hidden value was moved into view", async () => {
+		const { composeFile } = await apiKey().compose.one();
+		// The second value is unknown to the panel: only its place hides it.
+		const token = composeFile.match(TOKEN)?.[1] as string;
+
+		await expect(
+			apiKey().compose.update({
+				composeFile: composeFile.replace("image: api:1", `image: ${token}`),
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+		expect(saved).not.toHaveBeenCalled();
+	});
+
+	it("rejects tokens outside the field that can restore them", async () => {
+		const { composeFile } = await apiKey().compose.one();
+		const token = composeFile.match(TOKEN)?.[0] as string;
+
+		await expect(
+			apiKey().compose.update({
+				composeFile: "services: {}",
+				description: token,
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+		await expect(
+			apiKey().application.update({ command: `run ${token}` }),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+		expect(saved).not.toHaveBeenCalled();
+	});
+
+	it("rejects placeholders that carry no token", async () => {
+		await expect(
+			apiKey().compose.update({
+				composeFile: `services:\n  a:\n    image: ${R}\n`,
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+		await expect(
+			apiKey().mounts.update({ content: "password=[REDACTED]" }),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+	});
+
+	it("leaves what a browser session sends untouched", async () => {
+		const text = `services:\n  a:\n    image: ${R}\n`;
+
+		await browser().compose.update({ composeFile: text });
+
+		expect(saved).toHaveBeenCalledWith(text);
 	});
 });
 

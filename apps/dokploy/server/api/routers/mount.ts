@@ -21,6 +21,7 @@ import {
 } from "@dokploy/server/services/permission";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { restoreApiKeyText } from "@/server/api/utils/api-key-output-guard";
 import { audit } from "@/server/api/utils/audit";
 import {
 	apiCreateMount,
@@ -159,7 +160,15 @@ export const mountRouter = createTRPCRouter({
 				resourceId: input.mountId,
 				resourceName: input.mountPath,
 			});
-			return await updateMount(input.mountId, input);
+			return await updateMount(input.mountId, {
+				...input,
+				content: await restoreApiKeyText(
+					ctx.session,
+					"file",
+					input.content,
+					mount.content,
+				),
+			});
 		}),
 	allNamedByApplicationId: protectedProcedure
 		.input(z.object({ applicationId: z.string().min(1) }))

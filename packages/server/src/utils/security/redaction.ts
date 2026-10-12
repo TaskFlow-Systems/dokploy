@@ -467,6 +467,11 @@ const BROAD_KEY_PATTERNS: KeyPatterns = {
 	],
 };
 
+const SECRET_LOOKING_NAME = new RegExp(BROAD_SENSITIVE_KEY_PATTERN, "i");
+
+export const isSecretLookingName = (name: string) =>
+	SECRET_LOOKING_NAME.test(name);
+
 const VARIABLE_REFERENCE_PATTERN = String.raw`\$\{\{\s*[A-Za-z_][\w.-]*\s*\}\}|\$\{[A-Za-z_]\w*(?::?\?[^}]*)?\}|\$[A-Za-z_]\w*`;
 const VARIABLE_REFERENCE_VALUE = new RegExp(
 	`^(?:${VARIABLE_REFERENCE_PATTERN})+$`,
@@ -482,9 +487,19 @@ export const isVariableReference = (value: string) => {
 const isVariableReferenceUserinfo = (userinfo: string) =>
 	userinfo.split(":").every((part) => isVariableReference(part));
 
+// A restorable placeholder: the plain placeholder followed by an id of the
+// hidden value. The id lets the same caller send the text back and have the
+// value put back where the token stands.
+export const SECRET_TOKEN_PATTERN = `${REDACTED_SECRET_VALUE}[A-Z2-7]{12}__`;
+const ALREADY_HIDDEN_VALUE = new RegExp(
+	`^["']?${REDACTED_SECRET_VALUE}(?:[A-Z2-7]{12}__)?["']?$`,
+);
+
 export type RedactSensitiveTextOptions = {
 	keepVariableReferences?: boolean;
 	broadKeys?: boolean;
+	// Produces what stands in for a secret; defaults to the plain placeholder.
+	replacement?: (secret: string) => string;
 };
 
 export function redactSensitiveText(
@@ -519,35 +534,46 @@ export function redactSensitiveText(
 		return value;
 	}
 
+	const { replacement, keepVariableReferences } = options;
 	const keyPatterns = options.broadKeys
 		? BROAD_KEY_PATTERNS
 		: DEFAULT_KEY_PATTERNS;
-	const redactValue = (match: string, prefix: string, secret: string) =>
-		options.keepVariableReferences && isVariableReference(secret)
+	// A token names its value, so a hidden value met again has to stay as it is:
+	// a token of a token could not be resolved.
+	const hide = (secret: string) => {
+		if (!replacement) {
+			return REDACTED_SECRET_VALUE;
+		}
+		return ALREADY_HIDDEN_VALUE.test(secret) ? secret : replacement(secret);
+	};
+	const hideValue = (match: string, prefix: string, secret: string) =>
+		keepVariableReferences && isVariableReference(secret)
 			? match
-			: `${prefix}${REDACTED_SECRET_VALUE}`;
+			: `${prefix}${hide(secret)}`;
+	const hideRest = (match: string, prefix: string) =>
+		`${prefix}${hide(match.slice(prefix.length))}`;
 
 	let redacted = value;
 
 	redacted = redacted.replace(
 		/(\b[a-z][a-z0-9+.-]{0,30}:\/\/)([^@\s/?#]+)@/gi,
 		(match, scheme: string, userinfo: string) =>
-			options.keepVariableReferences && isVariableReferenceUserinfo(userinfo)
+			keepVariableReferences && isVariableReferenceUserinfo(userinfo)
 				? match
-				: `${scheme}${REDACTED_SECRET_VALUE}@`,
+				: `${scheme}${hide(userinfo)}@`,
 	);
 
 	for (const pattern of keyPatterns.beforeAuthorization) {
-		redacted = redacted.replace(pattern, redactValue);
+		redacted = redacted.replace(pattern, hideValue);
 	}
 
 	redacted = redacted.replace(
 		/(\bAuthorization\s*:\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	for (const pattern of keyPatterns.afterAuthorization) {
-		redacted = redacted.replace(pattern, redactValue);
+		redacted = redacted.replace(pattern, hideValue);
 	}
 
 	// mysql/mariadb clients take the password glued to -p. A separate word after
@@ -558,46 +584,43 @@ export function redactSensitiveText(
 			String.raw`(\b(?:mysql|mariadb)[a-z-]*(?:\\.|[^\n;&|\\])*?\s-p)(${SHELL_VALUE_PATTERN})`,
 			"g",
 		),
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\b(?<!\bno-)(?:PASSWORD|IDENTIFIED\s+BY)\s+)('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\bredis-cli\b[^\n;&|]*?\s-a\s+)("[^"]*"|'[^']*'|[^\s;&|]+)/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\bCONFIG\s+SET\s+requirepass\s+)("[^"]*"|'[^']*'|[^\s;&|]+)/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\bmongo(?:dump|export|import|restore|sh)?\b[^\n;&|]*?\s-p\s+)[^\n;&|]+/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|redis):\/\/[^:\s/@]+:)([^@\s/]+)(@)/gi,
 		(match, prefix: string, password: string, at: string) =>
-			options.keepVariableReferences && isVariableReference(password)
+			keepVariableReferences && isVariableReference(password)
 				? match
-				: `${prefix}${REDACTED_SECRET_VALUE}${at}`,
+				: `${prefix}${hide(password)}${at}`,
 	);
 
 	redacted = redacted.replace(
-		/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi,
-		`$1 ${REDACTED_SECRET_VALUE}`,
+		/\b(Bearer|Basic)\s+([A-Za-z0-9._~+/-]+=*)/gi,
+		(_match, scheme: string, token: string) => `${scheme} ${hide(token)}`,
 	);
 
-	redacted = redacted.replace(
-		/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
-		REDACTED_SECRET_VALUE,
-	);
+	redacted = redacted.replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, hide);
 
 	return redacted;
 }

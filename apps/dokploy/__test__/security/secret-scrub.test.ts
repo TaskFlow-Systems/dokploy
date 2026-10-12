@@ -1,10 +1,12 @@
 import { REDACTED_SECRET_VALUE as R } from "@dokploy/server/utils/security/redaction";
 import {
+	isSensitiveOutputKey,
+	scrubSecretOutput,
+} from "@dokploy/server/utils/security/secret-output";
+import {
 	buildKnownSecretMatcher,
 	collectEnvSecretValues,
 	collectSecretValue,
-	isSensitiveOutputKey,
-	scrubSecretOutput,
 	scrubSecretText,
 } from "@dokploy/server/utils/security/secret-scrub";
 import { describe, expect, it } from "vitest";
@@ -141,23 +143,42 @@ describe("scrubSecretOutput", () => {
 		});
 	});
 
-	it("scrubs free text fields instead of blanking them", () => {
+	it("hides every literal of a compose file behind a token and scrubs commands", () => {
 		const scrubbed = scrubSecretOutput({
 			composeFile: [
 				"services:",
 				"  api:",
+				"    image: api:1.2.3",
 				"    environment:",
 				"      DATABASE_PASSWORD: hunter2-hunter2",
 				"      SESSION_SECRET: ${SESSION_SECRET}",
-				"      PORT: 3000",
+				"      FAVOURITE_COLOUR: teal",
 			].join("\n"),
 			command: "server --api-token=abc123 --port 8080",
 		}) as { composeFile: string; command: string };
 
-		expect(scrubbed.composeFile).toContain(`DATABASE_PASSWORD: ${R}`);
+		expect(scrubbed.composeFile).toMatch(
+			/DATABASE_PASSWORD: __DOKPLOY_REDACTED_SECRET__[A-Z2-7]{12}__/,
+		);
+		expect(scrubbed.composeFile).toMatch(
+			/FAVOURITE_COLOUR: __DOKPLOY_REDACTED_SECRET__[A-Z2-7]{12}__/,
+		);
 		expect(scrubbed.composeFile).toContain("SESSION_SECRET: ${SESSION_SECRET}");
-		expect(scrubbed.composeFile).toContain("PORT: 3000");
+		expect(scrubbed.composeFile).toContain("image: api:1.2.3");
+		expect(scrubbed.composeFile).not.toMatch(/hunter2|teal/);
 		expect(scrubbed.command).toBe(`server --api-token=${R} --port 8080`);
+	});
+
+	it("marks the hidden parts of a mounted file with tokens", () => {
+		const scrubbed = scrubSecretOutput({
+			mounts: [
+				{ mountId: "m-1", content: "user=app\npassword=hunter2-hunter2\n" },
+			],
+		}) as { mounts: { content: string }[] };
+
+		expect(scrubbed.mounts[0]?.content).toMatch(
+			/^user=app\npassword=__DOKPLOY_REDACTED_SECRET__[A-Z2-7]{12}__\n$/,
+		);
 	});
 });
 
@@ -365,6 +386,45 @@ describe("known secret values", () => {
 				"mysql://app:p%40ss-W0rd@db/app",
 			).sort(),
 		).toEqual(["p%40ss-W0rd", "p@ss-W0rd"].sort());
+	});
+
+	it("also catches a known value printed in base64 or hex", () => {
+		const secret = "Zx9-sentinel-Value42";
+		const matcher = buildKnownSecretMatcher([secret]);
+		const encodings = [
+			Buffer.from(secret).toString("base64"),
+			Buffer.from(`user:${secret}`).toString("base64"),
+			Buffer.from(`ab${secret}\nNEXT=1`).toString("base64"),
+			Buffer.from(`abc${secret}tail`).toString("base64url"),
+			Buffer.from(secret).toString("hex"),
+			Buffer.from(secret).toString("hex").toUpperCase(),
+		];
+
+		for (const encoded of encodings) {
+			const scrubbed = scrubSecretText(`dump ${encoded} end`, matcher);
+			expect(scrubbed, encoded).toContain(R);
+			expect(scrubbed, encoded).not.toContain(encoded.slice(6, 22));
+		}
+	});
+
+	it("matches the longest of overlapping secrets among many", () => {
+		const secrets = Array.from(
+			{ length: 400 },
+			(_, index) => `Shared-Prefix-${index}-Tail9`,
+		);
+		const matcher = buildKnownSecretMatcher([
+			...secrets,
+			"Shared-Prefix-7",
+			"Shared-Prefix-7-Tail9-Extended",
+		]);
+
+		expect(matcher.size).toBe(402);
+		expect(
+			scrubSecretText(
+				"a Shared-Prefix-7-Tail9-Extended b Shared-Prefix-399-Tail9 c Shared-Prefix-7 d",
+				matcher,
+			),
+		).toBe(`a ${R} b ${R} c ${R} d`);
 	});
 
 	it("returns an empty matcher when nothing qualifies", () => {
