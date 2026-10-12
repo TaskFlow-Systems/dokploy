@@ -5,6 +5,7 @@ import {
 	validateRequest,
 } from "@dokploy/server";
 import { apiUpsertApplicationEnv } from "@dokploy/server/db/schema";
+import { resetKnownSecretMatcherCache } from "@dokploy/server/services/known-secrets";
 import { checkServicePermissionAndAccess } from "@dokploy/server/services/permission";
 import {
 	checkSuperSessionAccess,
@@ -114,6 +115,7 @@ export const handleApplicationEnvUpsert = async (
 		let redeployed = false;
 
 		if (!result.dryRun && result.changed) {
+			resetKnownSecretMatcherCache();
 			const application = await findApplicationById(input.applicationId);
 
 			await audit(ctx, {

@@ -41,6 +41,16 @@ vi.mock("@/server/api/utils/audit", () => ({
 	audit: mocks.audit,
 }));
 
+vi.mock("@dokploy/server/services/known-secrets", async () => {
+	const { EMPTY_KNOWN_SECRET_MATCHER } = await import(
+		"@dokploy/server/utils/security/secret-scrub"
+	);
+	return {
+		getKnownSecretMatcher: async () => EMPTY_KNOWN_SECRET_MATCHER,
+		resetKnownSecretMatcherCache: () => {},
+	};
+});
+
 const schema = await import("@dokploy/server/db/schema");
 const { fake } = (await import("@dokploy/server/db")) as unknown as {
 	fake: ReturnType<
@@ -162,15 +172,23 @@ describe("super session guard without a super password", () => {
 		await expect(apiKeyCaller().application.update()).resolves.toBe(
 			"application.update",
 		);
-		await expect(apiKeyCaller().application.revealEnvironment()).resolves.toBe(
-			"application.revealEnvironment",
-		);
 		await expect(browserCaller().application.revealEnvironment()).resolves.toBe(
 			"application.revealEnvironment",
 		);
 		await expect(
 			browserCaller().user.update({ email: "new@example.test" }),
 		).resolves.toBe("user.update");
+	});
+
+	it("never reveals secrets to API keys, with or without a super password", async () => {
+		await expect(
+			apiKeyCaller().application.revealEnvironment(),
+		).rejects.toMatchObject({
+			code: "FORBIDDEN",
+			message:
+				"This procedure returns secret values and is not available to API keys",
+		});
+		expect(handled).not.toHaveBeenCalled();
 	});
 });
 

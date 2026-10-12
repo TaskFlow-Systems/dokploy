@@ -21,6 +21,10 @@ export const isSecretPlaceholderValue = (value: unknown) =>
 	(value.includes(REDACTED_SECRET_VALUE) ||
 		value.includes(MCP_REDACTED_SECRET_VALUE));
 
+// Callers send a redacted field back unchanged to mean "keep what is stored".
+export const isExactSecretPlaceholder = (value: unknown) =>
+	value === REDACTED_SECRET_VALUE || value === MCP_REDACTED_SECRET_VALUE;
+
 export const redactSecretValue = <T>(value: T) => {
 	if (value === null || value === undefined || value === "") {
 		return value;
@@ -392,66 +396,271 @@ export const redactProjectNestedSecrets = <
 	return redactedProject as T;
 };
 
-export function redactSensitiveText(value: string): string;
-export function redactSensitiveText(value: null): null;
-export function redactSensitiveText(value: undefined): undefined;
-export function redactSensitiveText(value: string | null): string | null;
-export function redactSensitiveText(
-	value: string | undefined,
-): string | undefined;
-export function redactSensitiveText(
-	value: string | null | undefined,
-): string | null | undefined;
-export function redactSensitiveText(value: string | null | undefined) {
-	if (typeof value !== "string" || value === "") {
-		return value;
-	}
+type KeyPatterns = {
+	beforeAuthorization: RegExp[];
+	afterAuthorization: RegExp[];
+};
 
-	let redacted = value;
-
-	redacted = redacted.replace(
-		/(\b[a-z][a-z0-9+.-]*:\/\/)([^@\s/?#]+)@/gi,
-		`$1${REDACTED_SECRET_VALUE}@`,
-	);
-
-	redacted = redacted.replace(
+const DEFAULT_KEY_PATTERNS: KeyPatterns = {
+	beforeAuthorization: [
 		new RegExp(
 			`([?&#][^=\\s]*${SENSITIVE_KEY_PATTERN}[^=\\s]*=)([^&#\\s]+)`,
 			"gi",
 		),
-		`$1${REDACTED_SECRET_VALUE}`,
-	);
-
-	redacted = redacted.replace(
 		new RegExp(
 			`(\\b[A-Z0-9_]*${SENSITIVE_KEY_PATTERN}[A-Z0-9_]*=)(${SHELL_VALUE_PATTERN})`,
 			"gi",
 		),
-		`$1${REDACTED_SECRET_VALUE}`,
-	);
-
-	redacted = redacted.replace(
-		/(\bAuthorization\s*:\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
-	);
-
-	redacted = redacted.replace(
+	],
+	afterAuthorization: [
 		new RegExp(
 			`((?:"[^"]*${SENSITIVE_KEY_PATTERN}[^"]*"|'[^']*${SENSITIVE_KEY_PATTERN}[^']*'|\\b[^\\s:,{]*${SENSITIVE_KEY_PATTERN}[^\\s:,{]*\\b)\\s*:\\s*)("[^"]*"|'[^']*'|[^\\s,}\\]]+)`,
 			"gi",
 		),
-		`$1${REDACTED_SECRET_VALUE}`,
-	);
-
-	// Negated flags such as pg_dump's `--no-password` take no value, so the word
-	// after them is a positional argument (the database name), not a secret.
-	redacted = redacted.replace(
+		// Negated flags such as pg_dump's `--no-password` take no value, so the
+		// word after them is a positional argument (the database name), not a
+		// secret.
 		new RegExp(
 			`(\\s(?!--?no-)--?[a-z0-9-]*${SENSITIVE_KEY_PATTERN}[a-z0-9-]*(?:=|\\s+))(${SHELL_VALUE_PATTERN})`,
 			"gi",
 		),
-		`$1${REDACTED_SECRET_VALUE}`,
+	],
+};
+
+// Env-style names that hold secrets without saying "secret" or "token".
+const BROAD_SENSITIVE_KEY_PATTERN =
+	"(?:access[_-]?key|api[_-]?key|auth|credential|private[_-]?key|secret|token|pass|pwd|dsn|cookie|session|signature|salt|webhook|license|encrypt|jwt|[_-]key)";
+
+// A `${...}` value is taken whole, so redacting it leaves no stray brace.
+const BRACED_VALUE_PATTERN = String.raw`(?:\$\{\{[^}\s]*\}\}|\$\{[^}\s]*\})+`;
+const KEY_VALUE_PATTERN = `${BRACED_VALUE_PATTERN}|"[^"]*"|'[^']*'|[^\\s,}\\]]+`;
+
+// What follows `name:` in an image reference or a host is a tag or a port.
+const TAG_OR_PORT_PATTERN = String.raw`(?:\d{1,5}|v?\d+(?:\.\d+)+[\w.-]*|latest|stable|main|master|canary|edge|nightly)(?:[/\s"',)\]]|$)`;
+
+// The broad patterns run over whole logs and files, so each one anchors on the
+// keyword and bounds what surrounds it: scanning a free prefix from every word
+// boundary is quadratic on a long line without spaces. A key also has to look
+// like a key with a scalar value on the same line. Otherwise the short
+// keywords would read `auth-db:5432` in a URL, the image `auth-api:1.2.3` or
+// the YAML mapping `auth-router:` as a secret.
+const KEY_NAME_HEAD = String.raw`[\w.-]{0,60}?`;
+const KEY_NAME_TAIL = String.raw`[\w.-]{0,80}`;
+const BROAD_KEY = `${BROAD_SENSITIVE_KEY_PATTERN}${KEY_NAME_TAIL}`;
+// `==`, `=>` and `=~` compare or map; they do not assign.
+const ASSIGN = String.raw`[ \t]*=(?![=>~])[ \t]*`;
+
+const BROAD_KEY_PATTERNS: KeyPatterns = {
+	beforeAuthorization: [
+		// A line that is one assignment: the value runs to the end of the line,
+		// spaces included (`password = correct horse`).
+		new RegExp(
+			`^([ \\t]*(?:(?:export|set|setenv)[ \\t]+)?["']?${KEY_NAME_HEAD}${BROAD_KEY}["']?${ASSIGN})(\\S.*)$`,
+			"gim",
+		),
+		new RegExp(
+			`(${BROAD_SENSITIVE_KEY_PATTERN}[\\w.\\[\\]"'-]{0,80}${ASSIGN})(${SHELL_VALUE_PATTERN})`,
+			"gi",
+		),
+		new RegExp(
+			`(${BROAD_KEY}["']?[ \\t]*=>[ \\t]*)("[^"]*"|'[^']*'|[^\\s,;)\\]}]+)`,
+			"gi",
+		),
+		new RegExp(
+			`(<[\\w:.-]{0,60}?${BROAD_SENSITIVE_KEY_PATTERN}[\\w:.-]{0,80}>)([^<\\n]+)`,
+			"gi",
+		),
+	],
+	afterAuthorization: [
+		new RegExp(
+			`(${BROAD_SENSITIVE_KEY_PATTERN}[^"'\\n]{0,80}["'][ \\t]*:[ \\t]*)(?![{[])(${KEY_VALUE_PATTERN})`,
+			"gi",
+		),
+		// `key: value` on its own line, the value again running to the end.
+		new RegExp(
+			`^([ \\t]*(?:-[ \\t]+)?${KEY_NAME_HEAD}${BROAD_KEY}[ \\t]*:[ \\t]+)(?!["'{[|>&*!])(\\S.*)$`,
+			"gim",
+		),
+		new RegExp(
+			`(?<=(?<![\\w.@/{$-])[\\w.-]{0,60})(${BROAD_KEY}[ \\t]*:[ \\t]+)(?![{[])(${KEY_VALUE_PATTERN})`,
+			"gi",
+		),
+		// Without a space after the colon this may be `host:port` or `image:tag`.
+		new RegExp(
+			`(?<=(?<![\\w.@/{$-])[\\w.-]{0,60})(${BROAD_KEY}:)(?![{[\\s]|${TAG_OR_PORT_PATTERN})(${KEY_VALUE_PATTERN})`,
+			"gi",
+		),
+		new RegExp(
+			`(\\s(?!--?no-)--?[a-z0-9-]{0,60}?${BROAD_SENSITIVE_KEY_PATTERN}[a-z0-9-]{0,80}(?:=|\\s+))(${SHELL_VALUE_PATTERN})`,
+			"gi",
+		),
+	],
+};
+
+// Config files also write a setting as `name value` (`requirepass hunter2`).
+// In a log that shape is ordinary prose, so it is only read this way in a file.
+const DIRECTIVE_PATTERN = new RegExp(
+	`^([ \\t]*${KEY_NAME_HEAD}${BROAD_KEY}[ \\t]+)(?![=:{(<]|=>)(\\S.*?)(;?[ \\t\\r]*)$`,
+	"gim",
+);
+
+// A generated credential is a long run of letters and digits with nothing that
+// marks a host, a path or a URL. It is told apart from a name such as
+// `backend-prod-eu-01` by mixed case, several digits, or no separators at all.
+const OPAQUE_RUN = "[A-Za-z0-9_+-]{16,}={0,2}";
+const WHOLE_OPAQUE_RUN = new RegExp(`^${OPAQUE_RUN}$`);
+
+export const isOpaqueValue = (value: string) =>
+	WHOLE_OPAQUE_RUN.test(value) &&
+	/[A-Za-z]/.test(value) &&
+	/\d/.test(value) &&
+	((/[a-z]/.test(value) && /[A-Z]/.test(value)) ||
+		(value.match(/\d/g)?.length ?? 0) >= 4 ||
+		!/[-_]/.test(value));
+
+// In a file a setting may hold such a value under any name at all.
+const OPAQUE_SETTING_PATTERN = new RegExp(
+	`^([ \\t]*(?:-[ \\t]+)?["']?[\\w.-]{1,80}["']?[ \\t]*(?:=(?![=>~])|:[ \\t])[ \\t]*["']?)(${OPAQUE_RUN})(?=["']?[ \\t\\r]*[;,]?[ \\t\\r]*$)`,
+	"gm",
+);
+
+// A word of a command line or a label that looks generated.
+const OPAQUE_WORD_PATTERN = new RegExp(
+	`(^|[\\s="'])(${OPAQUE_RUN})(?=$|[\\s"'])`,
+	"g",
+);
+
+const SECRET_LOOKING_NAME = new RegExp(BROAD_SENSITIVE_KEY_PATTERN, "i");
+
+export const isSecretLookingName = (name: string) =>
+	SECRET_LOOKING_NAME.test(name);
+
+const VARIABLE_REFERENCE_PATTERN = String.raw`\$\{\{\s*[A-Za-z_][\w.-]*\s*\}\}|\$\{[A-Za-z_]\w*(?::?\?[^}]*)?\}|\$[A-Za-z_]\w*`;
+const VARIABLE_REFERENCE_VALUE = new RegExp(
+	`^(?:${VARIABLE_REFERENCE_PATTERN})+$`,
+);
+
+// `${VAR}`, `$VAR` and `${{project.VAR}}` name a secret without containing it.
+// A reference with an inline default (`${VAR:-fallback}`) is not one of them.
+export const isVariableReference = (value: string) => {
+	const quoted = /^(["'])([\s\S]*)\1$/.exec(value);
+	return VARIABLE_REFERENCE_VALUE.test(quoted ? quoted[2]! : value);
+};
+
+const isVariableReferenceUserinfo = (userinfo: string) =>
+	userinfo.split(":").every((part) => isVariableReference(part));
+
+// A restorable placeholder: the plain placeholder followed by an id of the
+// hidden value. The id lets the same caller send the text back and have the
+// value put back where the token stands.
+export const SECRET_TOKEN_PATTERN = `${REDACTED_SECRET_VALUE}[A-Z2-7]{12}__`;
+const ALREADY_HIDDEN_VALUE = new RegExp(
+	`^["']?${REDACTED_SECRET_VALUE}(?:[A-Z2-7]{12}__)?["']?$`,
+);
+
+export type RedactSensitiveTextOptions = {
+	keepVariableReferences?: boolean;
+	broadKeys?: boolean;
+	// Read `name value` lines as settings; for files, not for logs.
+	directives?: boolean;
+	// Also hide generated-looking values under any name: `file` for the
+	// settings of a config file, `words` for the words of a command or label.
+	opaque?: "file" | "words";
+	// Produces what stands in for a secret; defaults to the plain placeholder.
+	replacement?: (secret: string) => string;
+};
+
+export function redactSensitiveText(
+	value: string,
+	options?: RedactSensitiveTextOptions,
+): string;
+export function redactSensitiveText(
+	value: null,
+	options?: RedactSensitiveTextOptions,
+): null;
+export function redactSensitiveText(
+	value: undefined,
+	options?: RedactSensitiveTextOptions,
+): undefined;
+export function redactSensitiveText(
+	value: string | null,
+	options?: RedactSensitiveTextOptions,
+): string | null;
+export function redactSensitiveText(
+	value: string | undefined,
+	options?: RedactSensitiveTextOptions,
+): string | undefined;
+export function redactSensitiveText(
+	value: string | null | undefined,
+	options?: RedactSensitiveTextOptions,
+): string | null | undefined;
+export function redactSensitiveText(
+	value: string | null | undefined,
+	options: RedactSensitiveTextOptions = {},
+) {
+	if (typeof value !== "string" || value === "") {
+		return value;
+	}
+
+	const { replacement, keepVariableReferences } = options;
+	const keyPatterns = options.broadKeys
+		? BROAD_KEY_PATTERNS
+		: DEFAULT_KEY_PATTERNS;
+	// A token names its value, so a hidden value met again has to stay as it is:
+	// a token of a token could not be resolved.
+	const hide = (secret: string) => {
+		if (!replacement) {
+			return REDACTED_SECRET_VALUE;
+		}
+		return ALREADY_HIDDEN_VALUE.test(secret) ? secret : replacement(secret);
+	};
+	const hideValue = (match: string, prefix: string, secret: string) =>
+		keepVariableReferences && isVariableReference(secret)
+			? match
+			: `${prefix}${hide(secret)}`;
+	const hideRest = (match: string, prefix: string) =>
+		`${prefix}${hide(match.slice(prefix.length))}`;
+
+	let redacted = value;
+
+	redacted = redacted.replace(
+		/(\b[a-z][a-z0-9+.-]{0,30}:\/\/)([^@\s/?#]+)@/gi,
+		(match, scheme: string, userinfo: string) =>
+			keepVariableReferences && isVariableReferenceUserinfo(userinfo)
+				? match
+				: `${scheme}${hide(userinfo)}@`,
 	);
+
+	for (const pattern of keyPatterns.beforeAuthorization) {
+		redacted = redacted.replace(pattern, hideValue);
+	}
+
+	redacted = redacted.replace(
+		/(\bAuthorization\s*:\s*)(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi,
+		hideRest,
+	);
+
+	for (const pattern of keyPatterns.afterAuthorization) {
+		redacted = redacted.replace(pattern, hideValue);
+	}
+
+	if (options.directives) {
+		redacted = redacted.replace(
+			DIRECTIVE_PATTERN,
+			(match, prefix: string, secret: string, end: string) =>
+				keepVariableReferences && isVariableReference(secret)
+					? match
+					: `${prefix}${hide(secret)}${end}`,
+		);
+	}
+
+	if (options.opaque) {
+		redacted = redacted.replace(
+			options.opaque === "file" ? OPAQUE_SETTING_PATTERN : OPAQUE_WORD_PATTERN,
+			(match, prefix: string, secret: string) =>
+				isOpaqueValue(secret) ? `${prefix}${hide(secret)}` : match,
+		);
+	}
 
 	// mysql/mariadb clients take the password glued to -p. A separate word after
 	// -p is not a password, uppercase -P is the port, and -p of other tools
@@ -461,43 +670,43 @@ export function redactSensitiveText(value: string | null | undefined) {
 			String.raw`(\b(?:mysql|mariadb)[a-z-]*(?:\\.|[^\n;&|\\])*?\s-p)(${SHELL_VALUE_PATTERN})`,
 			"g",
 		),
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
-		/(\b(?<!\bno-)(?:PASSWORD|IDENTIFIED\s+BY)\s+)('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		/(\b(?<!\bno-)(?:PASSWORD|IDENTIFIED\s+BY)\s+)(?![=:])('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\bredis-cli\b[^\n;&|]*?\s-a\s+)("[^"]*"|'[^']*'|[^\s;&|]+)/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\bCONFIG\s+SET\s+requirepass\s+)("[^"]*"|'[^']*'|[^\s;&|]+)/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\bmongo(?:dump|export|import|restore|sh)?\b[^\n;&|]*?\s-p\s+)[^\n;&|]+/gi,
-		`$1${REDACTED_SECRET_VALUE}`,
+		hideRest,
 	);
 
 	redacted = redacted.replace(
 		/(\b(?:postgres(?:ql)?|mysql|mariadb|mongodb|redis):\/\/[^:\s/@]+:)([^@\s/]+)(@)/gi,
-		`$1${REDACTED_SECRET_VALUE}$3`,
+		(match, prefix: string, password: string, at: string) =>
+			keepVariableReferences && isVariableReference(password)
+				? match
+				: `${prefix}${hide(password)}${at}`,
 	);
 
 	redacted = redacted.replace(
-		/\b(Bearer|Basic)\s+[A-Za-z0-9._~+/-]+=*/gi,
-		`$1 ${REDACTED_SECRET_VALUE}`,
+		/\b(Bearer|Basic)\s+([A-Za-z0-9._~+/-]+=*)/gi,
+		(_match, scheme: string, token: string) => `${scheme} ${hide(token)}`,
 	);
 
-	redacted = redacted.replace(
-		/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g,
-		REDACTED_SECRET_VALUE,
-	);
+	redacted = redacted.replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, hide);
 
 	return redacted;
 }

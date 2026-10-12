@@ -101,6 +101,7 @@ import {
 import { cancelDeployment, deploy } from "@/server/utils/deploy";
 import { generatePassword } from "@/templates/utils";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
+import { restoreApiKeyText } from "../utils/api-key-output-guard";
 import { audit } from "../utils/audit";
 import { assertDeploySourceCredentialAccess } from "../utils/deploy-source-access";
 import { assertTargetEnvironmentAccess } from "../utils/placement-access";
@@ -402,7 +403,15 @@ export const composeRouter = createTRPCRouter({
 			});
 			const currentCompose = await findComposeById(input.composeId);
 			const updateData = preserveSecretPlaceholderFields(
-				input,
+				{
+					...input,
+					composeFile: await restoreApiKeyText(
+						ctx.session,
+						"compose",
+						input.composeFile,
+						currentCompose.composeFile,
+					),
+				},
 				currentCompose,
 				["env", "composeFile", "customGitUrl"],
 			);

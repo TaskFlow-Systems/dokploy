@@ -4,6 +4,7 @@ import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/dest
 import { spawn } from "node-pty";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
+import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
@@ -93,6 +94,9 @@ export const setupDockerContainerTerminalWebSocketServer = (
 		}
 
 		if (await rejectTerminalWithoutSuperSession(ws, user, session)) {
+			return;
+		}
+		if (rejectApiKeySession(ws, session)) {
 			return;
 		}
 		try {

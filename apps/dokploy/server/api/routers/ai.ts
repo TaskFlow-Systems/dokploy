@@ -20,6 +20,7 @@ import {
 	suggestVariants,
 } from "@dokploy/server/services/ai";
 import { createComposeByTemplate } from "@dokploy/server/services/compose";
+import { getKnownSecretMatcher } from "@dokploy/server/services/known-secrets";
 import {
 	addNewService,
 	checkPermission,
@@ -36,6 +37,7 @@ import {
 	redactAiSettingsSecrets,
 	redactAiSettingsSecretsList,
 } from "@dokploy/server/utils/security/redaction";
+import { scrubSecretText } from "@dokploy/server/utils/security/secret-scrub";
 import { fetchWithPublicEgress } from "@dokploy/server/utils/url/network";
 import { TRPCError } from "@trpc/server";
 import { generateText } from "ai";
@@ -302,6 +304,8 @@ export const aiRouter = createTRPCRouter({
 
 				const contextLabel =
 					input.context === "build" ? "build/deployment" : "runtime/container";
+				// The logs go to a third-party model, so they leave without secrets.
+				const logs = scrubSecretText(input.logs, await getKnownSecretMatcher());
 
 				const result = await generateText({
 					model,
@@ -315,7 +319,7 @@ export const aiRouter = createTRPCRouter({
 Be concise and practical. Focus on the most important issues. If the logs look healthy, say so briefly.
 
 Logs:
-${input.logs}`,
+${logs}`,
 				});
 
 				return { analysis: result.text };

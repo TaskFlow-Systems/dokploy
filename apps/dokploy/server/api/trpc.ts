@@ -11,6 +11,7 @@
 import { db } from "@dokploy/server/db";
 import type { statements } from "@dokploy/server/lib/access-control";
 import { validateRequest } from "@dokploy/server/lib/auth";
+import { resetKnownSecretMatcherCache } from "@dokploy/server/services/known-secrets";
 import { checkPermission } from "@dokploy/server/services/permission";
 import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
 import { getSuperSessionDenial } from "@dokploy/server/services/super-password";
@@ -20,7 +21,16 @@ import type { CreateNextContextOptions } from "@trpc/server/adapters/next";
 import type { Session, User } from "better-auth";
 import superjson from "superjson";
 import { ZodError } from "zod";
-import { enforceProcedureSuperSession } from "@/server/api/utils/super-session";
+import {
+	assertNoRedactedTextInInput,
+	assertProcedureAllowedForApiKey,
+	scrubApiKeyError,
+	scrubApiKeyResult,
+} from "@/server/api/utils/api-key-output-guard";
+import {
+	enforceProcedureSuperSession,
+	isApiKeySession,
+} from "@/server/api/utils/super-session";
 
 type Resource = keyof typeof statements;
 type ActionOf<R extends Resource> = (typeof statements)[R][number];
@@ -161,7 +171,33 @@ const superSessionGuard = t.middleware(
 	},
 );
 
-const baseProcedure = t.procedure.use(superSessionGuard);
+// An API key is the channel scripts and AI agents use, so nothing it receives
+// may contain a secret value, whatever role the key's owner has.
+const apiKeyOutputGuard = t.middleware(
+	async ({ ctx, path, type, getRawInput, next }) => {
+		const viaApiKey = isApiKeySession(ctx.session);
+		if (viaApiKey) {
+			assertProcedureAllowedForApiKey(path);
+			if (type === "mutation") {
+				assertNoRedactedTextInInput(path, await getRawInput());
+			}
+		}
+		const result = await next();
+		// Any write may have stored a new secret, whoever made it.
+		if (type === "mutation") {
+			resetKnownSecretMatcherCache();
+		}
+		if (!viaApiKey) {
+			return result;
+		}
+		if (result.ok) {
+			return { ...result, data: await scrubApiKeyResult(path, result.data) };
+		}
+		return { ...result, error: await scrubApiKeyError(result.error) };
+	},
+);
+
+const baseProcedure = t.procedure.use(superSessionGuard).use(apiKeyOutputGuard);
 
 /**
  * Public (unauthenticated) procedure
