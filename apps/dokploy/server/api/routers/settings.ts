@@ -19,7 +19,6 @@ import {
 	dockerDiskUsageDetailLimitSchema,
 	filterProtectedTraefikEntries,
 	findServerById,
-	getAccessibleServerIds,
 	getAgentHitsUpdateCommand,
 	getAgentHitsUpdateImage,
 	getDockerDiskUsage,
@@ -89,6 +88,10 @@ import {
 	hasProtectedResourceAccess,
 } from "@/server/api/utils/super-session";
 import {
+	assertSettingsServerAccess,
+	assertTraefikFilesHostAccess,
+} from "@/server/api/utils/traefik-files-access";
+import {
 	apiAssignDomain,
 	apiEnableDashboard,
 	apiModifyTraefikConfig,
@@ -113,46 +116,6 @@ import {
 	protectedProcedure,
 	publicProcedure,
 } from "../trpc";
-
-const assertSettingsServerAccess = async (
-	ctx: {
-		session: {
-			userId: string;
-			activeOrganizationId: string;
-		};
-	},
-	serverId?: string,
-) => {
-	if (!serverId) {
-		return;
-	}
-
-	const accessibleIds = await getAccessibleServerIds(ctx.session);
-	if (!accessibleIds.has(serverId)) {
-		throw new TRPCError({
-			code: "UNAUTHORIZED",
-			message: "You are not authorized to access this server",
-		});
-	}
-};
-
-const assertTraefikFilesHostAccess = async (
-	ctx: {
-		user: { id: string };
-		session: {
-			userId: string;
-			activeOrganizationId: string;
-		};
-	},
-	serverId?: string,
-) => {
-	if (!serverId) {
-		await assertLocalHostAccess(ctx);
-		return;
-	}
-
-	await assertSettingsServerAccess(ctx, serverId);
-};
 
 export const settingsRouter = createTRPCRouter({
 	getWebServerSettings: protectedProcedure.query(async () => {
