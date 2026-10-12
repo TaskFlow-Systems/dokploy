@@ -4,6 +4,7 @@ import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/dest
 import { spawn } from "node-pty";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
+import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
 import { canAccessDockerLogsWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
@@ -51,6 +52,9 @@ export const setupDockerContainerLogsWebSocketServer = (
 
 		if (!user || !session) {
 			ws.close();
+			return;
+		}
+		if (rejectApiKeySession(ws, session)) {
 			return;
 		}
 

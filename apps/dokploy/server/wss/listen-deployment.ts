@@ -18,6 +18,7 @@ import {
 } from "@dokploy/server/wss/utils";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
+import { rejectApiKeySession } from "./api-key";
 import { verifyWebSocketOrigin } from "./origin";
 
 const getDeploymentLogPathRoot = (
@@ -220,6 +221,9 @@ export const setupDeploymentLogsWebSocketServer = (
 
 		if (!user || !session || !session.activeOrganizationId) {
 			ws.close();
+			return;
+		}
+		if (rejectApiKeySession(ws, session)) {
 			return;
 		}
 

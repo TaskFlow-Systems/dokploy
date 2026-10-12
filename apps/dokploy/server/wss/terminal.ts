@@ -10,6 +10,7 @@ import { publicIpv4, publicIpv6 } from "public-ip";
 import { Client, type ConnectConfig } from "ssh2";
 import { WebSocketServer } from "ws";
 import { getDockerHost } from "../utils/docker";
+import { rejectApiKeySession } from "./api-key";
 import { canAccessTerminalOverWss } from "./authorize";
 import { verifyWebSocketOrigin } from "./origin";
 import { canAccessServerTerminalWebSocket } from "./server-permission";
@@ -119,6 +120,9 @@ export const setupTerminalWebSocketServer = (
 		}
 
 		if (await rejectTerminalWithoutSuperSession(ws, user, session)) {
+			return;
+		}
+		if (rejectApiKeySession(ws, session)) {
 			return;
 		}
 

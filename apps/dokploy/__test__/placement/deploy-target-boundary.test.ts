@@ -205,6 +205,17 @@ vi.mock("ai", () => ({
 	generateText: vi.fn(),
 }));
 
+vi.mock("@dokploy/server/services/known-secrets", async () => {
+	const { buildKnownSecretMatcher } = await import(
+		"@dokploy/server/utils/security/secret-scrub"
+	);
+	return {
+		getKnownSecretMatcher: async () =>
+			buildKnownSecretMatcher(["Zx9-sentinel-Value42"]),
+		resetKnownSecretMatcherCache: () => {},
+	};
+});
+
 vi.mock("@dokploy/server/db", () => ({
 	db: {
 		query: {},
@@ -537,6 +548,36 @@ describe("deploy target placement ownership boundary", () => {
 				model: "model",
 			}),
 		);
+	});
+
+	it("sends logs to the AI provider without secret values", async () => {
+		vi.mocked(selectAIProvider).mockReturnValueOnce(
+			vi.fn(() => "model") as never,
+		);
+		vi.mocked(generateText).mockResolvedValueOnce({
+			text: "ok",
+		} as Awaited<ReturnType<typeof generateText>>);
+		aiServiceMocks.getAiSettingById.mockResolvedValueOnce({
+			aiId: "ai-1",
+			apiKey: "secret",
+			apiUrl: "https://api.openai.com/v1",
+			isEnabled: true,
+			model: "gpt-4o-mini",
+			name: "OpenAI",
+			organizationId: "org-1",
+		});
+
+		await aiRouter.createCaller(createContext("admin")).analyzeLogs({
+			aiId: "ai-1",
+			context: "runtime",
+			logs: "connect failed with Zx9-sentinel-Value42\nDB_PASS=hunter2-hunter2\nlistening on 3000",
+		});
+
+		const prompt = vi.mocked(generateText).mock.calls.at(-1)?.[0].prompt;
+		expect(prompt).toContain("listening on 3000");
+		expect(prompt).toContain("connect failed with __DOKPLOY_REDACTED_SECRET__");
+		expect(prompt).not.toContain("Zx9-sentinel-Value42");
+		expect(prompt).not.toContain("hunter2-hunter2");
 	});
 
 	it("denies AI suggestions for inaccessible servers before server metadata reaches AI service", async () => {
