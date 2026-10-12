@@ -504,6 +504,32 @@ const DIRECTIVE_PATTERN = new RegExp(
 	"gim",
 );
 
+// A generated credential is a long run of letters and digits with nothing that
+// marks a host, a path or a URL. It is told apart from a name such as
+// `backend-prod-eu-01` by mixed case, several digits, or no separators at all.
+const OPAQUE_RUN = "[A-Za-z0-9_+-]{16,}={0,2}";
+const WHOLE_OPAQUE_RUN = new RegExp(`^${OPAQUE_RUN}$`);
+
+export const isOpaqueValue = (value: string) =>
+	WHOLE_OPAQUE_RUN.test(value) &&
+	/[A-Za-z]/.test(value) &&
+	/\d/.test(value) &&
+	((/[a-z]/.test(value) && /[A-Z]/.test(value)) ||
+		(value.match(/\d/g)?.length ?? 0) >= 4 ||
+		!/[-_]/.test(value));
+
+// In a file a setting may hold such a value under any name at all.
+const OPAQUE_SETTING_PATTERN = new RegExp(
+	`^([ \\t]*(?:-[ \\t]+)?["']?[\\w.-]{1,80}["']?[ \\t]*(?:=(?![=>~])|:[ \\t])[ \\t]*["']?)(${OPAQUE_RUN})(?=["']?[ \\t\\r]*[;,]?[ \\t\\r]*$)`,
+	"gm",
+);
+
+// A word of a command line or a label that looks generated.
+const OPAQUE_WORD_PATTERN = new RegExp(
+	`(^|[\\s="'])(${OPAQUE_RUN})(?=$|[\\s"'])`,
+	"g",
+);
+
 const SECRET_LOOKING_NAME = new RegExp(BROAD_SENSITIVE_KEY_PATTERN, "i");
 
 export const isSecretLookingName = (name: string) =>
@@ -537,6 +563,9 @@ export type RedactSensitiveTextOptions = {
 	broadKeys?: boolean;
 	// Read `name value` lines as settings; for files, not for logs.
 	directives?: boolean;
+	// Also hide generated-looking values under any name: `file` for the
+	// settings of a config file, `words` for the words of a command or label.
+	opaque?: "file" | "words";
 	// Produces what stands in for a secret; defaults to the plain placeholder.
 	replacement?: (secret: string) => string;
 };
@@ -622,6 +651,14 @@ export function redactSensitiveText(
 				keepVariableReferences && isVariableReference(secret)
 					? match
 					: `${prefix}${hide(secret)}${end}`,
+		);
+	}
+
+	if (options.opaque) {
+		redacted = redacted.replace(
+			options.opaque === "file" ? OPAQUE_SETTING_PATTERN : OPAQUE_WORD_PATTERN,
+			(match, prefix: string, secret: string) =>
+				isOpaqueValue(secret) ? `${prefix}${hide(secret)}` : match,
 		);
 	}
 

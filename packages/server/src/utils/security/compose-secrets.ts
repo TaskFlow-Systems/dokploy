@@ -204,7 +204,17 @@ type ScalarVisit = {
 	node: Scalar;
 	position: "key" | "value" | "item";
 	parentKey: string | null;
+	// Inside `labels`, `command` and the like, where a secret has no name.
+	freeForm: boolean;
 };
+
+const FREE_FORM_BLOCKS = new Set([
+	"annotations",
+	"command",
+	"entrypoint",
+	"labels",
+	"test",
+]);
 
 const visitScalars = (
 	document: Document,
@@ -228,6 +238,14 @@ const visitScalars = (
 				range,
 				position: key === "key" ? "key" : key === "value" ? "value" : "item",
 				parentKey: pairKey,
+				freeForm:
+					key !== "key" &&
+					path.some(
+						(ancestor) =>
+							"key" in ancestor &&
+							isScalar(ancestor.key) &&
+							FREE_FORM_BLOCKS.has(String(ancestor.key.value)),
+					),
 			});
 		},
 	});
@@ -259,7 +277,7 @@ const commentRanges = (text: string, scalarRanges: [number, number][]) => {
 };
 
 const hideScalar = (
-	{ node, position, parentKey }: ScalarVisit,
+	{ node, position, parentKey, freeForm }: ScalarVisit,
 	slot: SlotKind | undefined,
 	matcher: KnownSecretMatcher,
 	replacement: SecretReplacement,
@@ -288,7 +306,10 @@ const hideScalar = (
 	if (typeof value !== "string") {
 		return null;
 	}
-	const scrubbed = scrubSecretText(text, matcher, { replacement });
+	const scrubbed = scrubSecretText(text, matcher, {
+		replacement,
+		words: freeForm,
+	});
 	return scrubbed === text ? null : scrubbed;
 };
 

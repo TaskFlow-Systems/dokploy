@@ -363,6 +363,37 @@ describe("scrubSecretText", () => {
 		);
 	});
 
+	it("hides a generated-looking value under any name in a file, and nothing else", () => {
+		const file = [
+			"greeting = Zx9-neutral-Value42x",
+			"checksum: 9f86d081884c7d659a2feaa0c55ad015",
+			'label = "AbCdEf0123456789xyz"',
+			"job_name: node-exporter-prod-01",
+			"server_name app.example.test;",
+			"upstream = http://backend-service-01:8080/",
+			"root = /var/www/releases/2026-10-12",
+			"workers = 1024",
+			"",
+		].join("\n");
+
+		expect(scrubSecretText(file, undefined, { file: true })).toBe(
+			[
+				`greeting = ${R}`,
+				`checksum: ${R}`,
+				`label = "${R}"`,
+				"job_name: node-exporter-prod-01",
+				"server_name app.example.test;",
+				"upstream = http://backend-service-01:8080/",
+				"root = /var/www/releases/2026-10-12",
+				"workers = 1024",
+				"",
+			].join("\n"),
+		);
+		expect(scrubSecretText("request id=Zx9-neutral-Value42x done")).toBe(
+			"request id=Zx9-neutral-Value42x done",
+		);
+	});
+
 	it("is idempotent", () => {
 		const once = scrubSecretText(
 			"DB_PASS=abc postgres://u:p4ssw0rd@h/db Authorization: Bearer x.y.z",

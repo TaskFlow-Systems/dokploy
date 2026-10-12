@@ -272,11 +272,13 @@ export type ScrubSecretTextOptions = {
 	replacement?: SecretReplacement;
 	// The text is a config file, where `name value` lines are settings.
 	file?: boolean;
+	// The text is a command line or a label: hide its generated-looking words.
+	words?: boolean;
 };
 
 const scrubCredentialPatterns = (
 	text: string,
-	{ replacement, file }: ScrubSecretTextOptions,
+	{ replacement, file, words }: ScrubSecretTextOptions,
 ) => {
 	const hide = replacement ?? (() => REDACTED_SECRET_VALUE);
 	let scrubbed = text;
@@ -287,6 +289,7 @@ const scrubCredentialPatterns = (
 		broadKeys: true,
 		keepVariableReferences: true,
 		directives: file,
+		opaque: file ? "file" : words ? "words" : undefined,
 		replacement,
 	});
 };

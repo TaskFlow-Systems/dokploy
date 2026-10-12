@@ -149,6 +149,50 @@ describe("hideComposeSecrets", () => {
 		expect(hide(text, matcher)).not.toContain("Known-Value-77");
 	});
 
+	it("hides generated-looking values in labels and commands, keeps names and routing", () => {
+		const text = [
+			"services:",
+			"  api:",
+			"    image: registry.example.test/team/api:1.0.0",
+			"    container_name: backend-prod-eu-west-01",
+			"    hostname: api-internal-node-02",
+			'    command: ["server", "--mode", "fast", "Zx9PositionalValue42"]',
+			"    labels:",
+			"      note: Qw7-label-Neutral-0099",
+			"      team: platform-services-eu",
+			"  web:",
+			"    image: web:2",
+			"    entrypoint: run Ab12Cd34Ef56Gh78 --verbose",
+			"    labels:",
+			'      - "traefik.http.routers.web-a1b2c3d4e5f6a7b8.rule=Host(`web.example.test`)"',
+			'      - "owner=Qw7-list-Neutral-0077"',
+			"",
+		].join("\n");
+		const hidden = hide(text);
+
+		for (const secret of [
+			"Zx9PositionalValue42",
+			"Qw7-label-Neutral-0099",
+			"Ab12Cd34Ef56Gh78",
+			"Qw7-list-Neutral-0077",
+		]) {
+			expect(hidden).not.toContain(secret);
+		}
+		for (const kept of [
+			"container_name: backend-prod-eu-west-01",
+			"hostname: api-internal-node-02",
+			"team: platform-services-eu",
+			"traefik.http.routers.web-a1b2c3d4e5f6a7b8.rule=Host(`web.example.test`)",
+			"owner=",
+			"note: ",
+			'"--mode"',
+			"--verbose",
+		]) {
+			expect(hidden).toContain(kept);
+		}
+		expect(parse(restore(hidden, text))).toEqual(parse(text));
+	});
+
 	it("shows nothing of a file that does not parse", () => {
 		expect(hide("services:\n  a:\n   environment:\n  X: [unclosed\n")).toBe(
 			BARE,
