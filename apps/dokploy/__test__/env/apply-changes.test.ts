@@ -47,6 +47,23 @@ AFTER_BLOCK=1`);
 		]);
 	});
 
+	it("does not list lines of an unquoted key block as variable names", () => {
+		const fragment =
+			"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj";
+		const variables = listEnvVariables(`SERVICE_KEY=-----BEGIN PRIVATE KEY-----
+${fragment}=
+-----END PRIVATE KEY-----
+AFTER_BLOCK=1
+ApiUrlVersion2=x`);
+
+		expect(variables.map(({ name }) => name)).toEqual([
+			"SERVICE_KEY",
+			"AFTER_BLOCK",
+			"ApiUrlVersion2",
+		]);
+		expect(JSON.stringify(variables)).not.toContain(fragment);
+	});
+
 	it("treats a missing field as empty text", () => {
 		expect(listEnvVariables(null)).toEqual([]);
 		expect(listEnvVariables(undefined)).toEqual([]);

@@ -289,6 +289,16 @@ const serializeExactEnvValue = (name: string, value: string) => {
 	);
 };
 
+// A key block pasted without quotes makes dotenv read its base64 lines that
+// end in `=` as assignments. Such a "name" is a piece of the secret, so a name
+// that looks like encoded data is left out of the listing.
+const isEncodedDataFragment = (name: string) =>
+	name.length >= 20 &&
+	!name.includes("_") &&
+	/[a-z]/.test(name) &&
+	/[A-Z]/.test(name) &&
+	/\d/.test(name);
+
 export const listEnvVariables = (
 	currentEnv: string | null | undefined,
 ): EnvVariableKey[] => {
@@ -297,7 +307,7 @@ export const listEnvVariables = (
 	const names = new Set(scanEnvEntries(text).map((entry) => entry.name));
 
 	return [...names]
-		.filter((name) => values.has(name))
+		.filter((name) => values.has(name) && !isEncodedDataFragment(name))
 		.map((name) => ({
 			name,
 			secret: isSecretEnvName(name),

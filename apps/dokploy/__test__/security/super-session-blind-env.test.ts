@@ -31,6 +31,13 @@ vi.mock("@dokploy/server/services/permission", () => ({
 
 vi.mock("@/server/api/utils/audit", () => ({ audit: vi.fn() }));
 
+// API key responses are scrubbed of the secrets the panel stores, which are
+// read from tables this suite's fake database does not have.
+vi.mock("@dokploy/server/services/known-secrets", () => ({
+	getKnownSecretMatcher: async () => ({ size: 0, pattern: null }),
+	resetKnownSecretMatcherCache: () => {},
+}));
+
 const { fake } = (await import("@dokploy/server/db")) as unknown as {
 	fake: ReturnType<
 		typeof import("../helpers/fake-drizzle-db")["createFakeDrizzleDb"]
