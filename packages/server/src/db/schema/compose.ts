@@ -14,6 +14,7 @@ import { backups } from "./backups";
 import { bitbucket } from "./bitbucket";
 import { deploymentOperations, deployments } from "./deployment";
 import { domains } from "./domain";
+import { ENV_VARIABLE_NAME_REGEX } from "./env-variables";
 import { environments } from "./environment";
 import { gitea } from "./gitea";
 import { github } from "./github";
@@ -305,8 +306,6 @@ export const apiSaveEnvironmentVariablesCompose = createSchema
 	.extend({
 		createEnvFile: z.boolean().optional(),
 	});
-
-const ENV_VARIABLE_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const apiUpsertComposeEnv = z.object({
 	composeId: z.string().min(1),

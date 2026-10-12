@@ -23,11 +23,13 @@ const comparable = (value: unknown) =>
 /**
  * In-memory stand-in for the subset of drizzle used by the super password
  * service: relational findFirst/findMany, insert (with onConflictDoUpdate),
- * update ... returning and delete, with eq/ne/gt/lt/isNull/isNotNull/and/or
- * conditions evaluated against stored rows.
+ * select ... where (optionally for update), update ... returning and delete,
+ * with eq/ne/gt/lt/isNull/isNotNull/and/or conditions evaluated against stored
+ * rows.
  */
 export const createFakeDrizzleDb = (tables: Record<string, Table>) => {
 	const rows = new Map<Table, Row[]>();
+	const locks: { table: string; strength: string }[] = [];
 	const columnKeys = new Map<unknown, string>();
 	const tableByName = new Map<string, Table>();
 
@@ -181,7 +183,8 @@ export const createFakeDrizzleDb = (tables: Record<string, Table>) => {
 	});
 
 	// Only one-to-one relations named after a registered table whose id column
-	// is `<name>Id` (notification.email / notification.resend).
+	// is `<name>Id` (notification.email / notification.resend), nested through
+	// the relation's own `with`.
 	const withRelations = (row: Row, relations?: Record<string, unknown>) => {
 		const result: Row = { ...row };
 		for (const name of Object.keys(relations ?? {})) {
@@ -194,7 +197,12 @@ export const createFakeDrizzleDb = (tables: Record<string, Table>) => {
 							candidate[foreignKey] === row[foreignKey],
 					)
 				: undefined;
-			result[name] = related ? { ...related } : null;
+			const nested = relations?.[name] as
+				| { with?: Record<string, unknown> }
+				| true;
+			result[name] = related
+				? withRelations(related, nested === true ? undefined : nested?.with)
+				: null;
 		}
 		return result;
 	};
@@ -223,6 +231,22 @@ export const createFakeDrizzleDb = (tables: Record<string, Table>) => {
 	const db: Record<string, unknown> = {
 		query,
 		transaction: async <T>(run: (tx: unknown) => Promise<T>) => run(db),
+		select: (columns?: Record<string, unknown>) => ({
+			from: (table: Table) => ({
+				where: (condition: unknown) => {
+					const find = () =>
+						(rows.get(table) ?? [])
+							.filter((row) => evaluate(condition, row))
+							.map((row) => project(row, columns));
+					return lazy(find, {
+						for: async (strength: string) => {
+							locks.push({ table: getTableName(table), strength });
+							return find();
+						},
+					});
+				},
+			}),
+		}),
 		insert: (table: Table) => ({
 			values: (values: Row) =>
 				lazy(() => [insertRow(table, values)], {
@@ -288,9 +312,11 @@ export const createFakeDrizzleDb = (tables: Record<string, Table>) => {
 
 	return {
 		db,
+		locks,
 		rows: (table: Table) => rows.get(table) ?? [],
 		seed: (table: Table, values: Row) => insertRow(table, values),
 		reset: () => {
+			locks.length = 0;
 			for (const table of rows.keys()) {
 				rows.set(table, []);
 			}

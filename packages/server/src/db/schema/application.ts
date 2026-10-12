@@ -16,6 +16,7 @@ import { z } from "zod";
 import { bitbucket } from "./bitbucket";
 import { deployments } from "./deployment";
 import { domains } from "./domain";
+import { ENV_VARIABLE_NAME_REGEX } from "./env-variables";
 import { environments } from "./environment";
 import { gitea } from "./gitea";
 import { github } from "./github";
@@ -597,8 +598,6 @@ export const apiSaveEnvironmentVariables = createSchema
 		createEnvFile: true,
 	})
 	.required();
-
-const ENV_VARIABLE_NAME_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export const apiUpsertApplicationEnv = z.object({
 	applicationId: z.string().min(1),
