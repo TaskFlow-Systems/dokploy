@@ -86,7 +86,9 @@ const scrubValue = (
 		return scrubSecretText(
 			value,
 			matcher,
-			FILE_TEXT_KEY.test(key) ? secretTokenFor : undefined,
+			FILE_TEXT_KEY.test(key)
+				? { replacement: secretTokenFor, file: true }
+				: undefined,
 		);
 	}
 	if (Array.isArray(value)) {

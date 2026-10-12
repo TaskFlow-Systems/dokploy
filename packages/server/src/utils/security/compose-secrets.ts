@@ -288,7 +288,7 @@ const hideScalar = (
 	if (typeof value !== "string") {
 		return null;
 	}
-	const scrubbed = scrubSecretText(text, matcher, replacement);
+	const scrubbed = scrubSecretText(text, matcher, { replacement });
 	return scrubbed === text ? null : scrubbed;
 };
 
@@ -326,7 +326,7 @@ export const hideComposeSecrets = (
 	});
 	for (const [start, end] of commentRanges(text, scalarRanges)) {
 		const comment = text.slice(start, end);
-		const scrubbed = scrubSecretText(comment, matcher, replacement);
+		const scrubbed = scrubSecretText(comment, matcher, { replacement });
 		if (scrubbed !== comment) {
 			edits.push({ start, end, text: scrubbed });
 		}
@@ -402,14 +402,19 @@ const buildVault = (
 	return vault;
 };
 
-const resolveToken = (vault: Map<string, string>) => (token: string) => {
-	const value = vault.get(token);
-	if (value === undefined) {
-		throw new SecretRestoreError(
-			"The text contains a token that does not belong to the stored version. Read it again and keep its tokens unchanged",
-		);
-	}
-	return value;
+// A hidden value may itself hold a token (a line hidden whole after a
+// password inside it was), so a token is resolved all the way down.
+const resolveToken = (vault: Map<string, string>) => {
+	const resolve = (token: string, depth = 0): string => {
+		const value = vault.get(token);
+		if (value === undefined || depth > 8) {
+			throw new SecretRestoreError(
+				"The text contains a token that does not belong to the stored version. Read it again and keep its tokens unchanged",
+			);
+		}
+		return replaceSecretTokens(value, (inner) => resolve(inner, depth + 1));
+	};
+	return (token: string) => resolve(token);
 };
 
 const assertRestorable = (submitted: string) => {
@@ -490,13 +495,16 @@ export const restoreTextSecrets = (
 	}
 	const resolve = resolveToken(
 		buildVault((replacement) =>
-			scrubSecretText(stored ?? "", matcher, replacement),
+			scrubSecretText(stored ?? "", matcher, { replacement, file: true }),
 		),
 	);
 	const restored = replaceSecretTokens(submitted, resolve);
 	assertStillHidden(
 		submitted,
-		scrubSecretText(restored, matcher, secretTokenFor),
+		scrubSecretText(restored, matcher, {
+			replacement: secretTokenFor,
+			file: true,
+		}),
 	);
 	return restored;
 };

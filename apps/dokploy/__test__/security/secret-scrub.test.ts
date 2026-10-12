@@ -328,6 +328,41 @@ describe("scrubSecretText", () => {
 		expect(performance.now() - startedAt).toBeLessThan(3_000);
 	});
 
+	it.each([
+		["password = correct horse battery", `password = ${R}`],
+		["  db.password = s3cr3tValue", `  db.password = ${R}`],
+		['password = "quoted value"', `password = ${R}`],
+		["password: correct horse battery", `password: ${R}`],
+		["password: 12345", `password: ${R}`],
+		["  - api_key: abc def", `  - api_key: ${R}`],
+		["retry with token = abc123 now", `retry with token = ${R} now`],
+		["'password' => 'abc'", `'password' => ${R}`],
+		["<Password>abc def</Password>", `<Password>${R}</Password>`],
+		['<add key="x" password="abc"/>', `<add key="x" password=${R}/>`],
+	])("scrubs the value in %s", (input, expected) => {
+		expect(scrubSecretText(input)).toBe(expected);
+	});
+
+	it.each([
+		"if (password == null) return",
+		"password =~ /^.{12,}$/",
+		"version=1.2.3 build=42",
+	])("leaves %s alone", (input) => {
+		expect(scrubSecretText(input)).toBe(input);
+	});
+
+	it("reads `name value` settings only in a file", () => {
+		const file =
+			"requirepass hunter2-hunter2\nauth_basic_user_file /etc/users;\nlisten 8080;\n";
+
+		expect(scrubSecretText(file, undefined, { file: true })).toBe(
+			`requirepass ${R}\nauth_basic_user_file ${R};\nlisten 8080;\n`,
+		);
+		expect(scrubSecretText("Passing health check on port 8080")).toBe(
+			"Passing health check on port 8080",
+		);
+	});
+
 	it("is idempotent", () => {
 		const once = scrubSecretText(
 			"DB_PASS=abc postgres://u:p4ssw0rd@h/db Authorization: Bearer x.y.z",

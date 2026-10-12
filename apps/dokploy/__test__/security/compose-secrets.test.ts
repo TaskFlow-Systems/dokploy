@@ -355,7 +355,10 @@ describe("restoreTextSecrets", () => {
 		"}",
 		"",
 	].join("\n");
-	const shown = scrubSecretText(stored, matcher, secretTokenFor);
+	const shown = scrubSecretText(stored, matcher, {
+		replacement: secretTokenFor,
+		file: true,
+	});
 
 	it("hides the values behind tokens", () => {
 		for (const secret of [

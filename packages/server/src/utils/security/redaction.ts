@@ -444,10 +444,30 @@ const TAG_OR_PORT_PATTERN = String.raw`(?:\d{1,5}|v?\d+(?:\.\d+)+[\w.-]*|latest|
 // like a key with a scalar value on the same line. Otherwise the short
 // keywords would read `auth-db:5432` in a URL, the image `auth-api:1.2.3` or
 // the YAML mapping `auth-router:` as a secret.
+const KEY_NAME_HEAD = String.raw`[\w.-]{0,60}?`;
+const KEY_NAME_TAIL = String.raw`[\w.-]{0,80}`;
+const BROAD_KEY = `${BROAD_SENSITIVE_KEY_PATTERN}${KEY_NAME_TAIL}`;
+// `==`, `=>` and `=~` compare or map; they do not assign.
+const ASSIGN = String.raw`[ \t]*=(?![=>~])[ \t]*`;
+
 const BROAD_KEY_PATTERNS: KeyPatterns = {
 	beforeAuthorization: [
+		// A line that is one assignment: the value runs to the end of the line,
+		// spaces included (`password = correct horse`).
 		new RegExp(
-			`(${BROAD_SENSITIVE_KEY_PATTERN}[^=\\s&#?]{0,80}=)(${SHELL_VALUE_PATTERN})`,
+			`^([ \\t]*(?:(?:export|set|setenv)[ \\t]+)?["']?${KEY_NAME_HEAD}${BROAD_KEY}["']?${ASSIGN})(\\S.*)$`,
+			"gim",
+		),
+		new RegExp(
+			`(${BROAD_SENSITIVE_KEY_PATTERN}[\\w.\\[\\]"'-]{0,80}${ASSIGN})(${SHELL_VALUE_PATTERN})`,
+			"gi",
+		),
+		new RegExp(
+			`(${BROAD_KEY}["']?[ \\t]*=>[ \\t]*)("[^"]*"|'[^']*'|[^\\s,;)\\]}]+)`,
+			"gi",
+		),
+		new RegExp(
+			`(<[\\w:.-]{0,60}?${BROAD_SENSITIVE_KEY_PATTERN}[\\w:.-]{0,80}>)([^<\\n]+)`,
 			"gi",
 		),
 	],
@@ -456,8 +476,18 @@ const BROAD_KEY_PATTERNS: KeyPatterns = {
 			`(${BROAD_SENSITIVE_KEY_PATTERN}[^"'\\n]{0,80}["'][ \\t]*:[ \\t]*)(?![{[])(${KEY_VALUE_PATTERN})`,
 			"gi",
 		),
+		// `key: value` on its own line, the value again running to the end.
 		new RegExp(
-			`(?<=(?<![\\w.@/-])[\\w.-]{0,60})(${BROAD_SENSITIVE_KEY_PATTERN}[\\w.-]{0,80}[ \\t]*:[ \\t]*)(?![{[]|${TAG_OR_PORT_PATTERN})(${KEY_VALUE_PATTERN})`,
+			`^([ \\t]*(?:-[ \\t]+)?${KEY_NAME_HEAD}${BROAD_KEY}[ \\t]*:[ \\t]+)(?!["'{[|>&*!])(\\S.*)$`,
+			"gim",
+		),
+		new RegExp(
+			`(?<=(?<![\\w.@/{$-])[\\w.-]{0,60})(${BROAD_KEY}[ \\t]*:[ \\t]+)(?![{[])(${KEY_VALUE_PATTERN})`,
+			"gi",
+		),
+		// Without a space after the colon this may be `host:port` or `image:tag`.
+		new RegExp(
+			`(?<=(?<![\\w.@/{$-])[\\w.-]{0,60})(${BROAD_KEY}:)(?![{[\\s]|${TAG_OR_PORT_PATTERN})(${KEY_VALUE_PATTERN})`,
 			"gi",
 		),
 		new RegExp(
@@ -466,6 +496,13 @@ const BROAD_KEY_PATTERNS: KeyPatterns = {
 		),
 	],
 };
+
+// Config files also write a setting as `name value` (`requirepass hunter2`).
+// In a log that shape is ordinary prose, so it is only read this way in a file.
+const DIRECTIVE_PATTERN = new RegExp(
+	`^([ \\t]*${KEY_NAME_HEAD}${BROAD_KEY}[ \\t]+)(?![=:{(<]|=>)(\\S.*?)(;?[ \\t\\r]*)$`,
+	"gim",
+);
 
 const SECRET_LOOKING_NAME = new RegExp(BROAD_SENSITIVE_KEY_PATTERN, "i");
 
@@ -498,6 +535,8 @@ const ALREADY_HIDDEN_VALUE = new RegExp(
 export type RedactSensitiveTextOptions = {
 	keepVariableReferences?: boolean;
 	broadKeys?: boolean;
+	// Read `name value` lines as settings; for files, not for logs.
+	directives?: boolean;
 	// Produces what stands in for a secret; defaults to the plain placeholder.
 	replacement?: (secret: string) => string;
 };
@@ -576,6 +615,16 @@ export function redactSensitiveText(
 		redacted = redacted.replace(pattern, hideValue);
 	}
 
+	if (options.directives) {
+		redacted = redacted.replace(
+			DIRECTIVE_PATTERN,
+			(match, prefix: string, secret: string, end: string) =>
+				keepVariableReferences && isVariableReference(secret)
+					? match
+					: `${prefix}${hide(secret)}${end}`,
+		);
+	}
+
 	// mysql/mariadb clients take the password glued to -p. A separate word after
 	// -p is not a password, uppercase -P is the port, and -p of other tools
 	// (docker -p, ssh -p, compose -p) is a port or project name.
@@ -588,7 +637,7 @@ export function redactSensitiveText(
 	);
 
 	redacted = redacted.replace(
-		/(\b(?<!\bno-)(?:PASSWORD|IDENTIFIED\s+BY)\s+)('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
+		/(\b(?<!\bno-)(?:PASSWORD|IDENTIFIED\s+BY)\s+)(?![=:])('[^']*'|"[^"]*"|[^\s;&|]+)/gi,
 		hideRest,
 	);
 

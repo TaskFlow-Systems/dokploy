@@ -266,9 +266,17 @@ const splitLongLine = (line: string) => {
 
 type SecretReplacement = (secret: string) => string;
 
+export type ScrubSecretTextOptions = {
+	// With it every hidden value becomes whatever it returns for that value,
+	// which is how restorable tokens are produced.
+	replacement?: SecretReplacement;
+	// The text is a config file, where `name value` lines are settings.
+	file?: boolean;
+};
+
 const scrubCredentialPatterns = (
 	text: string,
-	replacement: SecretReplacement | undefined,
+	{ replacement, file }: ScrubSecretTextOptions,
 ) => {
 	const hide = replacement ?? (() => REDACTED_SECRET_VALUE);
 	let scrubbed = text;
@@ -278,34 +286,33 @@ const scrubCredentialPatterns = (
 	return redactSensitiveText(scrubbed, {
 		broadKeys: true,
 		keepVariableReferences: true,
+		directives: file,
 		replacement,
 	});
 };
 
-// With `replacement` every hidden value becomes whatever it returns for that
-// value, which is how restorable tokens are produced.
 export const scrubSecretText = (
 	text: string,
 	matcher: KnownSecretMatcher = EMPTY_KNOWN_SECRET_MATCHER,
-	replacement?: SecretReplacement,
+	options: ScrubSecretTextOptions = {},
 ) => {
 	if (text === "") {
 		return text;
 	}
-	const hide = replacement ?? (() => REDACTED_SECRET_VALUE);
+	const hide = options.replacement ?? (() => REDACTED_SECRET_VALUE);
 	const scrubbed = (
 		matcher.pattern
 			? text.replace(matcher.pattern, (secret) => hide(secret))
 			: text
 	).replace(PRIVATE_KEY_BLOCK, (secret) => hide(secret));
 	if (!hasLongLine(scrubbed)) {
-		return scrubCredentialPatterns(scrubbed, replacement);
+		return scrubCredentialPatterns(scrubbed, options);
 	}
 	return scrubbed
 		.split("\n")
 		.map((line) =>
 			splitLongLine(line)
-				.map((piece) => scrubCredentialPatterns(piece, replacement))
+				.map((piece) => scrubCredentialPatterns(piece, options))
 				.join(""),
 		)
 		.join("\n");
