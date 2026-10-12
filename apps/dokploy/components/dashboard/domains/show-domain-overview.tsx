@@ -13,51 +13,16 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { api, type RouterOutputs } from "@/utils/api";
+import { api } from "@/utils/api";
+import {
+	CountBadge,
+	DnsCell,
+	formatTime,
+	LastErrorCell,
+	type Row,
+} from "./shared";
 import { ShowTraefikLogs } from "./show-traefik-logs";
-
-type Overview = RouterOutputs["domainOverview"]["list"];
-type Row = Overview["rows"][number];
-type DnsStatus = Row["dns"]["status"];
-
-const DNS_STATUS: Record<DnsStatus, { label: string; className: string }> = {
-	points_to_this_server: {
-		label: "Points to this server",
-		className: "text-emerald-600 dark:text-emerald-400",
-	},
-	points_to_other_address: {
-		label: "Points to another address",
-		className: "text-yellow-600 dark:text-yellow-400",
-	},
-	server_address_unknown: {
-		label: "Server address unknown",
-		className: "text-muted-foreground",
-	},
-	nxdomain: {
-		label: "No DNS record (NXDOMAIN)",
-		className: "text-red-600 dark:text-red-400",
-	},
-	no_address: {
-		label: "Record exists but has no address",
-		className: "text-red-600 dark:text-red-400",
-	},
-	lookup_failed: {
-		label: "Lookup failed or timed out",
-		className: "text-muted-foreground",
-	},
-	not_checked: {
-		label: "Not checked (wildcard)",
-		className: "text-muted-foreground",
-	},
-};
-
-const formatTime = (value: string | null) => {
-	if (!value) {
-		return "Time unknown";
-	}
-	const date = new Date(value);
-	return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-};
+import { UnusedCertificatesTable } from "./unused-certificates-table";
 
 const serviceHref = (
 	projectId: string,
@@ -71,13 +36,6 @@ const dockerHref = (serverId: string | null) =>
 	serverId ? `/dashboard/docker?serverId=${serverId}` : "/dashboard/docker";
 
 const UsedBy = ({ row }: { row: Row }) => {
-	if (row.panelUses.length === 0 && row.routeUses.length === 0) {
-		return (
-			<span className="text-sm text-muted-foreground">
-				Not used by any route or panel domain
-			</span>
-		);
-	}
 	const panelOwnerIds = new Set(row.panelUses.map((use) => use.ownerId));
 	const routeOnly = row.routeUses.filter(
 		(use) => !use.owner || !panelOwnerIds.has(use.owner.ownerId),
@@ -85,6 +43,18 @@ const UsedBy = ({ row }: { row: Row }) => {
 
 	return (
 		<div className="flex flex-col gap-2 text-sm">
+			{row.panelHost && (
+				<div className="flex flex-wrap items-center gap-2">
+					<span>Panel</span>
+					<Badge variant="blank">panel domain</Badge>
+				</div>
+			)}
+			{row.configFiles.map((file) => (
+				<div key={`file-${file}`} className="flex flex-wrap items-center gap-2">
+					<span className="font-mono text-xs break-all">{file}</span>
+					<Badge variant="blank">Traefik config file</Badge>
+				</div>
+			))}
 			{row.panelUses.map((use) => (
 				<div
 					key={`panel-${use.ownerId}-${use.domainType ?? "domain"}`}
@@ -152,26 +122,6 @@ const UsedBy = ({ row }: { row: Row }) => {
 	);
 };
 
-const DnsCell = ({ dns }: { dns: Row["dns"] }) => {
-	const status = DNS_STATUS[dns.status];
-	return (
-		<div className="flex flex-col gap-1.5 text-sm">
-			<span className={cn("font-medium", status.className)}>
-				{status.label}
-			</span>
-			{dns.addresses.length > 0 && (
-				<div className="flex flex-col gap-0.5 font-mono text-xs text-muted-foreground">
-					{dns.addresses.map((address) => (
-						<span key={address} className="break-all">
-							{address}
-						</span>
-					))}
-				</div>
-			)}
-		</div>
-	);
-};
-
 const CertificateCell = ({
 	row,
 	certificatesVisible,
@@ -201,11 +151,6 @@ const CertificateCell = ({
 				: "";
 	return (
 		<div className="flex flex-col gap-1 text-sm">
-			{row.certificateOnly && (
-				<span className="font-medium text-orange-600 dark:text-orange-400">
-					certificate only, nothing uses it
-				</span>
-			)}
 			<span className={toneClassName}>
 				{certificate.daysLeft < 0
 					? `expired on ${date}`
@@ -214,27 +159,6 @@ const CertificateCell = ({
 			<span className="text-xs text-muted-foreground">
 				{certificate.issuer}
 			</span>
-		</div>
-	);
-};
-
-const LastErrorCell = ({ error }: { error: Row["lastError"] }) => {
-	if (!error) {
-		return (
-			<span className="text-sm text-muted-foreground">
-				No error in the recent Traefik log
-			</span>
-		);
-	}
-	return (
-		<div className="flex flex-col gap-2 text-sm max-w-md">
-			<span className="text-xs text-muted-foreground">
-				{formatTime(error.time)}
-			</span>
-			<span className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-xs">
-				{error.message}
-			</span>
-			<span>{error.explanation}</span>
 		</div>
 	);
 };
@@ -269,7 +193,7 @@ const DomainRow = ({
 			<CertificateCell row={row} certificatesVisible={certificatesVisible} />
 		</TableCell>
 		<TableCell>
-			<LastErrorCell error={row.lastError} />
+			<LastErrorCell error={row.lastError} logAvailable={row.logAvailable} />
 		</TableCell>
 	</TableRow>
 );
@@ -281,39 +205,45 @@ const DomainsTable = ({
 	rows: Row[];
 	certificatesVisible: boolean;
 }) => (
-	<div className="overflow-x-auto rounded-lg border">
-		<Table>
-			<TableHeader>
-				<TableRow>
-					<TableHead>Domain</TableHead>
-					<TableHead>Server</TableHead>
-					<TableHead>Used by</TableHead>
-					<TableHead>DNS</TableHead>
-					<TableHead>Certificate</TableHead>
-					<TableHead>Last Traefik error</TableHead>
-				</TableRow>
-			</TableHeader>
-			<TableBody>
-				{rows.length === 0 ? (
+	<div className="flex flex-col gap-3">
+		<div className="flex items-center gap-2">
+			<h3 className="text-lg font-semibold">Domains in use</h3>
+			<CountBadge count={rows.length} />
+		</div>
+		<div className="overflow-x-auto rounded-lg border">
+			<Table>
+				<TableHeader>
 					<TableRow>
-						<TableCell
-							colSpan={6}
-							className="text-center text-muted-foreground"
-						>
-							No domains found on this instance.
-						</TableCell>
+						<TableHead>Domain</TableHead>
+						<TableHead>Server</TableHead>
+						<TableHead>Used by</TableHead>
+						<TableHead>DNS</TableHead>
+						<TableHead>Certificate</TableHead>
+						<TableHead>Last Traefik error</TableHead>
 					</TableRow>
-				) : (
-					rows.map((row) => (
-						<DomainRow
-							key={row.key}
-							row={row}
-							certificatesVisible={certificatesVisible}
-						/>
-					))
-				)}
-			</TableBody>
-		</Table>
+				</TableHeader>
+				<TableBody>
+					{rows.length === 0 ? (
+						<TableRow>
+							<TableCell
+								colSpan={6}
+								className="text-center text-muted-foreground"
+							>
+								No domains in use found on this instance.
+							</TableCell>
+						</TableRow>
+					) : (
+						rows.map((row) => (
+							<DomainRow
+								key={row.key}
+								row={row}
+								certificatesVisible={certificatesVisible}
+							/>
+						))
+					)}
+				</TableBody>
+			</Table>
+		</div>
 	</div>
 );
 
@@ -331,8 +261,8 @@ export const ShowDomainOverview = () => {
 						<div className="flex flex-col gap-1">
 							<h2 className="text-xl font-semibold">Domains</h2>
 							<p className="text-sm text-muted-foreground">
-								Every domain on this instance with its DNS record, certificate
-								and last Traefik error. Read only.
+								Domains that routes or the panel use, and certificates that
+								nothing uses.
 							</p>
 						</div>
 						<div className="flex items-center gap-3">
@@ -383,6 +313,23 @@ export const ShowDomainOverview = () => {
 							certificatesVisible={data.certificatesVisible}
 						/>
 					)}
+					{data && (
+						<UnusedCertificatesTable
+							items={data.unusedCertificates}
+							certificatesVisible={data.certificatesVisible}
+						/>
+					)}
+					{data?.servers
+						.filter((item) => !item.usageVerified)
+						.map((item) => (
+							<AlertBlock
+								key={`unverified-${item.serverId ?? "local"}`}
+								type="warning"
+							>
+								{item.name}: routes or certificates could not be read, so unused
+								certificates are not listed for this server.
+							</AlertBlock>
+						))}
 				</div>
 			</Card>
 

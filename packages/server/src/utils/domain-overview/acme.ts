@@ -5,6 +5,7 @@ export const ACME_FILE_MISSING_EXIT_CODE = 3;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type AcmeCertificate = {
+	main: string | null;
 	names: string[];
 	validTo: Date;
 	issuer: string;
@@ -17,7 +18,8 @@ export type CertificateTone = "critical" | "warning" | "ok";
 const JQ_REDUCE_FILTER =
 	"{letsencrypt: {Certificates: [.letsencrypt?.Certificates[]? | {domain: {main: .domain?.main?, sans: (.domain?.sans? // [])}, certificate: .certificate?}]}}";
 
-const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
+export const shellQuote = (value: string) =>
+	`'${value.replace(/'/g, `'\\''`)}'`;
 
 export const buildAcmeReadCommand = (acmeFilePath: string) => {
 	const file = shellQuote(acmeFilePath);
@@ -97,7 +99,11 @@ const toAcmeCertificate = (entry: unknown): AcmeCertificate | null => {
 	if (!parsed || names.length === 0) {
 		return null;
 	}
-	return { names: [...new Set(names)], ...parsed };
+	const main =
+		typeof domain.main === "string" && domain.main.trim() !== ""
+			? normalizeDomainName(domain.main)
+			: null;
+	return { main, names: [...new Set(names)], ...parsed };
 };
 
 // Errors never carry the file content: JSON.parse messages can quote the

@@ -30,7 +30,7 @@ describe("DNS status mapper", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: answer(["192.0.2.10"]), aaaa: failure("ENODATA") },
-				serverAddress: "192.0.2.10",
+				serverAddresses: ["192.0.2.10"],
 			}),
 		).toBe("points_to_this_server");
 	});
@@ -39,7 +39,7 @@ describe("DNS status mapper", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: answer(["198.51.100.7"]), aaaa: failure("ENODATA") },
-				serverAddress: "192.0.2.10",
+				serverAddresses: ["192.0.2.10"],
 			}),
 		).toBe("points_to_other_address");
 	});
@@ -48,7 +48,7 @@ describe("DNS status mapper", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: failure("ENOTFOUND"), aaaa: failure("ENOTFOUND") },
-				serverAddress: "192.0.2.10",
+				serverAddresses: ["192.0.2.10"],
 			}),
 		).toBe("nxdomain");
 	});
@@ -57,7 +57,7 @@ describe("DNS status mapper", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: failure("ENODATA"), aaaa: failure("ENODATA") },
-				serverAddress: "192.0.2.10",
+				serverAddresses: ["192.0.2.10"],
 			}),
 		).toBe("no_address");
 	});
@@ -66,7 +66,7 @@ describe("DNS status mapper", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: failure("ETIMEDOUT"), aaaa: failure("ENODATA") },
-				serverAddress: "192.0.2.10",
+				serverAddresses: ["192.0.2.10"],
 			}),
 		).toBe("lookup_failed");
 	});
@@ -75,16 +75,46 @@ describe("DNS status mapper", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: failure("ESERVFAIL"), aaaa: answer(["2001:db8::7"]) },
-				serverAddress: "192.0.2.10",
+				serverAddresses: ["192.0.2.10"],
 			}),
 		).toBe("lookup_failed");
+	});
+
+	it("matches any of several known server addresses", () => {
+		expect(
+			mapDnsStatus({
+				records: { a: answer(["198.51.100.7"]), aaaa: failure("ENODATA") },
+				serverAddresses: ["192.0.2.10", "198.51.100.7"],
+			}),
+		).toBe("points_to_this_server");
+	});
+
+	it("compares IPv6 addresses in their normalised form", () => {
+		expect(
+			mapDnsStatus({
+				records: {
+					a: failure("ENODATA"),
+					aaaa: answer(["2001:0DB8:0:0:0:0:0:7"]),
+				},
+				serverAddresses: ["2001:db8::7"],
+			}),
+		).toBe("points_to_this_server");
+	});
+
+	it("does not call an IPv6 answer another address when only IPv4 is known", () => {
+		expect(
+			mapDnsStatus({
+				records: { a: failure("ENODATA"), aaaa: answer(["2001:db8::7"]) },
+				serverAddresses: ["192.0.2.10"],
+			}),
+		).toBe("server_address_unknown");
 	});
 
 	it("reports an unknown server address when the name resolves", () => {
 		expect(
 			mapDnsStatus({
 				records: { a: answer(["192.0.2.10"]), aaaa: failure("ENODATA") },
-				serverAddress: null,
+				serverAddresses: [],
 			}),
 		).toBe("server_address_unknown");
 	});
@@ -103,7 +133,7 @@ describe("DNS lookups", () => {
 
 		const records = await resolveDomainRecords("points-here.example.test");
 
-		expect(mapDnsStatus({ records, serverAddress: "192.0.2.10" })).toBe(
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"points_to_this_server",
 		);
 	});
@@ -114,7 +144,7 @@ describe("DNS lookups", () => {
 
 		const records = await resolveDomainRecords("elsewhere.example.test");
 
-		expect(mapDnsStatus({ records, serverAddress: "192.0.2.10" })).toBe(
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"points_to_other_address",
 		);
 	});
@@ -125,7 +155,7 @@ describe("DNS lookups", () => {
 
 		const records = await resolveDomainRecords("missing.example.test");
 
-		expect(mapDnsStatus({ records, serverAddress: "192.0.2.10" })).toBe(
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"nxdomain",
 		);
 	});
@@ -136,7 +166,7 @@ describe("DNS lookups", () => {
 
 		const records = await resolveDomainRecords("empty.example.test");
 
-		expect(mapDnsStatus({ records, serverAddress: "192.0.2.10" })).toBe(
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"no_address",
 		);
 	});
@@ -151,7 +181,7 @@ describe("DNS lookups", () => {
 		const records = await pending;
 
 		expect(records.a.ok).toBe(false);
-		expect(mapDnsStatus({ records, serverAddress: "192.0.2.10" })).toBe(
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"lookup_failed",
 		);
 	});
@@ -162,7 +192,7 @@ describe("DNS lookups", () => {
 
 		const records = await resolveDomainRecords("refused.example.test");
 
-		expect(mapDnsStatus({ records, serverAddress: "192.0.2.10" })).toBe(
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"lookup_failed",
 		);
 	});

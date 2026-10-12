@@ -1,9 +1,59 @@
 export const TRAEFIK_CONTAINER_NAME = "dokploy-traefik";
 export const TRAEFIK_LOG_LINE_LIMIT = 300;
+export const TRAEFIK_LOG_WINDOW = "72h";
+export const TRAEFIK_LOG_WINDOW_LABEL = "72 hours";
+export const TRAEFIK_LOG_SERVER_TIMEOUT_SECONDS = 20;
+export const TRAEFIK_LOG_NODE_TIMEOUT_MS =
+	(TRAEFIK_LOG_SERVER_TIMEOUT_SECONDS + 5) * 1000;
+export const TRAEFIK_LOG_CONTAINER_MISSING_EXIT_CODE = 4;
 
-// Docker parses --since with Go durations, which have no day unit.
-export const buildTraefikLogsCommand = () =>
-	`docker logs --since 168h --tail 2000 ${TRAEFIK_CONTAINER_NAME} 2>&1`;
+const LOG_RC_MARKER = "__DOKPLOY_LOG_RC=";
+const ACME_GREP_PATTERN = "acme|certificate|letsencrypt|tls-alpn";
+
+// --since and --tail together make docker scan the whole json-file log before
+// it applies the tail, which never finishes on a large log. The filter runs on
+// the server so only a few hundred lines travel over SSH. A pipeline's status
+// is the last command's in sh, so the exit code of docker logs is printed as
+// a marker line that passes the grep.
+export const buildTraefikLogsCommand = () => {
+	const name = TRAEFIK_CONTAINER_NAME;
+	const reader = (logs: string) =>
+		`{ $LIMIT ${logs} 2>&1; echo "${LOG_RC_MARKER}$?"; } | grep -iE '${ACME_GREP_PATTERN}|${LOG_RC_MARKER}' | tail -n ${TRAEFIK_LOG_LINE_LIMIT}`;
+	return [
+		`LIMIT=""; if command -v timeout >/dev/null 2>&1; then LIMIT="timeout ${TRAEFIK_LOG_SERVER_TIMEOUT_SECONDS}"; fi`,
+		`if docker service inspect ${name} >/dev/null 2>&1; then`,
+		reader(`docker service logs --since ${TRAEFIK_LOG_WINDOW} ${name}`),
+		`elif docker inspect ${name} >/dev/null 2>&1; then`,
+		reader(`docker logs --since ${TRAEFIK_LOG_WINDOW} ${name}`),
+		"else",
+		`exit ${TRAEFIK_LOG_CONTAINER_MISSING_EXIT_CODE}`,
+		"fi",
+	].join("\n");
+};
+
+export type TraefikLogReadResult =
+	| { ok: true; output: string }
+	| { ok: false; reason: string };
+
+export const readTraefikLogOutput = (stdout: string): TraefikLogReadResult => {
+	const lines = stdout.split("\n").filter((line) => line.length > 0);
+	const marker = lines[lines.length - 1];
+	if (!marker?.startsWith(LOG_RC_MARKER)) {
+		return { ok: false, reason: "the log command did not finish" };
+	}
+	const code = Number(marker.slice(LOG_RC_MARKER.length));
+	const output = lines.slice(0, -1).join("\n");
+	if (code === 0) {
+		return { ok: true, output };
+	}
+	return {
+		ok: false,
+		reason:
+			code === 124
+				? `docker logs did not finish within ${TRAEFIK_LOG_SERVER_TIMEOUT_SECONDS} s`
+				: `docker logs exited with code ${code}`,
+	};
+};
 
 const ACME_LINE = /acme|certificate|letsencrypt|tls-alpn/i;
 

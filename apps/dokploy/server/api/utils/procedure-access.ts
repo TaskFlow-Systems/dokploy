@@ -270,6 +270,7 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"domain.toggleEnable": "write",
 	"domain.update": "write",
 	"domain.validateDomain": "write",
+	"domainOverview.deleteUnusedCertificates": "write",
 	"domainOverview.list": "read",
 	"domainOverview.traefikLogs": "read",
 	"env.applyChanges": "write",

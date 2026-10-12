@@ -63,6 +63,7 @@ describe("acme.json parser", () => {
 		expect(certificates[0]?.issuer).toBe("Example Test Fixture example.test");
 		expect(Object.keys(certificates[0] ?? {}).sort()).toEqual([
 			"issuer",
+			"main",
 			"names",
 			"validTo",
 		]);
@@ -166,11 +167,13 @@ describe("certificate names", () => {
 
 	it("prefers the certificate with the latest expiry", () => {
 		const older = {
+			main: "example.test",
 			names: ["example.test"],
 			validTo: new Date("2026-12-01T00:00:00Z"),
 			issuer: "older",
 		};
 		const newer = {
+			main: "example.test",
 			names: ["example.test"],
 			validTo: new Date("2027-06-01T00:00:00Z"),
 			issuer: "newer",

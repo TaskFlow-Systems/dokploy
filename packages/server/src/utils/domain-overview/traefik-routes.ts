@@ -8,7 +8,7 @@ export type TraefikRoute = {
 export const buildTraefikRoutesCommand = () =>
 	"docker ps -q | xargs -r docker inspect --format '{{.Name}}|{{json .Config.Labels}}'";
 
-const HOST_MATCHER = /\bHost\(([^)]*)\)/g;
+const HOST_MATCHER = /\bHost(?:SNI)?\(([^)]*)\)/g;
 const QUOTED_ARGUMENT = /`([^`]*)`|"([^"]*)"|'([^']*)'/g;
 const HTTP_RULE_LABEL = /^traefik\.http\.routers\..+\.rule$/;
 
@@ -80,4 +80,45 @@ export const parseTraefikRoutes = (output: string): TraefikRoute[] => {
 		}
 	}
 	return routes;
+};
+
+export type DynamicConfigHost = {
+	host: string;
+	file: string;
+};
+
+export const DYNAMIC_CONFIG_DIR_MISSING_EXIT_CODE = 3;
+
+// grep exits 1 when nothing matches, which is a valid answer; any higher code
+// is a real failure and must not read as "no routes".
+export const buildDynamicHostsCommand = (dynamicDir: string) => {
+	const dir = `'${dynamicDir.replace(/'/g, `'\\''`)}'`;
+	return [
+		`[ -d ${dir} ] || exit ${DYNAMIC_CONFIG_DIR_MISSING_EXIT_CODE}`,
+		`grep -rHoE --include='*.yml' --include='*.yaml' --include='*.toml' '(Host|HostSNI)\\([^)]*\\)' ${dir}`,
+		"status=$?",
+		'[ "$status" -le 1 ] || exit "$status"',
+	].join("\n");
+};
+
+const DYNAMIC_MATCHER = /^(.*?):(Host(?:SNI)?\([^)]*\))$/;
+
+export const parseDynamicHosts = (output: string): DynamicConfigHost[] => {
+	const found: DynamicConfigHost[] = [];
+	const seen = new Set<string>();
+	for (const line of output.split("\n")) {
+		const match = line.trimEnd().match(DYNAMIC_MATCHER);
+		if (!match) {
+			continue;
+		}
+		const file = (match[1] ?? "").split("/").pop() ?? "";
+		for (const host of extractRuleHosts(match[2] ?? "")) {
+			const key = `${file}|${host}`;
+			if (!seen.has(key)) {
+				seen.add(key);
+				found.push({ host, file });
+			}
+		}
+	}
+	return found;
 };
