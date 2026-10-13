@@ -13,6 +13,7 @@ import {
 	baseEnv,
 	callsOf,
 	idOf,
+	killLeftovers,
 	lockFile,
 	MODES,
 	mains,
@@ -224,6 +225,25 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 				await waitFor(() => pids.every((pid) => !alive(pid)), 5_000);
 				expect(pids.length).toBeGreaterThan(0);
 			});
+		});
+	},
+);
+
+describe.skipIf(!REAL_JQ).each(SHELLS)(
+	"a script a test leaves running, under $label",
+	({ path: shell }) => {
+		it("is killed by the cleanup that runs after every test", async () => {
+			const job = spawnScript(shell, targets("one.example.com"), {
+				FAKE_HANG: "stop",
+			});
+			await waitFor(() => existsSync(path.join(stateDir, "hung.pids")));
+			const pid = job.child.pid as number;
+			expect(alive(pid)).toBe(true);
+
+			killLeftovers();
+
+			await waitFor(() => !alive(pid), 5_000);
+			expect(job.child.signalCode).toBe("SIGKILL");
 		});
 	},
 );

@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	acmeFile,
 	baseEnv,
+	binDir,
 	callsOf,
 	fastScript,
 	firstShellOnly,
@@ -16,6 +18,8 @@ import {
 	running,
 	SHELLS,
 	setupBin,
+	spawnScript,
+	stateDir,
 	targets,
 	waitFor,
 } from "./acme-delete-harness";
@@ -95,6 +99,20 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 				expect(output).toContain("DOKPLOY_RESULT interrupted");
 				expect(running()).toBe("true");
 				expect(existsSync(lockFile)).toBe(false);
+			});
+
+			it("gives up instead of spinning when date and sleep disappear mid-run", async () => {
+				const job = spawnScript(shell, targets("one.example.com"), {
+					FAKE_HANG: "stop",
+				});
+				await waitFor(() => existsSync(path.join(stateDir, "hung.pids")));
+
+				const removed = Date.now();
+				rmSync(binDir, { recursive: true });
+				await job.exited;
+
+				expect(Date.now() - removed).toBeLessThan(8_000);
+				expect(resultOf(job.state.output)).not.toBe("ok");
 			});
 		});
 	},

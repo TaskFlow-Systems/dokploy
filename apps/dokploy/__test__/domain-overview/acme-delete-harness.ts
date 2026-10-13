@@ -447,7 +447,30 @@ beforeEach(() => {
 	writeAcme(fixture());
 });
 
+// Every script names workDir in its arguments, so this finds the ones a test
+// left behind, including those detached with nohup or setsid. They trap TERM,
+// and once their PATH is deleted below they can no longer tell the time.
+export const killLeftovers = () => {
+	for (let round = 0; round < 5; round++) {
+		const pids = (
+			spawnSync("pgrep", ["-f", workDir], { encoding: "utf8" }).stdout ?? ""
+		)
+			.split("\n")
+			.filter(Boolean)
+			.map(Number);
+		if (pids.length === 0) {
+			return;
+		}
+		for (const pid of pids) {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {}
+		}
+	}
+};
+
 afterEach(() => {
+	killLeftovers();
 	chmodSync(acmeDir, 0o755);
 	rmSync(workDir, { recursive: true, force: true });
 });

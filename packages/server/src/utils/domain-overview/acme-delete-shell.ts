@@ -147,7 +147,9 @@ dk_launch() {
 dk_wait() {
 	DK_I=0
 	until [ -s "$OUT.rc" ]; do
-		if [ "$(date +%s)" -ge "$DK_END" ]; then
+		# A clock that cannot be read has to count as a timeout: the other
+		# way round this loop never ends once date is gone.
+		if ! [ "$(date +%s)" -lt "$DK_END" ]; then
 			k_pid="$(cat "$OUT.pid" 2>/dev/null)"
 			case "$k_pid" in
 				'' | *[!0-9]*) ;;
