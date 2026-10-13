@@ -17,11 +17,14 @@ import {
 export type KnownSecretMatcher = {
 	size: number;
 	pattern: RegExp | null;
+	// Values too long for the pattern, longest first, found by plain search.
+	literals: string[];
 };
 
 export const EMPTY_KNOWN_SECRET_MATCHER: KnownSecretMatcher = {
 	size: 0,
 	pattern: null,
+	literals: [],
 };
 
 const SECRET_ENV_NAME =
@@ -91,10 +94,7 @@ type TrieNode = { children: Map<string, TrieNode>; terminal: boolean };
 // One alternation per secret makes the regex engine try every secret at every
 // position. A prefix tree keeps a scan of a large log proportional to its size
 // however many secrets the panel stores, and prefers the longest secret.
-const toTriePattern = (node: TrieNode): string => {
-	const branches = [...node.children].map(
-		([character, child]) => `${escapeRegExp(character)}${toTriePattern(child)}`,
-	);
+const joinBranches = (node: TrieNode, branches: string[]) => {
 	if (branches.length === 0) {
 		return "";
 	}
@@ -102,6 +102,41 @@ const toTriePattern = (node: TrieNode): string => {
 		return `(?:${branches.join("|")})?`;
 	}
 	return branches.length === 1 ? branches[0]! : `(?:${branches.join("|")})`;
+};
+
+type TrieVisit = {
+	node: TrieNode;
+	children: [string, TrieNode][];
+	branches: string[];
+};
+
+const visitTrieNode = (node: TrieNode): TrieVisit => ({
+	node,
+	children: [...node.children],
+	branches: [],
+});
+
+// The tree is as deep as the longest secret, so it is walked with a list
+// instead of recursion: a value of a few thousand characters overflowed the
+// call stack, sooner or later depending on how deep the caller already was.
+const toTriePattern = (root: TrieNode): string => {
+	const visits = [visitTrieNode(root)];
+	for (;;) {
+		const visit = visits[visits.length - 1]!;
+		const next = visit.children[visit.branches.length];
+		if (next) {
+			visits.push(visitTrieNode(next[1]));
+			continue;
+		}
+		const pattern = joinBranches(visit.node, visit.branches);
+		visits.pop();
+		const parent = visits[visits.length - 1];
+		if (!parent) {
+			return pattern;
+		}
+		const [character] = parent.children[parent.branches.length]!;
+		parent.branches.push(`${escapeRegExp(character)}${pattern}`);
+	}
 };
 
 const buildTriePattern = (values: Iterable<string>) => {
@@ -142,6 +177,10 @@ const encodedForms = (value: string) => {
 	return forms.filter((form) => form.length >= MIN_ENCODED_FORM_LENGTH);
 };
 
+// The regex engine refuses a pattern that holds a run of some tens of
+// thousands of literal characters ("Regular expression too large").
+const MAX_PATTERN_VALUE_LENGTH = 4096;
+
 export const buildKnownSecretMatcher = (
 	values: Iterable<string>,
 ): KnownSecretMatcher => {
@@ -149,12 +188,14 @@ export const buildKnownSecretMatcher = (
 	if (unique.length === 0) {
 		return EMPTY_KNOWN_SECRET_MATCHER;
 	}
+	const forms = [...new Set([...unique, ...unique.flatMap(encodedForms)])];
+	const short = forms.filter((form) => form.length <= MAX_PATTERN_VALUE_LENGTH);
 	return {
 		size: unique.length,
-		pattern: new RegExp(
-			buildTriePattern([...unique, ...unique.flatMap(encodedForms)]),
-			"g",
-		),
+		pattern: short.length > 0 ? new RegExp(buildTriePattern(short), "g") : null,
+		literals: forms
+			.filter((form) => form.length > MAX_PATTERN_VALUE_LENGTH)
+			.sort((left, right) => right.length - left.length),
 	};
 };
 
@@ -294,6 +335,20 @@ const scrubCredentialPatterns = (
 	});
 };
 
+const hideLiterals = (
+	text: string,
+	literals: string[],
+	hide: SecretReplacement,
+) => {
+	let scrubbed = text;
+	for (const literal of literals) {
+		if (scrubbed.includes(literal)) {
+			scrubbed = scrubbed.split(literal).join(hide(literal));
+		}
+	}
+	return scrubbed;
+};
+
 export const scrubSecretText = (
 	text: string,
 	matcher: KnownSecretMatcher = EMPTY_KNOWN_SECRET_MATCHER,
@@ -303,10 +358,11 @@ export const scrubSecretText = (
 		return text;
 	}
 	const hide = options.replacement ?? (() => REDACTED_SECRET_VALUE);
+	const withoutLiterals = hideLiterals(text, matcher.literals, hide);
 	const scrubbed = (
 		matcher.pattern
-			? text.replace(matcher.pattern, (secret) => hide(secret))
-			: text
+			? withoutLiterals.replace(matcher.pattern, (secret) => hide(secret))
+			: withoutLiterals
 	).replace(PRIVATE_KEY_BLOCK, (secret) => hide(secret));
 	if (!hasLongLine(scrubbed)) {
 		return scrubCredentialPatterns(scrubbed, options);
