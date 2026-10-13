@@ -9,6 +9,7 @@ import { createTRPCNext } from "@trpc/next";
 import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import superjson from "superjson";
 import type { AppRouter } from "@/server/api/root";
+import { noSessionLink, retryUnlessNoSession } from "@/utils/session-expiry";
 import { superSessionLink } from "@/utils/super-session-link";
 
 const getBaseUrl = () => {
@@ -46,6 +47,7 @@ const wsClient = getOrCreateWSClient();
 const links =
 	typeof window !== "undefined"
 		? [
+				noSessionLink,
 				superSessionLink,
 				splitLink({
 					condition: (op) => op.type === "subscription",
@@ -75,7 +77,12 @@ const links =
 
 export const api = createTRPCNext<AppRouter>({
 	config() {
-		return { links };
+		return {
+			links,
+			queryClientConfig: {
+				defaultOptions: { queries: { retry: retryUnlessNoSession } },
+			},
+		};
 	},
 	ssr: false,
 	transformer: superjson,

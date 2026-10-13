@@ -125,6 +125,28 @@ export const createTRPCContext = async (opts: CreateNextContextOptions) => {
  * errors on the backend.
  */
 
+class NoSessionError extends Error {
+	constructor() {
+		super("No valid session");
+		this.name = "NoSessionError";
+	}
+}
+
+// Procedures throw UNAUTHORIZED both when the request has no session and when
+// the signed-in role is not allowed. Only the first is marked, so a browser can
+// tell an ended session from a refused action.
+const noSessionError = () =>
+	new TRPCError({
+		code: "UNAUTHORIZED",
+		// An explicit message keeps the response body the same as an unmarked
+		// UNAUTHORIZED; TRPCError would otherwise take the cause's message.
+		message: "UNAUTHORIZED",
+		cause: new NoSessionError(),
+	});
+
+const hasNoSession = (error: TRPCError) =>
+	error.code === "UNAUTHORIZED" && error.cause?.name === "NoSessionError";
+
 const t = initTRPC
 	.meta<OpenApiMeta>()
 	.context<typeof createTRPCContext>()
@@ -138,6 +160,7 @@ const t = initTRPC
 					zodError:
 						error.cause instanceof ZodError ? error.cause.flatten() : null,
 					superSession: getSuperSessionDenial(error),
+					noSession: hasNoSession(error),
 				},
 			};
 		},
@@ -218,7 +241,7 @@ export const publicProcedure = baseProcedure;
  */
 export const protectedProcedure = baseProcedure.use(({ ctx, next }) => {
 	if (!ctx.session || !ctx.user) {
-		throw new TRPCError({ code: "UNAUTHORIZED" });
+		throw noSessionError();
 	}
 	return next({
 		ctx: {
@@ -231,11 +254,10 @@ export const protectedProcedure = baseProcedure.use(({ ctx, next }) => {
 });
 
 export const cliProcedure = baseProcedure.use(({ ctx, next }) => {
-	if (
-		!ctx.session ||
-		!ctx.user ||
-		(ctx.user.role !== "owner" && ctx.user.role !== "admin")
-	) {
+	if (!ctx.session || !ctx.user) {
+		throw noSessionError();
+	}
+	if (ctx.user.role !== "owner" && ctx.user.role !== "admin") {
 		throw new TRPCError({ code: "UNAUTHORIZED" });
 	}
 	return next({
@@ -249,11 +271,10 @@ export const cliProcedure = baseProcedure.use(({ ctx, next }) => {
 });
 
 export const adminProcedure = baseProcedure.use(({ ctx, next }) => {
-	if (
-		!ctx.session ||
-		!ctx.user ||
-		(ctx.user.role !== "owner" && ctx.user.role !== "admin")
-	) {
+	if (!ctx.session || !ctx.user) {
+		throw noSessionError();
+	}
+	if (ctx.user.role !== "owner" && ctx.user.role !== "admin") {
 		throw new TRPCError({ code: "UNAUTHORIZED" });
 	}
 	return next({
@@ -267,7 +288,10 @@ export const adminProcedure = baseProcedure.use(({ ctx, next }) => {
 });
 
 export const ownerProcedure = baseProcedure.use(({ ctx, next }) => {
-	if (!ctx.session || !ctx.user || ctx.user.role !== "owner") {
+	if (!ctx.session || !ctx.user) {
+		throw noSessionError();
+	}
+	if (ctx.user.role !== "owner") {
 		throw new TRPCError({ code: "UNAUTHORIZED" });
 	}
 	return next({
@@ -284,11 +308,10 @@ export const ownerProcedure = baseProcedure.use(({ ctx, next }) => {
  * is used in the UI gate and when activating/validating keys.
  */
 export const enterpriseProcedure = baseProcedure.use(async ({ ctx, next }) => {
-	if (
-		!ctx.session ||
-		!ctx.user ||
-		(ctx.user.role !== "owner" && ctx.user.role !== "admin")
-	) {
+	if (!ctx.session || !ctx.user) {
+		throw noSessionError();
+	}
+	if (ctx.user.role !== "owner" && ctx.user.role !== "admin") {
 		throw new TRPCError({ code: "UNAUTHORIZED" });
 	}
 
@@ -317,7 +340,10 @@ export const enterpriseProcedure = baseProcedure.use(async ({ ctx, next }) => {
  */
 export const enterpriseOwnerProcedure = baseProcedure.use(
 	async ({ ctx, next }) => {
-		if (!ctx.session || !ctx.user || ctx.user.role !== "owner") {
+		if (!ctx.session || !ctx.user) {
+			throw noSessionError();
+		}
+		if (ctx.user.role !== "owner") {
 			throw new TRPCError({ code: "UNAUTHORIZED" });
 		}
 
