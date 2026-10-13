@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -197,7 +198,22 @@ async function cleanupFiles(appName: string) {
 	}
 }
 
-describe(
+// A deploy ends in a swarm service, so a running daemon alone is not enough.
+const hasSwarm = () => {
+	try {
+		return (
+			execSync("docker info --format '{{.Swarm.LocalNodeState}}'", {
+				encoding: "utf8",
+				stdio: ["ignore", "pipe", "ignore"],
+			}).trim() === "active"
+		);
+	} catch {
+		return false;
+	}
+};
+
+// CI never skips: a runner that lost Docker has to fail, not go quiet.
+describe.skipIf(!process.env.CI && !hasSwarm())(
 	"deployApplication - REAL Execution Tests",
 	() => {
 		let currentAppName: string;
