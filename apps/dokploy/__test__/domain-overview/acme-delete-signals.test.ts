@@ -49,9 +49,11 @@ const recover = (shell: string, env: Record<string, string> = {}) =>
 				backupDir,
 				pollSeconds: 0,
 				settleSeconds: 0,
-				waitSeconds: 1,
-				dockerSeconds: 2,
-				stopSeconds: 2,
+				// The script counts in whole seconds of the wall clock, so a
+				// limit of 2 can be barely one second on a busy CI runner.
+				waitSeconds: 5,
+				dockerSeconds: 5,
+				stopSeconds: 5,
 			}),
 		],
 		{ encoding: "utf8", env: baseEnv(env) },
@@ -175,8 +177,8 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 					timestamp: "20261012T101500Z",
 					pollSeconds: 0,
 					settleSeconds: 0,
-					dockerSeconds: 2,
-					stopSeconds: 2,
+					dockerSeconds: 4,
+					stopSeconds: 5,
 					...extra,
 				});
 
