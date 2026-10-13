@@ -202,6 +202,46 @@ describe("scrubSecretText", () => {
 		);
 	});
 
+	it("hides a secret of many thousand characters and its encoded forms", () => {
+		const long = "k9".repeat(10_000);
+		const longer = `${long}-tail`;
+		const matcher = buildKnownSecretMatcher([long, longer, SENTINEL]);
+		const encoded = Buffer.from(`ab${long}`).toString("base64");
+
+		expect(matcher.size).toBe(3);
+		expect(
+			scrubSecretText(`a ${long} b ${longer} c ${SENTINEL}`, matcher),
+		).toBe(`a ${R} b ${R} c ${R}`);
+		expect(
+			scrubSecretText(Buffer.from(long).toString("hex"), matcher),
+		).not.toContain("6b39");
+		expect(scrubSecretText(encoded, matcher)).not.toContain(
+			encoded.slice(100, 164),
+		);
+	});
+
+	it("hides a long secret whose encoded forms do not fit the pattern", () => {
+		const secret = "k9".repeat(1_500);
+		const matcher = buildKnownSecretMatcher([secret]);
+
+		expect(matcher.pattern).not.toBeNull();
+		expect(matcher.literals.length).toBeGreaterThan(0);
+		expect(scrubSecretText(`a ${secret} b`, matcher)).toBe(`a ${R} b`);
+		expect(
+			scrubSecretText(Buffer.from(secret).toString("hex"), matcher),
+		).not.toContain("6b39");
+	});
+
+	it("builds the same matcher from a deep call stack", () => {
+		const secret = "k9".repeat(2_000);
+		const nested = (depth: number): string =>
+			depth > 0
+				? nested(depth - 1)
+				: scrubSecretText(`a ${secret} b`, buildKnownSecretMatcher([secret]));
+
+		expect(nested(1_500)).toBe(`a ${R} b`);
+	});
+
 	it.each([
 		["DB_PASS=s3cr3tValue", `DB_PASS=${R}`],
 		["export JWT_SIGNING_KEY='abc def'", `export JWT_SIGNING_KEY=${R}`],
