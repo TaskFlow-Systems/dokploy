@@ -570,3 +570,173 @@ export const createDefaultMiddlewares = () => {
 	mkdirSync(DYNAMIC_TRAEFIK_PATH, { recursive: true });
 	writeFileSync(middlewaresPath, yamlStr, "utf8");
 };
+
+export const PROBE_SHIELD_FILE = "probe-shield.yml";
+
+// MaxInt32 - 1000: Traefik reserves the top 1000 priorities for its own routers, and
+// this is the highest value a user router may take on 32-bit builds too.
+export const PROBE_SHIELD_PRIORITY = 2147482647;
+
+// Traefik keeps %2F encoded in the path it matches and decodes %5C to a backslash,
+// but the backend may read either as a separator (/static/..%2F..%2F.env).
+// Dots are written as [.] so the rule needs no escaping in YAML or in Traefik's
+// backtick strings.
+const PROBE_SHIELD_SEPARATOR = String.raw`/|%2f|%5c|[\\]`;
+
+const PROBE_SHIELD_SECRET_NAMES = [
+	".git",
+	".aws",
+	".ssh",
+	".svn",
+	".hg",
+	".docker",
+	".kube",
+	".git-credentials",
+	".gitconfig",
+	".DS_Store",
+	".htpasswd",
+	".htaccess",
+	".npmrc",
+	".netrc",
+	".pgpass",
+	".bash_history",
+];
+
+export const PROBE_SHIELD_SECRET_REGEXP = `(?i)(${PROBE_SHIELD_SEPARATOR})([.]env|(${PROBE_SHIELD_SECRET_NAMES.map((name) => name.replaceAll(".", "[.]")).join("|")})(${PROBE_SHIELD_SEPARATOR}|$)|proc(${PROBE_SHIELD_SEPARATOR})self(${PROBE_SHIELD_SEPARATOR}))`;
+
+// User and group names never start with a dot, so a dot name is not read as an owner.
+const PROBE_SHIELD_OWNER = "/[^/.][^/]*";
+const PROBE_SHIELD_SEGMENT = "/[^/]+";
+
+// Routes of products that show or serve repository or synced files, where a dot name
+// after the prefix is a file the user asked for. Each prefix is a fixed word chain that
+// an ordinary site or a static file tree does not have, so the exemption never covers
+// /.env, /src/.env, /raw/.env or /blob/.env.
+const PROBE_SHIELD_EXEMPT_PREFIXES = [
+	// Gitea and Forgejo web UI.
+	`${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:src|raw|render|commits|blame|media|tree-list|tree-view)/(?:branch|tag|commit)/[^/]+`,
+	`${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:_edit|_new|_delete|_upload|_diffpatch|_preview)/[^/]+`,
+	`${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:lastcommit|_cherrypick)/[^/]+`,
+	// Gitea and Forgejo API.
+	`/api/v1/repos${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:contents|contents-ext|raw|media|editorconfig)`,
+	// GitLab web UI (the group path can be nested) and Web IDE.
+	`(?:${PROBE_SHIELD_OWNER})+/-/(?:blob|raw|tree|blame|edit|new|update|preview|commits)/[^/]+`,
+	"/-/ide/project",
+	// Nextcloud and ownCloud WebDAV.
+	"/(?:remote|public)[.]php/(?:dav|webdav)",
+];
+
+export const PROBE_SHIELD_EXEMPT_REGEXP = `(?i)^(?:${PROBE_SHIELD_EXEMPT_PREFIXES.join("|")})/.+$`;
+
+// GitLab's repository files API takes the whole file path as one encoded segment, so
+// it is the one exempt route where %2F is expected.
+export const PROBE_SHIELD_API_FILES_REGEXP = `(?i)^/api/v4/projects${PROBE_SHIELD_SEGMENT}/repository/files/.+$`;
+
+// Everything a backend could read as a way out of an exempt prefix. Traefik cleans plain
+// "..", keeps %2F and %3B encoded and decodes %5C; servers such as Tomcat drop ";..." from
+// a segment, so "..;/" climbs there; %25 covers a backend that decodes twice.
+const PROBE_SHIELD_CLIMB = [
+	"[.][.]",
+	";",
+	"%3b",
+	"%5c",
+	"[\\\\]",
+	"%25",
+	"%00",
+];
+export const PROBE_SHIELD_EXEMPT_UNSAFE_REGEXP = `(?i)(${["%2f", ...PROBE_SHIELD_CLIMB].join("|")})`;
+export const PROBE_SHIELD_API_FILES_UNSAFE_REGEXP = `(?i)(${PROBE_SHIELD_CLIMB.join("|")})`;
+
+export const PROBE_SHIELD_RULE = `PathRegexp(\`${PROBE_SHIELD_SECRET_REGEXP}\`) && (!PathRegexp(\`${PROBE_SHIELD_EXEMPT_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_EXEMPT_UNSAFE_REGEXP}\`)) && (!PathRegexp(\`${PROBE_SHIELD_API_FILES_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_API_FILES_UNSAFE_REGEXP}\`))`;
+
+const PROBE_SHIELD_HEADER = `# Answers requests for secret files (.env*, .git, .aws, .ssh, .docker, ...) with a 404
+# from Traefik itself, on every host, so they never reach a deployed application.
+# Dokploy creates this file only when it is missing and never rewrites it.
+#
+# These routes are let through, so the products behind them work without any edit:
+#   Gitea and Forgejo: /{owner}/{repo}/(src|raw|render|commits|blame|media|tree-list|tree-view)/(branch|tag|commit)/{ref}/...
+#     /{owner}/{repo}/(_edit|_new|_delete|_upload|_diffpatch|_preview)/{ref}/...
+#     /api/v1/repos/{owner}/{repo}/(contents|contents-ext|raw|media|editorconfig)/...
+#   GitLab: /{group}/{project}/-/(blob|raw|tree|blame|edit|new|update|preview|commits)/{ref}/...
+#     /-/ide/project/... and /api/v4/projects/{id}/repository/files/...
+#   Nextcloud and ownCloud: /remote.php/(dav|webdav)/... and /public.php/(dav|webdav)/...
+# A path with "..", ";", an encoded slash or backslash, or %25 in it is never let through
+# (the GitLab files API alone may use %2F). Git over HTTP on a bare repository
+# (/{owner}/{repo}.git/...) is not blocked at all. Git over HTTP on a repository with a
+# working tree (/project/.git/info/refs) stays blocked: with a query string, the same URL
+# is what a plain file server answers with the file.
+#
+# Turn it off: replace the whole content of this file with a comment line such as "# off".
+# Do not delete the file, it is created again the next time the panel starts.
+# Skip one host (for example S3-compatible storage, where an object key can be any path
+# such as /bucket/project/.env, or a Git service not listed above): add
+# && !Host(\`s3.example.com\`) at the end of the rule below.
+`;
+
+export const getDefaultProbeShield = () => {
+	const config = {
+		http: {
+			routers: {
+				"probe-shield": {
+					rule: PROBE_SHIELD_RULE,
+					priority: PROBE_SHIELD_PRIORITY,
+					entryPoints: ["websecure"],
+					middlewares: ["probe-shield-deny"],
+					service: "noop@internal",
+					// Explicit, so the entry point's certResolver is not applied to a
+					// router that has no Host and so no domain to request.
+					tls: {},
+				},
+			},
+			middlewares: {
+				// No client has the unspecified address, so every request is rejected
+				// with the status below and Traefik needs no backend to answer it.
+				"probe-shield-deny": {
+					ipAllowList: {
+						sourceRange: ["0.0.0.0/32"],
+						rejectStatusCode: 404,
+					},
+				},
+			},
+		},
+	};
+
+	return `${PROBE_SHIELD_HEADER}${stringify(config, { lineWidth: 0 })}`;
+};
+
+export const createDefaultProbeShield = () => {
+	const { DYNAMIC_TRAEFIK_PATH } = paths();
+	const shieldPath = path.join(DYNAMIC_TRAEFIK_PATH, PROBE_SHIELD_FILE);
+	try {
+		mkdirSync(DYNAMIC_TRAEFIK_PATH, { recursive: true });
+		writeFileSync(shieldPath, getDefaultProbeShield(), {
+			encoding: "utf8",
+			flag: "wx",
+		});
+		console.log("Default probe shield created");
+	} catch (error) {
+		if (
+			(error as NodeJS.ErrnoException).code === "EEXIST" &&
+			existsSync(shieldPath)
+		) {
+			console.log("Default probe shield already exists");
+			return;
+		}
+		console.error("Could not create the default probe shield", error);
+	}
+};
+
+export const buildProbeShieldInstallStep = (
+	dynamicPath = "/etc/dokploy/traefik/dynamic",
+) => {
+	const shieldPath = `${dynamicPath}/${PROBE_SHIELD_FILE}`;
+	return `
+	if $SUDO_CMD test -f "${shieldPath}"; then
+		echo "Probe shield config already exists ✅"
+	elif ! $SUDO_CMD tee "${shieldPath}" >/dev/null <<'DOKPLOY_PROBE_SHIELD'
+${getDefaultProbeShield()}DOKPLOY_PROBE_SHIELD
+	then
+		echo "Warning: could not create ${shieldPath}; requests for secret files are not blocked on this server." >&2
+	fi
+	`;
+};

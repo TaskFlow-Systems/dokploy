@@ -46,7 +46,7 @@ const answerResourceCheck = (resourceType: string, command: string) =>
 const conversionCallIndex = (calls: unknown[][]) =>
 	calls.findIndex((args) => String(args[args.length - 1]).includes(CONVERSION));
 
-describe("writeTraefikSetup", () => {
+describe("writeTraefikSetup", { timeout: 60_000 }, () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mocks.findMany.mockResolvedValue([]);

@@ -12,6 +12,7 @@ import {
 } from "@dokploy/server/setup/setup";
 import {
 	createDefaultMiddlewares,
+	createDefaultProbeShield,
 	createDefaultServerTraefikConfig,
 	createDefaultTraefikConfig,
 	initializeStandaloneTraefik,
@@ -22,6 +23,7 @@ import {
 	try {
 		setupDirectories();
 		createDefaultMiddlewares();
+		createDefaultProbeShield();
 		await initializeSwarm();
 		await initializeNetwork();
 		createDefaultTraefikConfig();

@@ -10,6 +10,7 @@ import {
 	updateServerById,
 } from "@dokploy/server/services/server";
 import {
+	buildProbeShieldInstallStep,
 	buildTraefikRunCommand,
 	buildTraefikTlsMigrationStep,
 	getDefaultMiddlewares,
@@ -340,6 +341,7 @@ ${createTraefikConfig()}
 
 echo -e "9. Setting up Middlewares"
 ${createDefaultMiddlewares()}
+${buildProbeShieldInstallStep()}
 
 echo -e "10. Setting up Traefik Instance"
 ${createTraefikInstance()}
