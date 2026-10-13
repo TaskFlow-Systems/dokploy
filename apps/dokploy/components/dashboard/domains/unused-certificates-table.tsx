@@ -79,7 +79,10 @@ const DeleteDialog = ({
 		try {
 			const result = await mutateAsync({
 				serverId: first.serverId,
-				domains: items.map(labelOf),
+				domains: items.map((item) => ({
+					domain: labelOf(item),
+					resolver: item.resolver,
+				})),
 			});
 			if (result.status === "refused") {
 				toast.error(
@@ -95,6 +98,8 @@ const DeleteDialog = ({
 				: "";
 			if (result.status === "failed") {
 				toast.error(`${result.message}${backup}`);
+			} else if (result.status === "started") {
+				toast.info(`${result.message}${backup}`);
 			} else {
 				toast.success(`${result.message}${backup}`);
 			}

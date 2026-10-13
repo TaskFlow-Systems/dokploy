@@ -1,11 +1,15 @@
 const MAX_REASON_LENGTH = 200;
 
-const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b/g;
-const IPV6 = /\b(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\b/gi;
 const PEM_BLOCK = /-----BEGIN [^-]+-----[\s\S]*?(?:-----END [^-]+-----|$)/g;
 const SECRET_ASSIGNMENT =
 	/\b(?:password|passwd|secret|token|api[_-]?key|authorization)\b\s*[=:]\s*\S+/gi;
 const LONG_TOKEN = /[A-Za-z0-9+/_=-]{24,}/g;
+const BRACKETED_ADDRESS = /\[[0-9a-f:.]*:[0-9a-f:.]*\](?::\d+)?/gi;
+const IPV6 =
+	/(?<![\w:])[0-9a-f]*(?::[0-9a-f]*){2,}(?:\.\d{1,3}){0,3}(?:%[\w.-]+)?(?![\w])/gi;
+const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b(?::\d+)?/g;
+const CONNECTION_TARGET =
+	/\b(ENOTFOUND|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ECONNRESET|EAI_AGAIN|EPIPE)\b(\s+)(?!\[)[^\s,;]+/g;
 
 export const sanitizeFailureText = (text: string) => {
 	const firstLine =
@@ -16,8 +20,10 @@ export const sanitizeFailureText = (text: string) => {
 			.find((line) => line.length > 0) ?? "";
 	const cleaned = firstLine
 		.replace(SECRET_ASSIGNMENT, "[removed]")
-		.replace(IPV4, "[address]")
+		.replace(BRACKETED_ADDRESS, "[address]")
+		.replace(CONNECTION_TARGET, "$1$2[host]")
 		.replace(IPV6, "[address]")
+		.replace(IPV4, "[address]")
 		.replace(LONG_TOKEN, "[removed]");
 	return cleaned.length > MAX_REASON_LENGTH
 		? `${cleaned.slice(0, MAX_REASON_LENGTH)}...`

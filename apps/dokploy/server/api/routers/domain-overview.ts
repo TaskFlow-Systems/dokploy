@@ -37,46 +37,65 @@ export const domainOverviewRouter = createTRPCRouter({
 		.input(
 			z.object({
 				serverId: z.string().min(1).nullable(),
-				domains: z.array(z.string().min(1).max(253)).min(1).max(50),
+				domains: z
+					.array(
+						z.union([
+							z.string().min(1).max(253),
+							z.object({
+								domain: z.string().min(1).max(253),
+								resolver: z.string().min(1).max(64).optional(),
+							}),
+						]),
+					)
+					.min(1)
+					.max(50),
 			}),
 		)
 		.mutation(async ({ ctx, input }) => {
-			await checkPermission(ctx, { traefikFiles: ["read"] });
+			await checkPermission(ctx, { traefikFiles: ["write"] });
 			await assertTraefikFilesHostAccess(ctx, input.serverId ?? undefined);
 			await assertProtectedResourceAccess(ctx);
 
-			const record = (result: string, backupFile: string | null) => {
+			const names = input.domains.map((item) =>
+				typeof item === "string" ? item : item.domain,
+			);
+			const record = async (result: string, backupFile: string | null) => {
 				console.info(
 					`[domain-overview] certificate deletion by ${ctx.user.id} on ${input.serverId ?? "local"}: ${result}`,
 				);
-				return audit(ctx, {
-					action: "delete",
-					resourceType: "certificate",
-					resourceId: input.serverId ?? "local",
-					resourceName: input.domains.join(", ").slice(0, 500),
-					metadata: {
-						serverId: input.serverId,
-						domains: input.domains,
-						result,
-						backupFile,
-					},
-				});
+				try {
+					await audit(ctx, {
+						action: "delete",
+						resourceType: "certificate",
+						resourceId: input.serverId ?? "local",
+						resourceName: names.join(", ").slice(0, 500),
+						metadata: {
+							serverId: input.serverId,
+							domains: names,
+							result,
+							backupFile,
+						},
+					});
+				} catch (error) {
+					console.error("[domain-overview] audit entry failed:", error);
+				}
 			};
 
+			let result: Awaited<ReturnType<typeof deleteUnusedCertificates>>;
 			try {
-				const result = await deleteUnusedCertificates(
+				result = await deleteUnusedCertificates(
 					ctx.session.activeOrganizationId,
 					input.serverId,
 					input.domains,
 				);
-				await record(
-					result.status === "refused" ? "refused" : result.status,
-					result.status === "refused" ? null : result.backupFile,
-				);
-				return result;
 			} catch (error) {
 				await record("error", null);
 				throw error;
 			}
+			await record(
+				result.status,
+				result.status === "refused" ? null : result.backupFile,
+			);
+			return result;
 		}),
 });

@@ -251,6 +251,12 @@ export const ShowDomainOverview = () => {
 	const { data, error, isLoading, isFetching, refetch } =
 		api.domainOverview.list.useQuery(undefined, {
 			refetchOnWindowFocus: false,
+			refetchInterval: (query) =>
+				query.state.data?.servers.some(
+					(item) => item.lastDeletion?.state === "in_progress",
+				)
+					? 5_000
+					: false,
 		});
 
 	return (
@@ -318,6 +324,32 @@ export const ShowDomainOverview = () => {
 							items={data.unusedCertificates}
 							certificatesVisible={data.certificatesVisible}
 						/>
+					)}
+					{data?.servers.map((item) =>
+						item.lastDeletion ? (
+							<AlertBlock
+								key={`deletion-${item.serverId ?? "local"}`}
+								type={
+									item.lastDeletion.state === "succeeded"
+										? "success"
+										: item.lastDeletion.state === "in_progress"
+											? "info"
+											: "error"
+								}
+							>
+								{item.name}: certificate deletion{" "}
+								{item.lastDeletion.state === "in_progress"
+									? "restart in progress"
+									: item.lastDeletion.state}
+								{item.lastDeletion.time
+									? ` (${formatTime(item.lastDeletion.time)})`
+									: ""}
+								. {item.lastDeletion.message}
+								{item.lastDeletion.backupFile
+									? ` Backup file: ${item.lastDeletion.backupFile}.`
+									: ""}
+							</AlertBlock>
+						) : null,
 					)}
 					{data?.servers
 						.filter((item) => !item.usageVerified)

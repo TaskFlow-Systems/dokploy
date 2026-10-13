@@ -9,7 +9,12 @@ import {
 	server,
 } from "@dokploy/server/db/schema";
 import { getAllDomainsForOrganization } from "@dokploy/server/services/overview";
-import { isHostStackUpdateRunning } from "@dokploy/server/setup/host-stack-lock";
+import { isServerUpdateRunning } from "@dokploy/server/services/web-server-update";
+import { acquireHostStackUpdateLock } from "@dokploy/server/setup/host-stack-lock";
+import {
+	acquireTraefikOperation,
+	runningTraefikOperation,
+} from "@dokploy/server/setup/traefik-operation-lock";
 import {
 	ACME_FILE_MISSING_EXIT_CODE,
 	ACME_FILE_NAME,
@@ -26,13 +31,21 @@ import {
 	shellQuote,
 } from "@dokploy/server/utils/domain-overview/acme";
 import {
+	ACME_DELETE_LOCK_NAME,
 	ACME_DELETE_MAX_DOMAINS,
 	ACME_DELETE_MESSAGES,
 	type AcmeDeleteStatus,
 	buildAcmeDeleteScript,
+	buildDeletionLauncher,
+	buildDeletionStatusCommand,
+	type DeletionState,
+	type DeletionStatusFile,
+	deletionState,
+	deletionTime,
 	formatBackupTimestamp,
 	isValidCertificateDomain,
-	parseAcmeDeleteOutput,
+	isValidResolverName,
+	parseDeletionStatus,
 } from "@dokploy/server/utils/domain-overview/acme-delete";
 import {
 	type DnsRecords,
@@ -42,6 +55,7 @@ import {
 	resolvedAddresses,
 } from "@dokploy/server/utils/domain-overview/dns-status";
 import { buildFailureReason } from "@dokploy/server/utils/domain-overview/failure-reason";
+import { namesMatchPatterns } from "@dokploy/server/utils/domain-overview/host-patterns";
 import {
 	classifyTraefikError,
 	type TraefikErrorCause,
@@ -62,9 +76,9 @@ import {
 	buildDynamicHostsCommand,
 	buildTraefikRoutesCommand,
 	DYNAMIC_CONFIG_DIR_MISSING_EXIT_CODE,
-	type DynamicConfigHost,
-	parseDynamicHosts,
-	parseTraefikRoutes,
+	type DynamicConfigUses,
+	parseDynamicConfigUses,
+	parseTraefikUses,
 	type TraefikRoute,
 } from "@dokploy/server/utils/domain-overview/traefik-routes";
 import {
@@ -82,12 +96,25 @@ import { and, eq } from "drizzle-orm";
 
 const LOCAL_KEY = "local";
 const LOCAL_NAME = "Dokploy server";
-const ACME_RESOLVER_NAME = "letsencrypt";
 const SERVER_COMMAND_TIMEOUT_MS = 15_000;
-const DELETE_PREPARE_TIMEOUT_MS = 60_000;
-const DELETE_REMOTE_TIMEOUT_MS = 240_000;
-const LOCAL_APPLY_START_DELAY_SECONDS = 3;
+const LAUNCH_TIMEOUT_MS = 30_000;
 const LOG_LINE_MAX_LENGTH = 2000;
+const LOCAL_APPLY_START_DELAY_SECONDS = 3;
+
+export const deletionTiming = {
+	pollIntervalMs: 3_000,
+	remoteWaitMs: 150_000,
+	localWaitMs: 15_000,
+	watchMaxMs: 15 * 60_000,
+};
+
+export type DeletionStatusView = {
+	state: DeletionState;
+	code: AcmeDeleteStatus | null;
+	time: string | null;
+	backupFile: string | null;
+	message: string;
+};
 
 export type DomainOverviewServer = {
 	serverId: string | null;
@@ -95,6 +122,7 @@ export type DomainOverviewServer = {
 	addresses: string[];
 	isLocal: boolean;
 	usageVerified: boolean;
+	lastDeletion: DeletionStatusView | null;
 };
 
 type ServerTarget = {
@@ -214,11 +242,15 @@ type Workload = ServiceOwner & {
 type ServerReads = {
 	target: ServerTarget;
 	routes: TraefikRoute[];
-	dynamicHosts: DynamicConfigHost[];
+	dynamic: DynamicConfigUses | null;
+	mentions: string[];
+	patterns: string[];
 	certificates: AcmeCertificate[];
 	logLines: string[];
 	logAvailable: boolean;
 	usageVerified: boolean;
+	deletion: DeletionStatusFile | null;
+	deletionRunning: boolean;
 	errors: string[];
 };
 
@@ -244,6 +276,9 @@ const truncate = (value: string) =>
 	value.length > LOG_LINE_MAX_LENGTH
 		? `${value.slice(0, LOG_LINE_MAX_LENGTH)}...`
 		: value;
+
+const sleep = (ms: number) =>
+	new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const readPanelSettings = async (): Promise<PanelSettings> => {
 	const settings = await db.query.webServerSettings.findFirst({
@@ -371,24 +406,41 @@ const loadWorkloads = async (orgId: string): Promise<Workload[]> => {
 
 // Every remote command opens its own SSH connection. Firewalls that rate
 // limit new SSH connections drop bursts, so the commands for one server run
-// one after the other.
+// one after the other. A caller that stops waiting must not leave its command
+// behind in the queue.
 const serverQueues = new Map<string, Promise<unknown>>();
 
 const enqueueForServer = <T>(
 	key: string,
+	waitMs: number,
 	task: () => Promise<T>,
-): Promise<T> => {
-	const previous = serverQueues.get(key) ?? Promise.resolve();
-	const next = previous.then(task, task);
-	const tail = next.catch(() => undefined);
-	serverQueues.set(key, tail);
-	void tail.then(() => {
-		if (serverQueues.get(key) === tail) {
-			serverQueues.delete(key);
-		}
+): Promise<T> =>
+	new Promise<T>((resolve, reject) => {
+		let abandoned = false;
+		const timer = setTimeout(() => {
+			abandoned = true;
+			reject(new OperationTimeoutError(waitMs));
+		}, waitMs);
+		const run = async () => {
+			if (abandoned) {
+				return;
+			}
+			clearTimeout(timer);
+			try {
+				resolve(await task());
+			} catch (error) {
+				reject(error);
+			}
+		};
+		const previous = serverQueues.get(key) ?? Promise.resolve();
+		const tail = previous.then(run, run);
+		serverQueues.set(key, tail);
+		void tail.then(() => {
+			if (serverQueues.get(key) === tail) {
+				serverQueues.delete(key);
+			}
+		});
 	});
-	return next;
-};
 
 const runOnServer = (
 	target: ServerTarget,
@@ -397,7 +449,7 @@ const runOnServer = (
 ) =>
 	target.isLocal
 		? withTimeout(execAsync(command, { timeoutMs }), timeoutMs + 2_000)
-		: enqueueForServer(target.key, () =>
+		: enqueueForServer(target.key, timeoutMs * 2, () =>
 				withTimeout(
 					execAsyncRemote(target.serverId, command, undefined, { timeoutMs }),
 					timeoutMs + 2_000,
@@ -463,30 +515,38 @@ const readStage = async <T>(
 	}
 };
 
-const readRoutes = async (target: ServerTarget) => {
-	const { stdout } = await runOnServer(target, buildTraefikRoutesCommand());
-	return parseTraefikRoutes(stdout);
-};
-
 const dynamicPathFor = (target: ServerTarget) =>
 	paths(!target.isLocal).DYNAMIC_TRAEFIK_PATH;
 
 const acmeFileFor = (target: ServerTarget) =>
 	`${dynamicPathFor(target)}/${ACME_FILE_NAME}`;
 
-const readDynamicHosts = async (target: ServerTarget) => {
+const staticConfigFor = (target: ServerTarget) =>
+	`${paths(!target.isLocal).MAIN_TRAEFIK_PATH}/traefik.yml`;
+
+const lockDirFor = (target: ServerTarget) =>
+	`${paths(!target.isLocal).BASE_PATH}/${ACME_DELETE_LOCK_NAME}`;
+
+const logDirFor = (target: ServerTarget) => paths(!target.isLocal).LOGS_PATH;
+
+const readRoutes = async (target: ServerTarget) => {
+	const { stdout } = await runOnServer(target, buildTraefikRoutesCommand());
+	return parseTraefikUses(stdout);
+};
+
+const readDynamicUses = async (target: ServerTarget) => {
 	try {
 		const { stdout } = await runOnServer(
 			target,
-			buildDynamicHostsCommand(dynamicPathFor(target)),
+			buildDynamicHostsCommand(dynamicPathFor(target), staticConfigFor(target)),
 		);
-		return parseDynamicHosts(stdout);
+		return parseDynamicConfigUses(stdout);
 	} catch (error) {
 		if (
 			error instanceof ExecError &&
 			error.exitCode === DYNAMIC_CONFIG_DIR_MISSING_EXIT_CODE
 		) {
-			return [];
+			return { hosts: [], mentions: [], patterns: [], unreadable: false };
 		}
 		throw error;
 	}
@@ -508,6 +568,14 @@ const readCertificates = async (target: ServerTarget) => {
 		}
 		throw error;
 	}
+};
+
+const readDeletionStatus = async (target: ServerTarget) => {
+	const { stdout } = await runOnServer(
+		target,
+		buildDeletionStatusCommand(logDirFor(target), lockDirFor(target)),
+	);
+	return parseDeletionStatus(stdout);
 };
 
 type LogRead =
@@ -537,9 +605,13 @@ const readLogs = async (target: ServerTarget): Promise<LogRead> => {
 	}
 };
 
+const DELETION_RUNNING_MESSAGE =
+	"A certificate deletion is running on this server, so it is not read now.";
+
 const readServer = async (
 	target: ServerTarget,
 	includeCertificates: boolean,
+	ownOperation: boolean,
 ): Promise<ServerReads> => {
 	const errors: string[] = [];
 	let usageVerified = true;
@@ -568,18 +640,53 @@ const readServer = async (
 		return result.value;
 	};
 
-	const routes = await stage(
+	const empty = {
+		target,
+		routes: [] as TraefikRoute[],
+		dynamic: null,
+		mentions: [] as string[],
+		patterns: [] as string[],
+		certificates: [] as AcmeCertificate[],
+		logLines: [] as string[],
+		logAvailable: false,
+	};
+
+	const inMemory =
+		!ownOperation && runningTraefikOperation(target.serverId) !== null;
+	const deletion = await stage<DeletionStatusFile | null>(
+		"Deletion status",
+		null,
+		() => readDeletionStatus(target),
+		false,
+	);
+	if (inMemory || deletion?.busy) {
+		return {
+			...empty,
+			usageVerified: false,
+			deletion,
+			deletionRunning: true,
+			errors: [...errors, DELETION_RUNNING_MESSAGE],
+		};
+	}
+
+	const uses = await stage(
 		"Routes",
-		[] as TraefikRoute[],
+		{ routes: [], mentions: [], patterns: [] } as ReturnType<
+			typeof parseTraefikUses
+		>,
 		() => readRoutes(target),
 		true,
 	);
-	const dynamicHosts = await stage(
+	const dynamic = await stage<DynamicConfigUses | null>(
 		"Dynamic config",
-		[] as DynamicConfigHost[],
-		() => readDynamicHosts(target),
+		null,
+		() => readDynamicUses(target),
 		true,
 	);
+	if (dynamic?.unreadable) {
+		usageVerified = false;
+		errors.push("Dynamic config: a Traefik config file could not be read");
+	}
 	const certificates = includeCertificates
 		? await stage(
 				"Certificates",
@@ -600,12 +707,16 @@ const readServer = async (
 
 	return {
 		target,
-		routes,
-		dynamicHosts,
+		routes: uses.routes,
+		dynamic,
+		mentions: [...uses.mentions, ...(dynamic?.mentions ?? [])],
+		patterns: [...uses.patterns, ...(dynamic?.patterns ?? [])],
 		certificates,
 		logLines: logs.status === "ok" ? selectAcmeLogLines(logs.output) : [],
 		logAvailable: logs.status === "ok",
 		usageVerified,
+		deletion,
+		deletionRunning: false,
 		errors,
 	};
 };
@@ -623,14 +734,30 @@ type Analysis = {
 	targets: ServerTarget[];
 };
 
+const errorsByEntry = new WeakMap<AcmeCertificate, DomainErrorView>();
+
+const certificateInUse = (
+	certificate: AcmeCertificate,
+	snapshot: ServerReads,
+	usedDomains: readonly string[],
+) =>
+	usedDomains.some((domain) => certificateCovers(certificate.names, domain)) ||
+	snapshot.mentions.some((name) =>
+		certificateCovers(certificate.names, name),
+	) ||
+	namesMatchPatterns(certificate.names, snapshot.patterns);
+
 const analyzeServers = async (
 	orgId: string,
 	serverTargets: ServerTarget[],
 	settings: PanelSettings,
 	includeCertificates: boolean,
+	ownOperation = false,
 ): Promise<Analysis> => {
 	const snapshotsPromise = Promise.all(
-		serverTargets.map((target) => readServer(target, includeCertificates)),
+		serverTargets.map((target) =>
+			readServer(target, includeCertificates, ownOperation),
+		),
 	);
 	const [workloads, domainRecords] = await Promise.all([
 		loadWorkloads(orgId),
@@ -721,7 +848,7 @@ const analyzeServers = async (
 				owner,
 			});
 		}
-		for (const { host, file } of snapshot.dynamicHosts) {
+		for (const { host, file } of snapshot.dynamic?.hosts ?? []) {
 			const row = rowFor(snapshot.target, host);
 			if (!row.configFiles.includes(file)) {
 				row.configFiles.push(file);
@@ -735,10 +862,7 @@ const analyzeServers = async (
 		);
 		const used = own.map((row) => row.domain);
 		const unused = snapshot.certificates
-			.filter(
-				(certificate) =>
-					!used.some((domain) => certificateCovers(certificate.names, domain)),
-			)
+			.filter((certificate) => !certificateInUse(certificate, snapshot, used))
 			.map((certificate) => ({ target: snapshot.target, certificate }));
 		return { snapshot, rows: own, unused };
 	});
@@ -779,14 +903,42 @@ const analyzeServers = async (
 	return { servers: result, targets: serverTargets };
 };
 
-const errorsByEntry = new WeakMap<AcmeCertificate, DomainErrorView>();
-
 const byProblemThenName =
 	<T>(daysLeft: (item: T) => number | null, name: (item: T) => string) =>
 	(a: T, b: T) =>
 		(daysLeft(a) ?? Number.POSITIVE_INFINITY) -
 			(daysLeft(b) ?? Number.POSITIVE_INFINITY) ||
 		name(a).localeCompare(name(b));
+
+const toDeletionView = (snapshot: ServerReads): DeletionStatusView | null => {
+	const parsed = snapshot.deletion;
+	const state =
+		parsed && deletionState(parsed)
+			? deletionState(parsed)
+			: snapshot.deletionRunning
+				? "in_progress"
+				: null;
+	if (!state) {
+		return null;
+	}
+	const code = parsed?.status ?? null;
+	return {
+		state,
+		code,
+		time: parsed?.logFile ? deletionTime(parsed.logFile) : null,
+		backupFile: parsed?.backupFile ?? null,
+		message:
+			state === "in_progress"
+				? "A certificate deletion is running. Traefik restarts during it."
+				: state === "interrupted"
+					? ACME_DELETE_MESSAGES.interrupted
+					: code
+						? ACME_DELETE_MESSAGES[code]
+						: "",
+	};
+};
+
+const inflightOverviews = new Map<string, Promise<DomainOverview>>();
 
 export const getDomainOverview = async (
 	orgId: string,
@@ -798,6 +950,28 @@ export const getDomainOverview = async (
 		allTargets.map((target) => access.canReadHost(target.serverId)),
 	);
 	const targets = allTargets.filter((_, index) => readable[index]);
+	// Repeated refetches of the same view share one run instead of queueing
+	// more commands behind each other on the same servers.
+	const flightKey = `${orgId}|${access.canReadCertificates}|${targets
+		.map((target) => target.key)
+		.join(",")}`;
+	const running = inflightOverviews.get(flightKey);
+	if (running) {
+		return running;
+	}
+	const run = buildOverview(orgId, access, targets, settings).finally(() => {
+		inflightOverviews.delete(flightKey);
+	});
+	inflightOverviews.set(flightKey, run);
+	return run;
+};
+
+const buildOverview = async (
+	orgId: string,
+	access: DomainOverviewAccess,
+	targets: ServerTarget[],
+	settings: PanelSettings,
+): Promise<DomainOverview> => {
 	const analysis = await analyzeServers(
 		orgId,
 		targets,
@@ -872,14 +1046,14 @@ export const getDomainOverview = async (
 			const { certificate, target } = entry;
 			const name = certificate.main ?? certificate.names[0] ?? "";
 			unusedCertificates.push({
-				key: `${target.key}|${name}|${certificate.validTo.getTime()}`,
+				key: `${target.key}|${certificate.resolver}|${name}|${certificate.validTo.getTime()}`,
 				main: certificate.main,
 				names: certificate.names,
 				serverId: target.serverId,
 				serverName: target.name,
 				isLocal: target.isLocal,
 				storagePath: acmeFileFor(target),
-				resolver: ACME_RESOLVER_NAME,
+				resolver: certificate.resolver,
 				dns: dnsFor(name, target),
 				certificate: toCertificateView(certificate),
 				lastError: errorsByEntry.get(certificate) ?? null,
@@ -911,6 +1085,7 @@ export const getDomainOverview = async (
 			addresses: snapshot.target.addresses,
 			isLocal: snapshot.target.isLocal,
 			usageVerified: snapshot.usageVerified,
+			lastDeletion: toDeletionView(snapshot),
 		})),
 		serverErrors: analysis.servers.flatMap(({ snapshot }) =>
 			snapshot.errors.map((message) => ({
@@ -969,6 +1144,14 @@ export const getTraefikLogs = async (
 		serverName: target.name,
 		checkedAt: new Date().toISOString(),
 	};
+	if (runningTraefikOperation(target.serverId)) {
+		return {
+			...base,
+			containerFound: true,
+			error: DELETION_RUNNING_MESSAGE,
+			lines: [],
+		};
+	}
 	try {
 		const logs = await readLogs(target);
 		if (logs.status === "missing") {
@@ -1011,14 +1194,17 @@ export type CertificateRefusalReason =
 const REFUSAL_MESSAGES: Record<CertificateRefusalReason, string> = {
 	invalid_name: "This is not a valid domain name.",
 	usage_unverified:
-		"The routes or the certificate file of this server could not be read, so it cannot be checked that the certificate is unused.",
+		"The routes, config files or certificate file of this server could not be read, so it cannot be checked that the certificate is unused.",
 	not_in_storage: "There is no certificate for this domain in the storage.",
-	in_use: "A route, a panel domain or a Traefik config file still uses it.",
+	in_use:
+		"A route, a panel domain, a Traefik config file or a matcher still uses it.",
 	panel_host: "This is the panel's own domain. It is never deleted here.",
 	no_main_domain:
 		"This certificate has no main domain, so it cannot be removed.",
 	ambiguous: "More than one certificate has this main domain.",
 };
+
+export type CertificateRequest = { domain: string; resolver?: string };
 
 export type DeleteUnusedCertificatesResult =
 	| {
@@ -1030,14 +1216,12 @@ export type DeleteUnusedCertificatesResult =
 			}[];
 	  }
 	| {
-			status: "deleted" | "restarting" | "failed";
-			code: AcmeDeleteStatus | "no_result" | "timeout";
+			status: "deleted" | "started" | "failed";
+			code: AcmeDeleteStatus | "no_result";
 			message: string;
 			backupFile: string | null;
 			logFile: string | null;
 	  };
-
-const deletionLocks = new Set<string>();
 
 const refusal = (domain: string, reason: CertificateRefusalReason) => ({
 	domain,
@@ -1051,8 +1235,9 @@ const stdoutOf = (error: unknown) =>
 	error instanceof ExecError ? (error.stdout ?? "") : "";
 
 const failedResult = (
-	code: AcmeDeleteStatus | "no_result" | "timeout",
+	code: AcmeDeleteStatus | "no_result",
 	backupFile: string | null,
+	logFile: string | null,
 	detail?: string,
 ): DeleteUnusedCertificatesResult => ({
 	status: "failed",
@@ -1060,211 +1245,262 @@ const failedResult = (
 	message:
 		code === "no_result"
 			? `The command did not report a result${detail ? ` (${detail})` : ""}. Check the server before trying again.`
-			: code === "timeout"
-				? "The server did not finish in time. Check that Traefik is running and look for the backup file before trying again."
-				: ACME_DELETE_MESSAGES[code],
+			: ACME_DELETE_MESSAGES[code],
 	backupFile,
-	logFile: null,
+	logFile,
 });
+
+const normalizeRequests = (requested: (string | CertificateRequest)[]) => {
+	const seen = new Set<string>();
+	const items: CertificateRequest[] = [];
+	for (const entry of requested) {
+		const request = typeof entry === "string" ? { domain: entry } : entry;
+		const domain = normalizeDomainName(request.domain);
+		const key = `${request.resolver ?? ""}|${domain}`;
+		if (!seen.has(key)) {
+			seen.add(key);
+			items.push({ domain, resolver: request.resolver });
+		}
+	}
+	return items;
+};
 
 export const deleteUnusedCertificates = async (
 	orgId: string,
 	serverId: string | null,
-	requested: string[],
+	requested: (string | CertificateRequest)[],
 ): Promise<DeleteUnusedCertificatesResult> => {
-	const domains = [...new Set(requested.map(normalizeDomainName))];
-	if (domains.length === 0 || domains.length > ACME_DELETE_MAX_DOMAINS) {
+	const items = normalizeRequests(requested);
+	if (items.length === 0 || items.length > ACME_DELETE_MAX_DOMAINS) {
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: `Choose between 1 and ${ACME_DELETE_MAX_DOMAINS} certificates.`,
 		});
 	}
-	const invalid = domains.filter((domain) => !isValidCertificateDomain(domain));
+	const invalid = items.filter(
+		(item) =>
+			!isValidCertificateDomain(item.domain) ||
+			(item.resolver !== undefined && !isValidResolverName(item.resolver)),
+	);
 	if (invalid.length > 0) {
 		return {
 			status: "refused",
-			refused: invalid.map((domain) => refusal(domain, "invalid_name")),
+			refused: invalid.map((item) => refusal(item.domain, "invalid_name")),
 		};
 	}
 
 	const target = await resolveTarget(orgId, serverId);
-	if (target.isLocal && isHostStackUpdateRunning()) {
+	if (target.isLocal && isServerUpdateRunning()) {
 		throw new TRPCError({
 			code: "CONFLICT",
 			message:
 				"An update of this panel host is running. Try again when it ends.",
 		});
 	}
-	if (deletionLocks.has(target.key)) {
+	const releaseOperation = acquireTraefikOperation(
+		target.serverId,
+		"certificate deletion",
+	);
+	if (!releaseOperation) {
 		throw new TRPCError({
 			code: "CONFLICT",
-			message: "Another certificate deletion is running on this server.",
+			message: `Traefik is busy on this server (${runningTraefikOperation(target.serverId)}). Try again when it ends.`,
 		});
 	}
-	deletionLocks.add(target.key);
+	const releaseHostStack = target.isLocal ? acquireHostStackUpdateLock() : null;
+	if (target.isLocal && !releaseHostStack) {
+		releaseOperation();
+		throw new TRPCError({
+			code: "CONFLICT",
+			message:
+				"An update of this panel host is running. Try again when it ends.",
+		});
+	}
+	let released = false;
+	const release = () => {
+		if (!released) {
+			released = true;
+			releaseHostStack?.();
+			releaseOperation();
+		}
+	};
+	let handedOver = false;
 	try {
-		return await runDeletion(orgId, target, domains);
+		const result = await runDeletion(orgId, target, items, release);
+		handedOver = result.status === "started";
+		return result;
 	} finally {
-		deletionLocks.delete(target.key);
+		if (!handedOver) {
+			release();
+		}
 	}
 };
 
 const runDeletion = async (
 	orgId: string,
 	target: ServerTarget,
-	domains: string[],
+	items: CertificateRequest[],
+	release: () => void,
 ): Promise<DeleteUnusedCertificatesResult> => {
 	const settings = await readPanelSettings();
-	const analysis = await analyzeServers(orgId, [target], settings, true);
+	const analysis = await analyzeServers(orgId, [target], settings, true, true);
 	const server = analysis.servers[0];
 	if (!server?.snapshot.usageVerified) {
 		return {
 			status: "refused",
-			refused: domains.map((domain) => refusal(domain, "usage_unverified")),
+			refused: items.map((item) => refusal(item.domain, "usage_unverified")),
 		};
 	}
 
 	const { certificates } = server.snapshot;
 	const refused: ReturnType<typeof refusal>[] = [];
-	for (const domain of domains) {
+	const chosen: AcmeCertificate[] = [];
+	for (const item of items) {
 		const matching = certificates.filter(
-			(certificate) => certificate.main === domain,
+			(certificate) =>
+				certificate.main === item.domain &&
+				(item.resolver === undefined || certificate.resolver === item.resolver),
 		);
 		if (matching.length === 0) {
 			refused.push(
 				refusal(
-					domain,
-					certificates.some((certificate) => certificate.names.includes(domain))
+					item.domain,
+					certificates.some((certificate) =>
+						certificate.names.includes(item.domain),
+					)
 						? "no_main_domain"
 						: "not_in_storage",
 				),
 			);
 			continue;
 		}
-		if (matching.length > 1) {
-			refused.push(refusal(domain, "ambiguous"));
+		const certificate = matching[0];
+		if (matching.length > 1 || !certificate) {
+			refused.push(refusal(item.domain, "ambiguous"));
 			continue;
 		}
-		const certificate = matching[0];
 		if (
 			target.isLocal &&
 			settings.host &&
-			certificateCovers(certificate?.names ?? [], settings.host)
+			certificateCovers(certificate.names, settings.host)
 		) {
-			refused.push(refusal(domain, "panel_host"));
+			refused.push(refusal(item.domain, "panel_host"));
 			continue;
 		}
-		const stillUnused = server.unused.some(
-			(entry) => entry.certificate === certificate,
-		);
-		if (!stillUnused) {
-			refused.push(refusal(domain, "in_use"));
+		if (!server.unused.some((entry) => entry.certificate === certificate)) {
+			refused.push(refusal(item.domain, "in_use"));
+			continue;
 		}
+		chosen.push(certificate);
 	}
 	if (refused.length > 0) {
 		return { status: "refused", refused };
 	}
 
 	const timestamp = formatBackupTimestamp(new Date());
-	const acmeFile = acmeFileFor(target);
-	const script = (phase: "all" | "prepare" | "apply", delay = 0) =>
-		buildAcmeDeleteScript({
-			acmeFile,
-			domains,
-			timestamp,
-			phase,
-			startDelaySeconds: delay,
-		});
+	const script = buildAcmeDeleteScript({
+		acmeFile: acmeFileFor(target),
+		lockDir: lockDirFor(target),
+		targets: chosen.map((certificate) => ({
+			resolver: certificate.resolver,
+			domain: certificate.main ?? "",
+		})),
+		timestamp,
+		startDelaySeconds: target.isLocal ? LOCAL_APPLY_START_DELAY_SECONDS : 0,
+	});
+	const launcher = buildDeletionLauncher({
+		script,
+		logDir: logDirFor(target),
+		timestamp,
+	});
 
-	if (!target.isLocal) {
-		try {
-			const { stdout } = await runOnServer(
-				target,
-				wrapScript(script("all")),
-				DELETE_REMOTE_TIMEOUT_MS,
-			);
-			return finishRemote(stdout);
-		} catch (error) {
-			if (isTimeout(error)) {
-				return failedResult("timeout", null);
-			}
-			const outcome = parseAcmeDeleteOutput(stdoutOf(error));
-			if (outcome.status) {
-				return finishRemote(stdoutOf(error));
-			}
-			return failedResult(
-				"no_result",
-				outcome.backupFile,
-				describeFailure(error, target),
-			);
-		}
-	}
-
+	let launched = false;
 	try {
 		const { stdout } = await runOnServer(
 			target,
-			wrapScript(script("prepare")),
-			DELETE_PREPARE_TIMEOUT_MS,
+			wrapScript(launcher),
+			LAUNCH_TIMEOUT_MS,
 		);
-		const outcome = parseAcmeDeleteOutput(stdout);
-		if (outcome.status !== "prepared") {
-			return failedResult("no_result", outcome.backupFile);
+		launched = /^DOKPLOY_LAUNCHED /m.test(stdout);
+		if (!launched) {
+			return failedResult("launch_failed", null, null);
 		}
-		return await startLocalApply(
-			wrapScript(script("apply", LOCAL_APPLY_START_DELAY_SECONDS)),
-			timestamp,
-			outcome.backupFile,
-		);
 	} catch (error) {
-		if (isTimeout(error)) {
-			return failedResult("timeout", null);
-		}
-		const outcome = parseAcmeDeleteOutput(stdoutOf(error));
-		if (outcome.status && outcome.status !== "ok") {
-			return failedResult(outcome.status, outcome.backupFile);
-		}
+		const status = parseDeletionStatus(stdoutOf(error)).status;
 		return failedResult(
-			"no_result",
-			outcome.backupFile,
+			status ?? "no_result",
+			null,
+			null,
 			describeFailure(error, target),
 		);
 	}
-};
 
-const finishRemote = (stdout: string): DeleteUnusedCertificatesResult => {
-	const outcome = parseAcmeDeleteOutput(stdout);
-	if (outcome.status === "ok") {
+	const logFile = `acme-delete-${timestamp}.log`;
+	const outcome = await waitForOutcome(target, target.isLocal);
+	if (outcome?.status === "ok") {
 		return {
 			status: "deleted",
 			code: "ok",
 			message: ACME_DELETE_MESSAGES.ok,
 			backupFile: outcome.backupFile,
-			logFile: null,
+			logFile,
 		};
 	}
-	return failedResult(outcome.status ?? "no_result", outcome.backupFile);
-};
-
-// The panel is normally served through the Traefik that is about to stop, so
-// the request that asked for the deletion would be cut mid-answer. The stop,
-// move and start run detached after a short delay and write their result to a
-// log file on the panel host.
-const startLocalApply = async (
-	command: string,
-	timestamp: string,
-	backupFile: string | null,
-): Promise<DeleteUnusedCertificatesResult> => {
-	const logFile = `${paths().LOGS_PATH}/acme-delete-${timestamp}.log`;
-	await execAsync(
-		`mkdir -p ${shellQuote(paths().LOGS_PATH)} && nohup ${command} > ${shellQuote(logFile)} 2>&1 < /dev/null &`,
-		{ timeoutMs: 10_000 },
-	);
+	if (outcome?.status) {
+		return failedResult(outcome.status, outcome.backupFile, logFile);
+	}
+	void watchDeletion(target, release);
 	return {
-		status: "restarting",
+		status: "started",
 		code: "ok",
 		message:
-			"The certificate file was edited and Traefik restarts in a few seconds. The panel may be unreachable for a moment. The result is written to the log file.",
-		backupFile,
+			"The deletion started. Traefik restarts during it and the sites on this server are unavailable for a few seconds. The result appears on this page.",
+		backupFile: outcome?.backupFile ?? null,
 		logFile,
 	};
+};
+
+// On the panel host only the checks before the stop are awaited: the panel is
+// normally reached through the Traefik that is about to stop.
+const waitForOutcome = async (target: ServerTarget, untilPrecheck: boolean) => {
+	const deadline =
+		Date.now() +
+		(untilPrecheck ? deletionTiming.localWaitMs : deletionTiming.remoteWaitMs);
+	let last: DeletionStatusFile | null = null;
+	while (Date.now() < deadline) {
+		try {
+			last = await readDeletionStatus(target);
+		} catch {
+			last = null;
+		}
+		if (last?.status) {
+			return last;
+		}
+		if (untilPrecheck && last?.prechecked) {
+			return last;
+		}
+		await sleep(deletionTiming.pollIntervalMs);
+	}
+	return last;
+};
+
+// The host-side lock is what keeps other deletions out; this keeps the
+// in-process locks until the script has written its result.
+const watchDeletion = async (target: ServerTarget, release: () => void) => {
+	const deadline = Date.now() + deletionTiming.watchMaxMs;
+	try {
+		while (Date.now() < deadline) {
+			await sleep(deletionTiming.pollIntervalMs);
+			try {
+				const status = await readDeletionStatus(target);
+				if (status.status || (!status.busy && status.logFile)) {
+					return;
+				}
+			} catch {
+				// The panel may lose its connection while Traefik restarts.
+			}
+		}
+	} finally {
+		release();
+	}
 };

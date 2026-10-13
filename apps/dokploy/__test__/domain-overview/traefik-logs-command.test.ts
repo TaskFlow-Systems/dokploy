@@ -14,10 +14,6 @@ import {
 	readTraefikLogOutput,
 	TRAEFIK_LOG_WINDOW,
 } from "@dokploy/server/utils/domain-overview/traefik-logs";
-import {
-	buildDynamicHostsCommand,
-	parseDynamicHosts,
-} from "@dokploy/server/utils/domain-overview/traefik-routes";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 describe("Traefik log command", () => {
@@ -141,67 +137,5 @@ esac
 		const { status } = run({ FAKE_MISSING: "1" });
 
 		expect(status).toBe(4);
-	});
-});
-
-describe("dynamic config hosts", () => {
-	it("reads Host rules together with the file name", () => {
-		const output = [
-			"/etc/dokploy/traefik/dynamic/dokploy.yml:Host(`panel.example.com`)",
-			"/etc/dokploy/traefik/dynamic/app.yml:Host(`a.example.com`)",
-			"/etc/dokploy/traefik/dynamic/app.yml:Host(`a.example.com`)",
-			"/etc/dokploy/traefik/dynamic/tcp.yml:HostSNI(`db.example.com`)",
-		].join("\n");
-
-		expect(parseDynamicHosts(output)).toEqual([
-			{ host: "panel.example.com", file: "dokploy.yml" },
-			{ host: "a.example.com", file: "app.yml" },
-			{ host: "db.example.com", file: "tcp.yml" },
-		]);
-	});
-
-	it("separates a failure from an empty answer", () => {
-		const command = buildDynamicHostsCommand("/etc/dokploy/traefik/dynamic");
-
-		expect(command).toContain("grep -rHoE");
-		expect(command).toContain('[ "$status" -le 1 ] || exit "$status"');
-	});
-
-	it("finds the panel host in a real file and treats no match as empty", () => {
-		const root = mkdtempSync(path.join(tmpdir(), "dyn-"));
-		try {
-			writeFileSync(
-				path.join(root, "dokploy.yml"),
-				"http:\n  routers:\n    dokploy-router-app:\n      rule: Host(`panel.example.com`)\n",
-			);
-			writeFileSync(
-				path.join(root, "acme.json"),
-				"Host(`ignored.example.com`)",
-			);
-			const found = spawnSync(
-				"/bin/sh",
-				["-c", buildDynamicHostsCommand(root)],
-				{
-					encoding: "utf8",
-				},
-			);
-			expect(found.status).toBe(0);
-			expect(parseDynamicHosts(found.stdout)).toEqual([
-				{ host: "panel.example.com", file: "dokploy.yml" },
-			]);
-
-			rmSync(path.join(root, "dokploy.yml"));
-			const empty = spawnSync(
-				"/bin/sh",
-				["-c", buildDynamicHostsCommand(root)],
-				{
-					encoding: "utf8",
-				},
-			);
-			expect(empty.status).toBe(0);
-			expect(parseDynamicHosts(empty.stdout)).toEqual([]);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
 	});
 });

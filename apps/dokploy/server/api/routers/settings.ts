@@ -73,6 +73,10 @@ import {
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
 import { checkPermission } from "@dokploy/server/services/permission";
+import {
+	acquireTraefikOperation,
+	runningTraefikOperation,
+} from "@dokploy/server/setup/traefik-operation-lock";
 import { isProtectedTraefikPath } from "@dokploy/server/utils/traefik/application";
 import { generateOpenApiDocument } from "@dokploy/trpc-openapi";
 import { TRPCError } from "@trpc/server";
@@ -154,12 +158,22 @@ export const settingsRouter = createTRPCRouter({
 		.mutation(async ({ input, ctx }) => {
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
-			// Run in background so the request returns immediately; avoids proxy timeouts.
-			void reloadDockerResource("dokploy-traefik", input?.serverId).catch(
-				(err) => {
-					console.error("reloadTraefik background:", err);
-				},
+			const releaseTraefikOperation = acquireTraefikOperation(
+				input?.serverId ?? null,
+				"reload",
 			);
+			if (!releaseTraefikOperation) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message: `Traefik is busy on this server (${runningTraefikOperation(input?.serverId ?? null)}). Try again when it ends.`,
+				});
+			}
+			// Run in background so the request returns immediately; avoids proxy timeouts.
+			void reloadDockerResource("dokploy-traefik", input?.serverId)
+				.catch((err) => {
+					console.error("reloadTraefik background:", err);
+				})
+				.finally(releaseTraefikOperation);
 			await audit(ctx, {
 				action: "reload",
 				resourceType: "settings",

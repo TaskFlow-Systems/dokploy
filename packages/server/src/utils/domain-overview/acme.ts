@@ -5,6 +5,7 @@ export const ACME_FILE_MISSING_EXIT_CODE = 3;
 export const DAY_MS = 24 * 60 * 60 * 1000;
 
 export type AcmeCertificate = {
+	resolver: string;
 	main: string | null;
 	names: string[];
 	validTo: Date;
@@ -16,7 +17,7 @@ export type CertificateTone = "critical" | "warning" | "ok";
 // jq drops the private keys on the server. Without jq the whole file comes
 // over and parseAcmeCertificates drops the keys before anything reads the data.
 const JQ_REDUCE_FILTER =
-	"{letsencrypt: {Certificates: [.letsencrypt?.Certificates[]? | {domain: {main: .domain?.main?, sans: (.domain?.sans? // [])}, certificate: .certificate?}]}}";
+	'with_entries(select(.value | type == "object") | .value |= {Certificates: [(.Certificates | arrays | .[])? | {domain: {main: .domain?.main?, sans: (.domain?.sans? // [])}, certificate: .certificate?}]})';
 
 export const shellQuote = (value: string) =>
 	`'${value.replace(/'/g, `'\\''`)}'`;
@@ -78,7 +79,10 @@ export const parseCertificateChain = (encoded: string) => {
 	}
 };
 
-const toAcmeCertificate = (entry: unknown): AcmeCertificate | null => {
+const toAcmeCertificate = (
+	entry: unknown,
+	resolver: string,
+): AcmeCertificate | null => {
 	if (!isRecord(entry)) {
 		return null;
 	}
@@ -103,7 +107,7 @@ const toAcmeCertificate = (entry: unknown): AcmeCertificate | null => {
 		typeof domain.main === "string" && domain.main.trim() !== ""
 			? normalizeDomainName(domain.main)
 			: null;
-	return { main, names: [...new Set(names)], ...parsed };
+	return { resolver, main, names: [...new Set(names)], ...parsed };
 };
 
 // Errors never carry the file content: JSON.parse messages can quote the
@@ -115,14 +119,18 @@ export const parseAcmeCertificates = (raw: string): AcmeCertificate[] => {
 	} catch {
 		throw new AcmeFileFormatError();
 	}
-	const letsencrypt = isRecord(document) ? document.letsencrypt : undefined;
-	const entries = isRecord(letsencrypt) ? letsencrypt.Certificates : undefined;
-	if (!Array.isArray(entries)) {
+	if (!isRecord(document)) {
 		return [];
 	}
-	return entries.flatMap((entry) => {
-		const certificate = toAcmeCertificate(entry);
-		return certificate ? [certificate] : [];
+	return Object.entries(document).flatMap(([resolver, section]) => {
+		const entries = isRecord(section) ? section.Certificates : undefined;
+		if (!Array.isArray(entries)) {
+			return [];
+		}
+		return entries.flatMap((entry) => {
+			const certificate = toAcmeCertificate(entry, resolver);
+			return certificate ? [certificate] : [];
+		});
 	});
 };
 

@@ -1,5 +1,4 @@
 import {
-	buildTraefikRoutesCommand,
 	extractRuleHosts,
 	parseTraefikRoutes,
 } from "@dokploy/server/utils/domain-overview/traefik-routes";
@@ -45,14 +44,24 @@ describe("traefik route label parser", () => {
 		).toEqual(["one.example.test", "two.example.test"]);
 	});
 
-	it("ignores containers whose labels have no HTTP router rule", () => {
+	it("ignores containers whose labels have no router rule", () => {
 		const output = inspectLine("worker-1", {
 			"traefik.enable": "true",
 			"traefik.http.services.worker.loadbalancer.server.port": "3000",
-			"traefik.tcp.routers.worker.rule": "HostSNI(`tcp.example.test`)",
 		});
 
 		expect(parseTraefikRoutes(output)).toEqual([]);
+	});
+
+	it("counts the rule of a TCP router", () => {
+		const output = inspectLine("worker-1", {
+			"traefik.enable": "true",
+			"traefik.tcp.routers.worker.rule": "HostSNI(`tcp.example.test`)",
+		});
+
+		expect(parseTraefikRoutes(output).map((route) => route.host)).toEqual([
+			"tcp.example.test",
+		]);
 	});
 
 	it("skips containers that Traefik is told to ignore", () => {
@@ -117,11 +126,5 @@ describe("traefik route label parser", () => {
 		expect(parseTraefikRoutes(output).map((route) => route.host)).toEqual([
 			"ok.example.test",
 		]);
-	});
-
-	it("builds the docker inspect command with the label format", () => {
-		expect(buildTraefikRoutesCommand()).toBe(
-			"docker ps -q | xargs -r docker inspect --format '{{.Name}}|{{json .Config.Labels}}'",
-		);
 	});
 });

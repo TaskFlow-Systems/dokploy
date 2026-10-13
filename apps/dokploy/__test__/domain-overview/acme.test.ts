@@ -1,3 +1,7 @@
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import {
 	buildAcmeReadCommand,
 	certificateCovers,
@@ -65,6 +69,7 @@ describe("acme.json parser", () => {
 			"issuer",
 			"main",
 			"names",
+			"resolver",
 			"validTo",
 		]);
 		const serialized = JSON.stringify(certificates);
@@ -167,12 +172,14 @@ describe("certificate names", () => {
 
 	it("prefers the certificate with the latest expiry", () => {
 		const older = {
+			resolver: "letsencrypt",
 			main: "example.test",
 			names: ["example.test"],
 			validTo: new Date("2026-12-01T00:00:00Z"),
 			issuer: "older",
 		};
 		const newer = {
+			resolver: "letsencrypt",
 			main: "example.test",
 			names: ["example.test"],
 			validTo: new Date("2027-06-01T00:00:00Z"),
@@ -206,5 +213,59 @@ describe("acme.json read command", () => {
 		const command = buildAcmeReadCommand("/srv/it's/acme.json");
 
 		expect(command).toContain("'/srv/it'\\''s/acme.json'");
+	});
+});
+
+describe("certificate storage with several resolvers", () => {
+	const twoResolvers = JSON.stringify({
+		letsencrypt: {
+			Account: { PrivateKey: FAKE_ACCOUNT_KEY },
+			Certificates: [fixtureEntry],
+		},
+		staging: {
+			Account: { PrivateKey: FAKE_ACCOUNT_KEY },
+			Certificates: [
+				{ ...fixtureEntry, domain: { main: "stage.example.test", sans: [] } },
+			],
+		},
+		unrelated: "text",
+	});
+
+	it("lists the certificates of every resolver with the resolver name", () => {
+		expect(
+			parseAcmeCertificates(twoResolvers).map((item) => [
+				item.resolver,
+				item.main,
+			]),
+		).toEqual([
+			["letsencrypt", "example.test"],
+			["staging", "stage.example.test"],
+		]);
+	});
+
+	it("reduces every resolver on the server and drops the keys", () => {
+		const jq = spawnSync("sh", ["-c", "command -v jq"], {
+			encoding: "utf8",
+		}).stdout.trim();
+		if (!jq) {
+			return;
+		}
+		const dir = mkdtempSync(path.join(tmpdir(), "acme-read-"));
+		try {
+			const file = path.join(dir, "acme.json");
+			writeFileSync(file, twoResolvers);
+			const result = spawnSync("sh", ["-c", buildAcmeReadCommand(file)], {
+				encoding: "utf8",
+			});
+
+			expect(result.status).toBe(0);
+			expect(result.stdout).not.toContain(FAKE_ENTRY_KEY);
+			expect(result.stdout).not.toContain(FAKE_ACCOUNT_KEY);
+			expect(
+				parseAcmeCertificates(result.stdout).map((item) => item.resolver),
+			).toEqual(["letsencrypt", "staging"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	checkProtectedResourceAccess: vi.fn(),
+	checkSuperSessionAccess: vi.fn(),
 	createAuditLog: vi.fn(),
 	deleteUnusedCertificates: vi.fn(),
 	findMember: vi.fn(),
@@ -40,6 +41,7 @@ vi.mock("@dokploy/server/services/super-password", async (importOriginal) => ({
 		typeof import("@dokploy/server/services/super-password")
 	>()),
 	checkProtectedResourceAccess: mocks.checkProtectedResourceAccess,
+	checkSuperSessionAccess: mocks.checkSuperSessionAccess,
 }));
 
 vi.mock("@dokploy/server/services/known-secrets", async () => {
@@ -104,6 +106,7 @@ describe("domain overview router access", () => {
 		]);
 		mocks.hasValidLicense.mockResolvedValue(false);
 		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
+		mocks.checkSuperSessionAccess.mockResolvedValue(null);
 		mocks.getDomainOverview.mockResolvedValue({
 			rows: [],
 			serverErrors: [],
@@ -250,14 +253,15 @@ describe("domain overview router access", () => {
 		expect(mocks.getTraefikLogs).toHaveBeenCalledWith("org-1", null);
 	});
 
-	it("classifies the certificate deletion as a write", async () => {
+	it("classifies the certificate deletion as dangerous, like editing a Traefik file", async () => {
 		const { PROCEDURE_ACCESS } = await import(
 			"@/server/api/utils/procedure-access"
 		);
 
 		expect(PROCEDURE_ACCESS["domainOverview.deleteUnusedCertificates"]).toBe(
-			"write",
+			"dangerous",
 		);
+		expect(PROCEDURE_ACCESS["settings.updateTraefikFile"]).toBe("dangerous");
 	});
 });
 
@@ -272,6 +276,7 @@ describe("domain overview certificate deletion access", () => {
 		]);
 		mocks.hasValidLicense.mockResolvedValue(false);
 		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
+		mocks.checkSuperSessionAccess.mockResolvedValue(null);
 		mocks.deleteUnusedCertificates.mockResolvedValue({
 			status: "deleted",
 			code: "ok",
@@ -294,6 +299,15 @@ describe("domain overview certificate deletion access", () => {
 				traefikFiles: true,
 			}).domainOverview.deleteUnusedCertificates(input),
 		).rejects.toBeDefined();
+		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
+	});
+
+	it("refuses an admin whose procedure-level super session is not open", async () => {
+		mocks.checkSuperSessionAccess.mockResolvedValue("super-session-required");
+
+		await expect(
+			createCaller("admin").domainOverview.deleteUnusedCertificates(input),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
 		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
 	});
 
@@ -348,6 +362,32 @@ describe("domain overview certificate deletion access", () => {
 					backupFile: "acme.json.bak-20261012T101500Z",
 				}),
 			}),
+		);
+	});
+
+	it("still returns the result when the audit entry cannot be written", async () => {
+		mocks.createAuditLog.mockRejectedValueOnce(new Error("audit down"));
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const result =
+			await createCaller("admin").domainOverview.deleteUnusedCertificates(
+				input,
+			);
+
+		expect(result).toMatchObject({ status: "deleted" });
+		error.mockRestore();
+	});
+
+	it("passes a resolver-addressed request on to the service", async () => {
+		await createCaller("admin").domainOverview.deleteUnusedCertificates({
+			serverId: "server-1",
+			domains: [{ domain: "old.example.com", resolver: "staging" }],
+		});
+
+		expect(mocks.deleteUnusedCertificates).toHaveBeenCalledWith(
+			"org-1",
+			"server-1",
+			[{ domain: "old.example.com", resolver: "staging" }],
 		);
 	});
 
