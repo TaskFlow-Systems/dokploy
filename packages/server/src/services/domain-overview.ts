@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { IS_CLOUD, paths } from "@dokploy/server/constants";
 import { db } from "@dokploy/server/db";
@@ -31,13 +32,18 @@ import {
 	shellQuote,
 } from "@dokploy/server/utils/domain-overview/acme";
 import {
+	ACME_BACKUP_DIR_NAME,
 	ACME_DELETE_LOCK_NAME,
+	ACME_DELETE_MARKER_NAME,
 	ACME_DELETE_MAX_DOMAINS,
 	ACME_DELETE_MESSAGES,
 	type AcmeDeleteStatus,
 	buildAcmeDeleteScript,
+	buildClearStaleLockCommand,
 	buildDeletionLauncher,
 	buildDeletionStatusCommand,
+	buildTraefikRecoveryScript,
+	type ClearLockOutcome,
 	type DeletionState,
 	type DeletionStatusFile,
 	deletionState,
@@ -45,7 +51,11 @@ import {
 	formatBackupTimestamp,
 	isValidCertificateDomain,
 	isValidResolverName,
+	parseClearLockOutcome,
 	parseDeletionStatus,
+	parseRecoveryStatus,
+	RECOVERY_MESSAGES,
+	type RecoveryStatus,
 } from "@dokploy/server/utils/domain-overview/acme-delete";
 import {
 	type DnsRecords,
@@ -103,6 +113,7 @@ const LOCAL_APPLY_START_DELAY_SECONDS = 3;
 
 export const deletionTiming = {
 	pollIntervalMs: 3_000,
+	statusShareMs: 3_000,
 	remoteWaitMs: 150_000,
 	localWaitMs: 15_000,
 	watchMaxMs: 15 * 60_000,
@@ -123,6 +134,8 @@ export type DomainOverviewServer = {
 	isLocal: boolean;
 	usageVerified: boolean;
 	lastDeletion: DeletionStatusView | null;
+	staleLock: boolean;
+	traefikLeftStopped: { kind: string; phase: string } | null;
 };
 
 type ServerTarget = {
@@ -524,8 +537,16 @@ const acmeFileFor = (target: ServerTarget) =>
 const staticConfigFor = (target: ServerTarget) =>
 	`${paths(!target.isLocal).MAIN_TRAEFIK_PATH}/traefik.yml`;
 
-const lockDirFor = (target: ServerTarget) =>
+const lockFileFor = (target: ServerTarget) =>
 	`${paths(!target.isLocal).BASE_PATH}/${ACME_DELETE_LOCK_NAME}`;
+
+const markerFileFor = (target: ServerTarget) =>
+	`${paths(!target.isLocal).BASE_PATH}/${ACME_DELETE_MARKER_NAME}`;
+
+// Outside the Traefik tree on purpose: the file editor can open anything
+// under it, and the backups hold the same private keys as acme.json.
+const backupDirFor = (target: ServerTarget) =>
+	`${paths(!target.isLocal).BASE_PATH}/${ACME_BACKUP_DIR_NAME}`;
 
 const logDirFor = (target: ServerTarget) => paths(!target.isLocal).LOGS_PATH;
 
@@ -570,12 +591,50 @@ const readCertificates = async (target: ServerTarget) => {
 	}
 };
 
-const readDeletionStatus = async (target: ServerTarget) => {
-	const { stdout } = await runOnServer(
+const statusCache = new Map<
+	string,
+	{ at: number; promise: Promise<DeletionStatusFile> }
+>();
+const watchedStatus = new Map<
+	string,
+	{ at: number; status: DeletionStatusFile }
+>();
+
+// The watcher of a running deletion and the page both ask for the status.
+// Over SSH each answer costs a new connection, so a recent answer is shared.
+const readDeletionStatus = (
+	target: ServerTarget,
+	options: { logFile?: string; fresh?: boolean } = {},
+): Promise<DeletionStatusFile> => {
+	const now = Date.now();
+	if (!options.fresh) {
+		const watched = watchedStatus.get(target.key);
+		if (watched && now - watched.at < deletionTiming.statusShareMs) {
+			return Promise.resolve(watched.status);
+		}
+		const cached = statusCache.get(target.key);
+		if (cached && now - cached.at < deletionTiming.statusShareMs) {
+			return cached.promise;
+		}
+	}
+	const promise = runOnServer(
 		target,
-		buildDeletionStatusCommand(logDirFor(target), lockDirFor(target)),
-	);
-	return parseDeletionStatus(stdout);
+		buildDeletionStatusCommand({
+			logDir: logDirFor(target),
+			lockFile: lockFileFor(target),
+			markerFile: markerFileFor(target),
+			logFile: options.logFile,
+		}),
+	).then(({ stdout }) => parseDeletionStatus(stdout));
+	if (!options.logFile) {
+		statusCache.set(target.key, { at: now, promise });
+		promise.catch(() => {
+			if (statusCache.get(target.key)?.promise === promise) {
+				statusCache.delete(target.key);
+			}
+		});
+	}
+	return promise;
 };
 
 type LogRead =
@@ -671,12 +730,19 @@ const readServer = async (
 
 	const uses = await stage(
 		"Routes",
-		{ routes: [], mentions: [], patterns: [] } as ReturnType<
-			typeof parseTraefikUses
-		>,
+		{
+			routes: [],
+			mentions: [],
+			patterns: [],
+			unreadable: false,
+		} as ReturnType<typeof parseTraefikUses>,
 		() => readRoutes(target),
 		true,
 	);
+	if (uses.unreadable) {
+		usageVerified = false;
+		errors.push("Routes: the labels of a container could not be read");
+	}
 	const dynamic = await stage<DynamicConfigUses | null>(
 		"Dynamic config",
 		null,
@@ -1086,6 +1152,13 @@ const buildOverview = async (
 			isLocal: snapshot.target.isLocal,
 			usageVerified: snapshot.usageVerified,
 			lastDeletion: toDeletionView(snapshot),
+			staleLock: snapshot.deletion?.stale ?? false,
+			traefikLeftStopped:
+				snapshot.deletion?.marker &&
+				!snapshot.deletion.busy &&
+				!snapshot.deletionRunning
+					? snapshot.deletion.marker
+					: null,
 		})),
 		serverErrors: analysis.servers.flatMap(({ snapshot }) =>
 			snapshot.errors.map((message) => ({
@@ -1398,9 +1471,13 @@ const runDeletion = async (
 	}
 
 	const timestamp = formatBackupTimestamp(new Date());
+	const runId = randomBytes(3).toString("hex");
+	const logFile = `acme-delete-${timestamp}-${runId}.log`;
 	const script = buildAcmeDeleteScript({
 		acmeFile: acmeFileFor(target),
-		lockDir: lockDirFor(target),
+		lockFile: lockFileFor(target),
+		markerFile: markerFileFor(target),
+		backupDir: backupDirFor(target),
 		targets: chosen.map((certificate) => ({
 			resolver: certificate.resolver,
 			domain: certificate.main ?? "",
@@ -1412,31 +1489,34 @@ const runDeletion = async (
 		script,
 		logDir: logDirFor(target),
 		timestamp,
+		runId,
 	});
 
-	let launched = false;
+	let reported: string | null = null;
 	try {
 		const { stdout } = await runOnServer(
 			target,
 			wrapScript(launcher),
 			LAUNCH_TIMEOUT_MS,
 		);
-		launched = /^DOKPLOY_LAUNCHED /m.test(stdout);
-		if (!launched) {
-			return failedResult("launch_failed", null, null);
-		}
+		reported = stdout;
 	} catch (error) {
-		const status = parseDeletionStatus(stdoutOf(error)).status;
-		return failedResult(
-			status ?? "no_result",
-			null,
-			null,
-			describeFailure(error, target),
-		);
+		const definite = parseDeletionStatus(stdoutOf(error)).status;
+		if (definite) {
+			return failedResult(definite, null, null, describeFailure(error, target));
+		}
+	}
+	const launched = reported !== null && /^DOKPLOY_LAUNCHED /m.test(reported);
+	if (reported !== null && !launched) {
+		const definite = parseDeletionStatus(reported).status;
+		return failedResult(definite ?? "launch_failed", null, null);
 	}
 
-	const logFile = `acme-delete-${timestamp}.log`;
-	const outcome = await waitForOutcome(target, target.isLocal);
+	// A lost answer does not mean the script did not start: it may be running
+	// now, so the locks stay until its log says otherwise.
+	const outcome = launched
+		? await waitForOutcome(target, logFile, target.isLocal)
+		: null;
 	if (outcome?.status === "ok") {
 		return {
 			status: "deleted",
@@ -1449,12 +1529,13 @@ const runDeletion = async (
 	if (outcome?.status) {
 		return failedResult(outcome.status, outcome.backupFile, logFile);
 	}
-	void watchDeletion(target, release);
+	void watchDeletion(target, logFile, release);
 	return {
 		status: "started",
 		code: "ok",
-		message:
-			"The deletion started. Traefik restarts during it and the sites on this server are unavailable for a few seconds. The result appears on this page.",
+		message: launched
+			? "The deletion started. Traefik restarts during it and the sites on this server are unavailable for a few seconds. The result appears on this page."
+			: "The server did not confirm that the deletion started. It may be running; the result appears on this page.",
 		backupFile: outcome?.backupFile ?? null,
 		logFile,
 	};
@@ -1462,14 +1543,18 @@ const runDeletion = async (
 
 // On the panel host only the checks before the stop are awaited: the panel is
 // normally reached through the Traefik that is about to stop.
-const waitForOutcome = async (target: ServerTarget, untilPrecheck: boolean) => {
+const waitForOutcome = async (
+	target: ServerTarget,
+	logFile: string,
+	untilPrecheck: boolean,
+) => {
 	const deadline =
 		Date.now() +
 		(untilPrecheck ? deletionTiming.localWaitMs : deletionTiming.remoteWaitMs);
 	let last: DeletionStatusFile | null = null;
 	while (Date.now() < deadline) {
 		try {
-			last = await readDeletionStatus(target);
+			last = await pollDeletion(target, logFile);
 		} catch {
 			last = null;
 		}
@@ -1484,23 +1569,226 @@ const waitForOutcome = async (target: ServerTarget, untilPrecheck: boolean) => {
 	return last;
 };
 
+const pollDeletion = async (target: ServerTarget, logFile: string) => {
+	const status = await readDeletionStatus(target, { logFile, fresh: true });
+	watchedStatus.set(target.key, { at: Date.now(), status });
+	return status;
+};
+
+const MISSING_LOG_POLLS = 3;
+
 // The host-side lock is what keeps other deletions out; this keeps the
-// in-process locks until the script has written its result.
-const watchDeletion = async (target: ServerTarget, release: () => void) => {
+// in-process locks until the script has written its result, was found dead,
+// or turned out never to have started.
+const watchDeletion = async (
+	target: ServerTarget,
+	logFile: string,
+	release: () => void,
+) => {
 	const deadline = Date.now() + deletionTiming.watchMaxMs;
+	let missing = 0;
 	try {
 		while (Date.now() < deadline) {
 			await sleep(deletionTiming.pollIntervalMs);
 			try {
-				const status = await readDeletionStatus(target);
-				if (status.status || (!status.busy && status.logFile)) {
+				const status = await pollDeletion(target, logFile);
+				if (status.status) {
 					return;
+				}
+				if (status.logFile) {
+					missing = 0;
+					if (!status.busy) {
+						return;
+					}
+				} else if (!status.busy) {
+					missing += 1;
+					if (missing >= MISSING_LOG_POLLS) {
+						return;
+					}
 				}
 			} catch {
 				// The panel may lose its connection while Traefik restarts.
 			}
 		}
 	} finally {
+		watchedStatus.delete(target.key);
+		statusCache.delete(target.key);
 		release();
+	}
+};
+
+export type ClearLockResult = {
+	status: ClearLockOutcome["status"];
+	traefik: ClearLockOutcome["traefik"];
+	message: string;
+};
+
+const CLEAR_LOCK_MESSAGES: Record<ClearLockOutcome["status"], string> = {
+	cleared: "The leftover lock was removed.",
+	none: "There is no lock to remove.",
+	alive:
+		"The process that holds the lock is still running, so the lock was kept.",
+	failed: "The lock could not be removed.",
+};
+
+const withTraefikLocks = async <T>(
+	target: ServerTarget,
+	label: string,
+	task: () => Promise<T>,
+): Promise<T> => {
+	if (target.isLocal && isServerUpdateRunning()) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message:
+				"An update of this panel host is running. Try again when it ends.",
+		});
+	}
+	const releaseOperation = acquireTraefikOperation(target.serverId, label);
+	if (!releaseOperation) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: `Traefik is busy on this server (${runningTraefikOperation(target.serverId)}). Try again when it ends.`,
+		});
+	}
+	const releaseHostStack = target.isLocal ? acquireHostStackUpdateLock() : null;
+	if (target.isLocal && !releaseHostStack) {
+		releaseOperation();
+		throw new TRPCError({
+			code: "CONFLICT",
+			message:
+				"An update of this panel host is running. Try again when it ends.",
+		});
+	}
+	try {
+		return await task();
+	} finally {
+		releaseHostStack?.();
+		releaseOperation();
+	}
+};
+
+export const clearStaleDeletionLock = async (
+	orgId: string,
+	serverId: string | null,
+): Promise<ClearLockResult> => {
+	const target = await resolveTarget(orgId, serverId);
+	return withTraefikLocks(target, "lock cleanup", async () => {
+		const { stdout } = await runOnServer(
+			target,
+			wrapScript(
+				buildClearStaleLockCommand({
+					lockFile: lockFileFor(target),
+					markerFile: markerFileFor(target),
+				}),
+			),
+			LAUNCH_TIMEOUT_MS,
+		);
+		statusCache.delete(target.key);
+		const outcome = parseClearLockOutcome(stdout);
+		return {
+			status: outcome.status,
+			traefik: outcome.traefik,
+			message: CLEAR_LOCK_MESSAGES[outcome.status],
+		};
+	});
+};
+
+export type RecoverTraefikResult = {
+	status: RecoveryStatus | "no_result";
+	message: string;
+};
+
+const RECOVERY_TIMEOUT_MS = 180_000;
+
+export const recoverInterruptedTraefik = async (
+	orgId: string,
+	serverId: string | null,
+): Promise<RecoverTraefikResult> => {
+	const target = await resolveTarget(orgId, serverId);
+	return withTraefikLocks(target, "traefik recovery", async () => {
+		let stdout = "";
+		try {
+			({ stdout } = await runOnServer(
+				target,
+				wrapScript(
+					buildTraefikRecoveryScript({
+						acmeFile: acmeFileFor(target),
+						lockFile: lockFileFor(target),
+						markerFile: markerFileFor(target),
+						backupDir: backupDirFor(target),
+					}),
+				),
+				RECOVERY_TIMEOUT_MS,
+			));
+		} catch (error) {
+			stdout = stdoutOf(error);
+			if (!parseRecoveryStatus(stdout)) {
+				throw error;
+			}
+		}
+		statusCache.delete(target.key);
+		const status = parseRecoveryStatus(stdout);
+		return status
+			? { status, message: RECOVERY_MESSAGES[status] }
+			: {
+					status: "no_result",
+					message:
+						"The server did not report a result. Check docker ps on the server.",
+				};
+	});
+};
+
+// Other Traefik operations (reload, port change, dashboard toggle) must not
+// run while a deletion is in flight on the host or has left Traefik stopped.
+// The in-process lock is lost when the panel restarts, so the host is asked.
+export const assertNoTraefikDeletion = async (serverId: string | null) => {
+	const target: ServerTarget = {
+		key: serverId ?? LOCAL_KEY,
+		serverId,
+		name: serverId ?? LOCAL_NAME,
+		addresses: [],
+		isLocal: serverId === null,
+	};
+	let status: DeletionStatusFile;
+	try {
+		status = await readDeletionStatus(target, { fresh: true });
+	} catch {
+		return;
+	}
+	if (status.busy) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message:
+				"A certificate deletion is running on this server. Try again when it ends.",
+		});
+	}
+	if (status.marker) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message:
+				"An interrupted certificate deletion left Traefik stopped. Start Traefik again from the Domains page first.",
+		});
+	}
+};
+
+export const warnAboutInterruptedTraefikDeletion = async () => {
+	try {
+		const status = await readDeletionStatus(
+			{
+				key: LOCAL_KEY,
+				serverId: null,
+				name: LOCAL_NAME,
+				addresses: [],
+				isLocal: true,
+			},
+			{ fresh: true },
+		);
+		if (status.marker && !status.busy) {
+			console.warn(
+				`[domain-overview] An interrupted certificate deletion left Traefik (${status.marker.kind}) stopped on this host. Start it again from the Domains page.`,
+			);
+		}
+	} catch {
+		// Nothing to report when the host cannot be asked.
 	}
 };

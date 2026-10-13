@@ -1,4 +1,5 @@
 import { shellQuote } from "./acme";
+import { HOST_TEMPLATE_MARKER } from "./host-patterns";
 
 export type TraefikRoute = {
 	host: string;
@@ -11,6 +12,7 @@ export type TraefikUses = {
 	routes: TraefikRoute[];
 	mentions: string[];
 	patterns: string[];
+	unreadable: boolean;
 };
 
 export const DOCKER_LABELS_FAILED_EXIT_CODE = 5;
@@ -22,7 +24,7 @@ export const buildTraefikRoutesCommand = () =>
 	[
 		"ids=$(docker ps -q) || exit $?",
 		"if [ -n \"$ids\" ]; then docker inspect --format '{{.Name}}|{{json .Config.Labels}}' $ids || exit $?; fi",
-		"manager=$(docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null)",
+		"manager=$(docker info --format '{{.Swarm.ControlAvailable}}') || exit $?",
 		'if [ "$manager" = true ]; then',
 		"sids=$(docker service ls -q) || exit $?",
 		"if [ -n \"$sids\" ]; then docker service inspect --format 'svc:{{.Spec.Name}}|{{json .Spec.Labels}}' $sids || exit $?; fi",
@@ -44,6 +46,9 @@ export type RuleMatchers = { hosts: string[]; patterns: string[] };
 export const extractRuleMatchers = (rule: string): RuleMatchers => {
 	const hosts = new Set<string>();
 	const patterns = new Set<string>();
+	if (rule.includes(HOST_TEMPLATE_MARKER)) {
+		patterns.add(HOST_TEMPLATE_MARKER);
+	}
 	for (const matcher of rule.matchAll(MATCHER)) {
 		const regexp = (matcher[1] ?? "").endsWith("Regexp");
 		for (const argument of (matcher[2] ?? "").matchAll(QUOTED_ARGUMENT)) {
@@ -52,6 +57,9 @@ export const extractRuleMatchers = (rule: string): RuleMatchers => {
 				if (value.trim() !== "") {
 					patterns.add(value);
 				}
+				continue;
+			}
+			if (value.includes(HOST_TEMPLATE_MARKER)) {
 				continue;
 			}
 			const host = normalizeHost(value);
@@ -66,11 +74,14 @@ export const extractRuleMatchers = (rule: string): RuleMatchers => {
 export const extractRuleHosts = (rule: string) =>
 	extractRuleMatchers(rule).hosts;
 
-const parseLabels = (json: string): Record<string, string> => {
+const parseLabels = (json: string): Record<string, string> | null => {
 	try {
 		const value: unknown = JSON.parse(json);
-		if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		if (value === null) {
 			return {};
+		}
+		if (typeof value !== "object" || Array.isArray(value)) {
+			return null;
 		}
 		return Object.fromEntries(
 			Object.entries(value).filter(
@@ -78,7 +89,7 @@ const parseLabels = (json: string): Record<string, string> => {
 			),
 		);
 	} catch {
-		return {};
+		return null;
 	}
 };
 
@@ -90,15 +101,24 @@ export const parseTraefikUses = (output: string): TraefikUses => {
 	const routes: TraefikRoute[] = [];
 	const mentions = new Set<string>();
 	const patterns = new Set<string>();
+	let unreadable = false;
 	for (const line of output.split("\n")) {
+		if (line.trim() === "") {
+			continue;
+		}
 		const separator = line.indexOf("|");
 		if (separator <= 0) {
+			unreadable = true;
 			continue;
 		}
 		const rawName = line.slice(0, separator).trim().replace(/^\//, "");
 		const isService = rawName.startsWith("svc:");
 		const containerName = isService ? rawName.slice(4) : rawName;
 		const labels = parseLabels(line.slice(separator + 1).trim());
+		if (!labels) {
+			unreadable = true;
+			continue;
+		}
 		if (!containerName || labels["traefik.enable"] === "false") {
 			continue;
 		}
@@ -135,7 +155,12 @@ export const parseTraefikUses = (output: string): TraefikUses => {
 			}
 		}
 	}
-	return { routes, mentions: [...mentions], patterns: [...patterns] };
+	return {
+		routes,
+		mentions: [...mentions],
+		patterns: [...patterns],
+		unreadable,
+	};
 };
 
 export const parseTraefikRoutes = (output: string): TraefikRoute[] =>
@@ -171,10 +196,11 @@ export const buildDynamicHostsCommand = (
 		"scan() {",
 		'\tbase=$(basename "$1")',
 		'\tif [ ! -r "$1" ]; then printf \'E\\t%s\\t\\n\' "$base"; return; fi',
-		"\ttr 'A-Z\\n' 'a-z ' < \"$1\" | sed 's/[a-z0-9._%+-]*@[a-z0-9.-]*//g' | grep -oE '(\\*\\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,63}' | sort -u | while read -r word; do printf 'M\\t%s\\t%s\\n' \"$base\" \"$word\"; done",
+		"\ttr 'A-Z\\n' 'a-z ' < \"$1\" | sed 's/[a-z0-9._%+-]*@[a-z0-9.-]*//g' | grep -oE '(\\*\\.)?([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})' | sort -u | while read -r word; do printf 'M\\t%s\\t%s\\n' \"$base\" \"$word\"; done",
 		`\ttr '\\n' ' ' < "$1" | grep -oE '${MATCHER_ERE}' | while read -r matcher; do printf 'R\\t%s\\t%s\\n' "$base" "$matcher"; done`,
 		"}",
-		"find \"$dir\" -type f \\( -name '*.yml' -o -name '*.yaml' -o -name '*.toml' \\) | while read -r file; do scan \"$file\"; done",
+		"files=$(find -L \"$dir\" -type f \\( -name '*.yml' -o -name '*.yaml' -o -name '*.toml' \\) 2>/dev/null) || printf 'E\\t.\\t\\n'",
+		'printf \'%s\\n\' "$files" | while read -r file; do [ -z "$file" ] || scan "$file"; done',
 		'[ ! -f "$static" ] || scan "$static"',
 		"exit 0",
 	].join("\n");

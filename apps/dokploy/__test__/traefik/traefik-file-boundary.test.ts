@@ -19,6 +19,7 @@ vi.mock("@dokploy/server/utils/process/execAsync", () => ({
 
 const {
 	filterProtectedTraefikEntries,
+	isProtectedTraefikPath,
 	readConfigInPath,
 	writeTraefikConfigInPath,
 	writeTraefikConfigRemote,
@@ -131,6 +132,41 @@ describe("Traefik file path boundary", () => {
 				allowProtected: true,
 			}),
 		).rejects.toThrow("Invalid Traefik config path");
+	});
+
+	it("treats every acme.json sibling as protected for read, write and listing", async () => {
+		const dir = "/etc/dokploy/traefik/dynamic";
+		const names = [
+			"acme.json.bak-20261012T101500Z",
+			"acme.json.bak.2026-10-12",
+			"acme.json.new-20261012T101500Z",
+			"acme.json.restore-20261012T101500Z",
+			"ACME.JSON.OLD",
+			"acme.json~",
+		];
+
+		for (const name of names) {
+			expect(isProtectedTraefikPath(`${dir}/${name}`, "server-1")).toBe(true);
+			await expect(
+				readConfigInPath(`${dir}/${name}`, "server-1"),
+			).rejects.toThrow("Access to this Traefik file is not allowed");
+			await expect(
+				writeTraefikConfigInPath(`${dir}/${name}`, "{}", "server-1"),
+			).rejects.toThrow("Access to this Traefik file is not allowed");
+		}
+		expect(isProtectedTraefikPath(`${dir}/app.yml`, "server-1")).toBe(false);
+
+		const listing = [
+			...names.map((name) => ({
+				id: `${dir}/${name}`,
+				name,
+				type: "file" as const,
+			})),
+			{ id: `${dir}/app.yml`, name: "app.yml", type: "file" as const },
+		];
+		expect(filterProtectedTraefikEntries(listing, "server-1")).toEqual([
+			{ id: `${dir}/app.yml`, name: "app.yml", type: "file" },
+		]);
 	});
 
 	it("hides TLS secret files from Traefik directory listings", () => {

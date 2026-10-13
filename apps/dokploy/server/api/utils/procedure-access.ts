@@ -271,6 +271,8 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"domain.update": "write",
 	"domain.validateDomain": "write",
 	"domainOverview.deleteUnusedCertificates": "dangerous",
+	"domainOverview.clearStaleDeletionLock": "dangerous",
+	"domainOverview.recoverTraefik": "dangerous",
 	"domainOverview.list": "read",
 	"domainOverview.traefikLogs": "read",
 	"env.applyChanges": "write",

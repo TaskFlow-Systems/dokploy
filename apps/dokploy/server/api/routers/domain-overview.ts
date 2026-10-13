@@ -1,7 +1,9 @@
 import {
+	clearStaleDeletionLock,
 	deleteUnusedCertificates,
 	getDomainOverview,
 	getTraefikLogs,
+	recoverInterruptedTraefik,
 } from "@dokploy/server/services/domain-overview";
 import { checkPermission } from "@dokploy/server/services/permission";
 import { z } from "zod";
@@ -96,6 +98,46 @@ export const domainOverviewRouter = createTRPCRouter({
 				result.status,
 				result.status === "refused" ? null : result.backupFile,
 			);
+			return result;
+		}),
+	clearStaleDeletionLock: protectedProcedure
+		.input(z.object({ serverId: z.string().min(1).nullable() }))
+		.mutation(async ({ ctx, input }) => {
+			await checkPermission(ctx, { traefikFiles: ["write"] });
+			await assertTraefikFilesHostAccess(ctx, input.serverId ?? undefined);
+			await assertProtectedResourceAccess(ctx);
+			const result = await clearStaleDeletionLock(
+				ctx.session.activeOrganizationId,
+				input.serverId,
+			);
+			console.info(
+				`[domain-overview] stale deletion lock cleanup by ${ctx.user.id} on ${input.serverId ?? "local"}: ${result.status}`,
+			);
+			return result;
+		}),
+	recoverTraefik: protectedProcedure
+		.input(z.object({ serverId: z.string().min(1).nullable() }))
+		.mutation(async ({ ctx, input }) => {
+			await checkPermission(ctx, { traefikFiles: ["write"] });
+			await assertTraefikFilesHostAccess(ctx, input.serverId ?? undefined);
+			await assertProtectedResourceAccess(ctx);
+			const result = await recoverInterruptedTraefik(
+				ctx.session.activeOrganizationId,
+				input.serverId,
+			);
+			console.info(
+				`[domain-overview] Traefik recovery by ${ctx.user.id} on ${input.serverId ?? "local"}: ${result.status}`,
+			);
+			try {
+				await audit(ctx, {
+					action: "update",
+					resourceType: "settings",
+					resourceName: "traefik-recovery",
+					metadata: { serverId: input.serverId, result: result.status },
+				});
+			} catch (error) {
+				console.error("[domain-overview] audit entry failed:", error);
+			}
 			return result;
 		}),
 });

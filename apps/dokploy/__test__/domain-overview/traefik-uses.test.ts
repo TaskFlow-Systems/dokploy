@@ -62,6 +62,33 @@ describe("rule matchers", () => {
 	});
 });
 
+describe("label uses: unreadable and templates", () => {
+	it("marks a container whose labels are not valid JSON as unreadable", () => {
+		expect(parseTraefikUses("/web|{not json").unreadable).toBe(true);
+		expect(parseTraefikUses('/web|["a"]').unreadable).toBe(true);
+		expect(parseTraefikUses("nonsense without a separator").unreadable).toBe(
+			true,
+		);
+	});
+
+	it("accepts a container without labels", () => {
+		expect(parseTraefikUses("/web|null\n/db|{}\n").unreadable).toBe(false);
+	});
+
+	it("turns a Go template in a Host rule into a match-everything pattern", () => {
+		const uses = parseTraefikUses(
+			line("web", {
+				"traefik.http.routers.web.rule": 'Host(`{{ env "SUB" }}.example.com`)',
+			}),
+		);
+
+		expect(uses.routes).toEqual([]);
+		expect(namesMatchPatterns(["anything.example.org"], uses.patterns)).toBe(
+			true,
+		);
+	});
+});
+
 describe("label uses", () => {
 	it("counts a TCP router rule", () => {
 		const uses = parseTraefikUses(
@@ -154,11 +181,73 @@ describe("host patterns", () => {
 		).toBe(false);
 	});
 
-	it("tests a wildcard certificate with a sample name", () => {
-		expect(namesMatchPatterns(["*.example.com"], ["^shop\\..+$"])).toBe(false);
-		expect(namesMatchPatterns(["*.example.com"], ["^wildcard\\..+$"])).toBe(
-			true,
-		);
+	it("keeps a wildcard certificate in use while any pattern exists on the server", () => {
+		expect(
+			namesMatchPatterns(["*.example.com"], ["^app-[0-9]+\\.example\\.com$"]),
+		).toBe(true);
+		expect(namesMatchPatterns(["*.example.com"], ["^shop\\..+$"])).toBe(true);
+		expect(namesMatchPatterns(["*.example.com"], [])).toBe(false);
+	});
+
+	it("tests a plain name against each pattern", () => {
+		expect(
+			namesMatchPatterns(
+				["app-7.example.com"],
+				["^app-[0-9]+\\.example\\.com$"],
+			),
+		).toBe(true);
+		expect(
+			namesMatchPatterns(
+				["shop.example.com"],
+				["^app-[0-9]+\\.example\\.com$"],
+			),
+		).toBe(false);
+		expect(
+			namesMatchPatterns(
+				["www.example.com", "other.example.org"],
+				["^(www|app)\\.example\\.com$"],
+			),
+		).toBe(true);
+	});
+
+	it.each([
+		"(a+)+$",
+		"^(a|aa)+$",
+		"^(.*)*x$",
+		"^(a*)*$",
+		"^(\\w+\\.)+example\\.com$",
+		"(a)\\1",
+		"(?=a)a",
+		".*.*.*.*x",
+		`^${"a".repeat(250)}$`,
+		'{{ env "HOST" }}.example.com',
+	])(
+		"does not run the unsafe pattern %s and treats it as matching everything",
+		(pattern) => {
+			expect(compileHostPattern(pattern)).toBeNull();
+			const started = Date.now();
+
+			expect(namesMatchPatterns(["shop.example.com"], [pattern])).toBe(true);
+			expect(Date.now() - started).toBeLessThan(200);
+		},
+	);
+
+	it.each([
+		"^app-[0-9]+\\.example\\.com$",
+		"^(www|app)\\.example\\.com$",
+		"^[a-z]+\\.example\\.com$",
+		"{sub:[a-z]+}.example.com",
+		"^.+\\.example\\.com$",
+	])("still evaluates the ordinary pattern %s", (pattern) => {
+		expect(compileHostPattern(pattern)).not.toBeNull();
+	});
+
+	it("does not hang on a hostile pattern against a long name", () => {
+		const name = `${"a".repeat(240)}!.example.com`;
+		const started = Date.now();
+
+		expect(namesMatchPatterns([name], ["^(a+)+$"])).toBe(true);
+		expect(Date.now() - started).toBeLessThan(200);
 	});
 
 	it("reads old named groups", () => {
@@ -195,7 +284,7 @@ case "$1" in
 	ps) [ -z "$FAKE_PS_FAIL" ] || exit 1; echo abc; echo def ;;
 	inspect) [ -z "$FAKE_INSPECT_FAIL" ] || exit 1
 		echo '/web|{"traefik.tcp.routers.db.rule":"HostSNI(\`db.example.com\`)"}' ;;
-	info) echo "\${FAKE_MANAGER:-false}" ;;
+	info) [ -z "$FAKE_INFO_FAIL" ] || exit 1; echo "\${FAKE_MANAGER:-false}" ;;
 	service)
 		case "$2" in
 			ls) [ -z "$FAKE_LS_FAIL" ] || exit 1; echo svc1 ;;
@@ -225,6 +314,10 @@ esac
 
 		expect(status).not.toBe(0);
 		expect(stdout).toBe("");
+	});
+
+	it("fails when docker info fails instead of skipping the swarm services", () => {
+		expect(run({ FAKE_INFO_FAIL: "1" }).status).not.toBe(0);
 	});
 
 	it("fails when docker inspect fails", () => {
@@ -278,6 +371,59 @@ describe.each(SHELLS)("dynamic config scan under %s", (shell) => {
 
 	afterEach(() => {
 		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("reads a config file that is a symlink to a file elsewhere", () => {
+		const elsewhere = path.join(root, "elsewhere.yml");
+		writeFileSync(elsewhere, "rule: Host(`linked.example.com`)\n");
+		symlinkSync(elsewhere, path.join(dynamicDir, "linked.yml"));
+
+		const uses = parseDynamicConfigUses(scan().stdout);
+
+		expect(uses.hosts.map((item) => item.host)).toContain("linked.example.com");
+	});
+
+	it("reports a directory it cannot list as unreadable", () => {
+		if (process.getuid?.() === 0) {
+			return;
+		}
+		const locked = path.join(dynamicDir, "locked");
+		mkdirSync(locked);
+		writeFileSync(
+			path.join(locked, "hidden.yml"),
+			"rule: Host(`h.example.com`)",
+		);
+		chmodSync(locked, 0o000);
+		try {
+			expect(parseDynamicConfigUses(scan().stdout).unreadable).toBe(true);
+		} finally {
+			chmodSync(locked, 0o755);
+		}
+	});
+
+	it("keeps a punycode top-level domain whole", () => {
+		writeFileSync(
+			path.join(dynamicDir, "idn.yml"),
+			"rule: Host(`shop.example.xn--p1ai`)\n",
+		);
+
+		const uses = parseDynamicConfigUses(scan().stdout);
+
+		expect(uses.mentions).toContain("shop.example.xn--p1ai");
+		expect(uses.hosts.map((item) => item.host)).toContain(
+			"shop.example.xn--p1ai",
+		);
+	});
+
+	it("turns a Go template in a config file rule into a match-everything pattern", () => {
+		writeFileSync(
+			path.join(dynamicDir, "tpl.yml"),
+			'rule: Host(`{{ env "SUB" }}.example.com`)\n',
+		);
+
+		const uses = parseDynamicConfigUses(scan().stdout);
+
+		expect(namesMatchPatterns(["a.example.org"], uses.patterns)).toBe(true);
 	});
 
 	it("finds a rule folded over several lines", () => {

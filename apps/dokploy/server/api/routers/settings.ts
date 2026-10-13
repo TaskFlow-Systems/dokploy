@@ -72,6 +72,7 @@ import {
 	writeTraefikSetup,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
+import { assertNoTraefikDeletion } from "@dokploy/server/services/domain-overview";
 import { checkPermission } from "@dokploy/server/services/permission";
 import {
 	acquireTraefikOperation,
@@ -121,6 +122,27 @@ import {
 	publicProcedure,
 } from "../trpc";
 
+const beginTraefikOperation = async (
+	serverId: string | null | undefined,
+	label: string,
+) => {
+	const key = serverId ?? null;
+	const release = acquireTraefikOperation(key, label);
+	if (!release) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: `Traefik is busy on this server (${runningTraefikOperation(key)}). Try again when it ends.`,
+		});
+	}
+	try {
+		await assertNoTraefikDeletion(key);
+	} catch (error) {
+		release();
+		throw error;
+	}
+	return release;
+};
+
 export const settingsRouter = createTRPCRouter({
 	getWebServerSettings: protectedProcedure.query(async () => {
 		if (IS_CLOUD) {
@@ -158,16 +180,10 @@ export const settingsRouter = createTRPCRouter({
 		.mutation(async ({ input, ctx }) => {
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
-			const releaseTraefikOperation = acquireTraefikOperation(
-				input?.serverId ?? null,
+			const releaseTraefikOperation = await beginTraefikOperation(
+				input?.serverId,
 				"reload",
 			);
-			if (!releaseTraefikOperation) {
-				throw new TRPCError({
-					code: "CONFLICT",
-					message: `Traefik is busy on this server (${runningTraefikOperation(input?.serverId ?? null)}). Try again when it ends.`,
-				});
-			}
 			// Run in background so the request returns immediately; avoids proxy timeouts.
 			void reloadDockerResource("dokploy-traefik", input?.serverId)
 				.catch((err) => {
@@ -258,50 +274,64 @@ export const settingsRouter = createTRPCRouter({
 		.input(apiEnableDashboard)
 		.mutation(async ({ input, ctx }) => {
 			await assertSettingsServerAccess(ctx, input.serverId);
-			const ports = await readPorts("dokploy-traefik", input.serverId);
-			const env = await readEnvironmentVariables(
-				"dokploy-traefik",
+			const releaseTraefikOperation = await beginTraefikOperation(
 				input.serverId,
+				"dashboard toggle",
 			);
-			const preparedEnv = prepareEnvironmentVariables(env);
-			let newPorts = ports;
-			// If receive true, add 8080 to ports
-			if (input.enableDashboard) {
-				// Check if port 8080 is already in use before enabling dashboard
-				const portCheck = await checkPortInUse(8080, input.serverId);
-				if (portCheck.isInUse) {
-					const conflictInfo = portCheck.conflictingContainer
-						? ` by ${portCheck.conflictingContainer}`
-						: "";
-					throw new TRPCError({
-						code: "CONFLICT",
-						message: `Port 8080 is already in use${conflictInfo}. Please stop the conflicting service or use a different port for the Traefik dashboard.`,
+			let handedOver = false;
+			try {
+				const ports = await readPorts("dokploy-traefik", input.serverId);
+				const env = await readEnvironmentVariables(
+					"dokploy-traefik",
+					input.serverId,
+				);
+				const preparedEnv = prepareEnvironmentVariables(env);
+				let newPorts = ports;
+				// If receive true, add 8080 to ports
+				if (input.enableDashboard) {
+					// Check if port 8080 is already in use before enabling dashboard
+					const portCheck = await checkPortInUse(8080, input.serverId);
+					if (portCheck.isInUse) {
+						const conflictInfo = portCheck.conflictingContainer
+							? ` by ${portCheck.conflictingContainer}`
+							: "";
+						throw new TRPCError({
+							code: "CONFLICT",
+							message: `Port 8080 is already in use${conflictInfo}. Please stop the conflicting service or use a different port for the Traefik dashboard.`,
+						});
+					}
+					newPorts.push({
+						targetPort: 8080,
+						publishedPort: 8080,
+						protocol: "tcp",
 					});
+				} else {
+					newPorts = ports.filter((port) => port.targetPort !== 8080);
 				}
-				newPorts.push({
-					targetPort: 8080,
-					publishedPort: 8080,
-					protocol: "tcp",
-				});
-			} else {
-				newPorts = ports.filter((port) => port.targetPort !== 8080);
-			}
 
-			// Run in background so the request returns immediately; client polls /api/health.
-			// Avoids proxy timeouts (520) while Traefik is recreated.
-			void writeTraefikSetup({
-				env: preparedEnv,
-				additionalPorts: newPorts,
-				serverId: input.serverId,
-			}).catch((err) => {
-				console.error("toggleDashboard background writeTraefikSetup:", err);
-			});
-			await audit(ctx, {
-				action: "update",
-				resourceType: "settings",
-				resourceName: "toggle-dashboard",
-			});
-			return true;
+				// Run in background so the request returns immediately; client polls /api/health.
+				// Avoids proxy timeouts (520) while Traefik is recreated.
+				void writeTraefikSetup({
+					env: preparedEnv,
+					additionalPorts: newPorts,
+					serverId: input.serverId,
+				})
+					.catch((err) => {
+						console.error("toggleDashboard background writeTraefikSetup:", err);
+					})
+					.finally(releaseTraefikOperation);
+				handedOver = true;
+				await audit(ctx, {
+					action: "update",
+					resourceType: "settings",
+					resourceName: "toggle-dashboard",
+				});
+				return true;
+			} finally {
+				if (!handedOver) {
+					releaseTraefikOperation();
+				}
+			}
 		}),
 	cleanUnusedImages: adminProcedure
 		.input(apiServerSchema)
@@ -1263,6 +1293,11 @@ export const settingsRouter = createTRPCRouter({
 				});
 			}
 
+			const releaseTraefikOperation = await beginTraefikOperation(
+				input.serverId,
+				"port change",
+			);
+			let handedOver = false;
 			try {
 				const env = await readEnvironmentVariables(
 					"dokploy-traefik",
@@ -1288,12 +1323,15 @@ export const settingsRouter = createTRPCRouter({
 					env: preparedEnv,
 					additionalPorts: input.additionalPorts,
 					serverId: input.serverId,
-				}).catch((err) => {
-					console.error(
-						"updateTraefikPorts background writeTraefikSetup:",
-						err,
-					);
-				});
+				})
+					.catch((err) => {
+						console.error(
+							"updateTraefikPorts background writeTraefikSetup:",
+							err,
+						);
+					})
+					.finally(releaseTraefikOperation);
+				handedOver = true;
 				await audit(ctx, {
 					action: "update",
 					resourceType: "settings",
@@ -1312,6 +1350,10 @@ export const settingsRouter = createTRPCRouter({
 							: "Error updating Traefik ports",
 					cause: error,
 				});
+			} finally {
+				if (!handedOver) {
+					releaseTraefikOperation();
+				}
 			}
 		}),
 	getTraefikPorts: adminProcedure

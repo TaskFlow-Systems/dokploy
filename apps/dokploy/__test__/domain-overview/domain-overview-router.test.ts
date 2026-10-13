@@ -2,6 +2,9 @@ import type { DomainOverviewAccess } from "@dokploy/server/services/domain-overv
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	assertNoTraefikDeletion: vi.fn(),
+	clearStaleDeletionLock: vi.fn(),
+	recoverInterruptedTraefik: vi.fn(),
 	checkProtectedResourceAccess: vi.fn(),
 	checkSuperSessionAccess: vi.fn(),
 	createAuditLog: vi.fn(),
@@ -27,6 +30,9 @@ vi.mock("@dokploy/server/services/proprietary/audit-log", () => ({
 }));
 
 vi.mock("@dokploy/server/services/domain-overview", () => ({
+	assertNoTraefikDeletion: mocks.assertNoTraefikDeletion,
+	clearStaleDeletionLock: mocks.clearStaleDeletionLock,
+	recoverInterruptedTraefik: mocks.recoverInterruptedTraefik,
 	deleteUnusedCertificates: mocks.deleteUnusedCertificates,
 	getDomainOverview: mocks.getDomainOverview,
 	getTraefikLogs: mocks.getTraefikLogs,
@@ -427,5 +433,80 @@ describe("domain overview certificate deletion access", () => {
 			}),
 		).rejects.toBeDefined();
 		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
+	});
+});
+
+describe.each([
+	[
+		"clearStaleDeletionLock",
+		"clearStaleDeletionLock",
+		{ status: "cleared", traefik: "stopped", message: "ok" },
+	],
+	[
+		"recoverTraefik",
+		"recoverInterruptedTraefik",
+		{ status: "recovered", message: "ok" },
+	],
+] as const)("%s access", (procedure, serviceName, result) => {
+	const input = { serverId: "server-1" };
+	const call = (caller: ReturnType<typeof createCaller>) =>
+		(
+			caller.domainOverview as unknown as Record<
+				string,
+				(input: unknown) => Promise<unknown>
+			>
+		)[procedure]?.(input);
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.findServers.mockResolvedValue([{ serverId: "server-1" }]);
+		mocks.hasValidLicense.mockResolvedValue(false);
+		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
+		mocks.checkSuperSessionAccess.mockResolvedValue(null);
+		mocks[serviceName].mockResolvedValue(result);
+	});
+
+	it("is classified dangerous", async () => {
+		const { PROCEDURE_ACCESS } = await import(
+			"@/server/api/utils/procedure-access"
+		);
+
+		expect(
+			PROCEDURE_ACCESS[
+				`domainOverview.${procedure}` as keyof typeof PROCEDURE_ACCESS
+			],
+		).toBe("dangerous");
+	});
+
+	it("refuses a member without Traefik file access", async () => {
+		await expect(call(createCaller("member"))).rejects.toMatchObject({
+			code: "UNAUTHORIZED",
+		});
+		expect(mocks[serviceName]).not.toHaveBeenCalled();
+	});
+
+	it("refuses an admin without an open super session", async () => {
+		mocks.checkProtectedResourceAccess.mockResolvedValue(
+			"super-session-required",
+		);
+
+		await expect(call(createCaller("admin"))).rejects.toMatchObject({
+			code: "FORBIDDEN",
+		});
+		expect(mocks[serviceName]).not.toHaveBeenCalled();
+	});
+
+	it("refuses an API key session", async () => {
+		mocks.checkSuperSessionAccess.mockResolvedValue("api-key-write-locked");
+
+		await expect(
+			call(createCaller("admin", { authMethod: "api-key" })),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(mocks[serviceName]).not.toHaveBeenCalled();
+	});
+
+	it("runs for an admin with an open super session", async () => {
+		await expect(call(createCaller("admin"))).resolves.toMatchObject(result);
+		expect(mocks[serviceName]).toHaveBeenCalledWith("org-1", "server-1");
 	});
 });

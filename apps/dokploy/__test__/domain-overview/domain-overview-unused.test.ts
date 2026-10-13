@@ -68,7 +68,11 @@ vi.mock(
 );
 
 const {
+	assertNoTraefikDeletion,
+	clearStaleDeletionLock,
 	deleteUnusedCertificates,
+	recoverInterruptedTraefik,
+	warnAboutInterruptedTraefikDeletion,
 	deletionTiming,
 	getDomainOverview,
 	getTraefikLogs,
@@ -138,6 +142,8 @@ type Machine = {
 	logs?: string;
 	status?: string;
 	launch?: string;
+	clear?: string;
+	recover?: string;
 	fail?: Partial<Record<"routes" | "dynamic" | "acme" | "logs", unknown>>;
 };
 
@@ -151,13 +157,27 @@ const commandHandler = (machine: Machine) => async (command: string) => {
 		}
 		return { stdout: stdout ?? "", stderr: "" };
 	};
+	if (command.includes("DOKPLOY_LOCKCLEAR")) {
+		return {
+			stdout:
+				machine.clear ?? "DOKPLOY_LOCKCLEAR cleared\nDOKPLOY_TRAEFIK running\n",
+			stderr: "",
+		};
+	}
+	if (command.includes("invalid_marker")) {
+		return {
+			stdout: machine.recover ?? "DOKPLOY_RESULT recovered\n",
+			stderr: "",
+		};
+	}
 	if (command.includes(STATUS)) {
 		return { stdout: machine.status ?? "DOKPLOY_LOCK 0\n", stderr: "" };
 	}
 	if (command.includes(LAUNCH)) {
 		return {
 			stdout:
-				machine.launch ?? "DOKPLOY_LAUNCHED acme-delete-20261012T101500Z.log\n",
+				machine.launch ??
+				"DOKPLOY_LAUNCHED acme-delete-20261012T101500Z-abc123.log\n",
 			stderr: "",
 		};
 	}
@@ -229,6 +249,7 @@ beforeAll(() => {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+	deletionTiming.statusShareMs = 0;
 	workloadRows.clear();
 	mocks.select.mockImplementation(selectWorkloads);
 	mocks.findServers.mockResolvedValue([]);
@@ -650,9 +671,9 @@ describe("defect 4: the panel's own domain", () => {
 
 describe("deleting unused certificates", () => {
 	const RESULT_OK =
-		"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_BACKUP acme.json.bak-20261012T101500Z\nDOKPLOY_RESULT ok\n";
+		"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_BACKUP acme.json.bak-20261012T101500Z\nDOKPLOY_RESULT ok\n";
 	const IN_PROGRESS =
-		"DOKPLOY_LOCK 1\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_PRECHECK ok\n";
+		"DOKPLOY_LOCK 1\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_PRECHECK ok\n";
 
 	const storage = acmeDocument([
 		{ main: "live.example.com", days: 80 },
@@ -932,7 +953,7 @@ describe("deleting unused certificates", () => {
 			{ routes: routeLine("web", "live.example.com"), acme: storage },
 			[
 				"DOKPLOY_LOCK 0\n",
-				"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_RESULT jq_missing\n",
+				"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_RESULT jq_missing\n",
 			],
 		);
 
@@ -1122,7 +1143,7 @@ describe("reads during a deletion", () => {
 		useLocal({
 			routes: routeLine("web", "live.example.com"),
 			status:
-				"DOKPLOY_LOCK 1\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_PRECHECK ok\n",
+				"DOKPLOY_LOCK 1\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_PRECHECK ok\n",
 		});
 
 		const overview = await overviewFor();
@@ -1134,17 +1155,17 @@ describe("reads during a deletion", () => {
 
 	it.each([
 		[
-			"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_BACKUP acme.json.bak-20261012T101500Z\nDOKPLOY_RESULT ok\n",
+			"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_BACKUP acme.json.bak-20261012T101500Z\nDOKPLOY_RESULT ok\n",
 			"succeeded",
 			"ok",
 		],
 		[
-			"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_RESULT start_failed_restored\n",
+			"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_RESULT start_failed_restored\n",
 			"failed",
 			"start_failed_restored",
 		],
 		[
-			"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z.log\nDOKPLOY_PRECHECK ok\n",
+			"DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_PRECHECK ok\n",
 			"interrupted",
 			null,
 		],
@@ -1208,5 +1229,380 @@ describe("the per-server queue", () => {
 				(result) => (result as { error: string | null }).error !== null,
 			),
 		).toBe(true);
+	});
+});
+
+describe("a launch whose answer is lost", () => {
+	const storage = acmeDocument([{ main: "old.example.com", days: 80 }]);
+
+	beforeEach(async () => {
+		deletionTiming.pollIntervalMs = 5;
+		deletionTiming.localWaitMs = 100;
+		deletionTiming.remoteWaitMs = 100;
+		deletionTiming.watchMaxMs = 2_000;
+		while (runningTraefikOperation(null) !== null) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+	});
+
+	const lostAnswer = (status: (call: number) => string) => {
+		let calls = 0;
+		const machine = {
+			routes: routeLine("web", "live.example.com"),
+			acme: storage,
+		};
+		mocks.execAsync.mockImplementation(async (command: string) => {
+			if (command.includes(LAUNCH)) {
+				throw new Error("The command timed out");
+			}
+			if (command.includes(STATUS)) {
+				calls += 1;
+				return { stdout: status(calls), stderr: "" };
+			}
+			return commandHandler(machine)(command);
+		});
+	};
+
+	it("keeps the locks and says started, because the script may be running", async () => {
+		lostAnswer((call) =>
+			call === 1 ? "DOKPLOY_LOCK 0\n" : "DOKPLOY_LOCK 1\n",
+		);
+
+		const result = await deleteUnusedCertificates("org-1", null, [
+			"old.example.com",
+		]);
+
+		expect(result).toMatchObject({ status: "started" });
+		expect((result as { message: string }).message).toContain(
+			"did not confirm",
+		);
+		await expect(
+			deleteUnusedCertificates("org-1", null, ["old.example.com"]),
+		).rejects.toMatchObject({ code: "CONFLICT" });
+	});
+
+	it("names a log with a random suffix and watches that log", async () => {
+		const logs: string[] = [];
+		lostAnswer((call) =>
+			call === 1 ? "DOKPLOY_LOCK 0\n" : "DOKPLOY_LOCK 1\n",
+		);
+		const original = mocks.execAsync.getMockImplementation();
+		mocks.execAsync.mockImplementation(async (command: string) => {
+			if (command.includes(STATUS) && command.includes("latest='")) {
+				logs.push(command);
+			}
+			return original ? original(command) : { stdout: "", stderr: "" };
+		});
+
+		const result = await deleteUnusedCertificates("org-1", null, [
+			"old.example.com",
+		]);
+
+		expect((result as { logFile: string }).logFile).toMatch(
+			/^acme-delete-\d{8}T\d{6}Z-[0-9a-f]{6}\.log$/,
+		);
+		await new Promise((resolve) => setTimeout(resolve, 40));
+		expect(
+			logs.some((c) => c.includes((result as { logFile: string }).logFile)),
+		).toBe(true);
+	});
+
+	it("lets go once the host shows the script is gone without a result", async () => {
+		lostAnswer(() => "DOKPLOY_LOCK 0\n");
+
+		await deleteUnusedCertificates("org-1", null, ["old.example.com"]);
+		while (runningTraefikOperation(null) !== null) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+
+		expect(runningTraefikOperation(null)).toBeNull();
+	});
+
+	it("lets go once the log shows a result", async () => {
+		lostAnswer((call) =>
+			call === 1
+				? "DOKPLOY_LOCK 0\n"
+				: "DOKPLOY_LOCK 0\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_RESULT ok\n",
+		);
+
+		const result = await deleteUnusedCertificates("org-1", null, [
+			"old.example.com",
+		]);
+
+		expect(result).toMatchObject({ status: "started" });
+		while (runningTraefikOperation(null) !== null) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		expect(runningTraefikOperation(null)).toBeNull();
+	});
+
+	it("reports a result the launcher printed before it failed", async () => {
+		mocks.execAsync.mockImplementation(async (command: string) => {
+			if (command.includes(LAUNCH)) {
+				throw new ExecError("failed", {
+					command,
+					stdout: "DOKPLOY_RESULT launch_failed\n",
+					exitCode: 1,
+				});
+			}
+			return commandHandler({
+				routes: routeLine("web", "live.example.com"),
+				acme: storage,
+			})(command);
+		});
+
+		const result = await deleteUnusedCertificates("org-1", null, [
+			"old.example.com",
+		]);
+
+		expect(result).toMatchObject({ status: "failed", code: "launch_failed" });
+		expect(runningTraefikOperation(null)).toBeNull();
+	});
+});
+
+describe("labels that cannot be read", () => {
+	it("refuses the deletion when a container's labels are not valid JSON", async () => {
+		useLocal({
+			routes: "/web|{broken json",
+			acme: acmeDocument([{ main: "old.example.com", days: 80 }]),
+		});
+
+		const overview = await overviewFor();
+		const result = await deleteUnusedCertificates("org-1", null, [
+			"old.example.com",
+		]);
+
+		expect(overview.servers[0]?.usageVerified).toBe(false);
+		expect(overview.unusedCertificates).toEqual([]);
+		expect(result).toMatchObject({
+			status: "refused",
+			refused: [{ reason: "usage_unverified" }],
+		});
+	});
+});
+
+describe("backups outside the editor tree", () => {
+	it("puts backups and the lock under the base path and never under the Traefik directory", async () => {
+		useLocal({
+			routes: routeLine("web", "live.example.com"),
+			acme: acmeDocument([{ main: "old.example.com", days: 80 }]),
+		});
+		await deleteUnusedCertificates("org-1", null, ["old.example.com"]);
+
+		const launch =
+			mocks.execAsync.mock.calls
+				.map(([c]) => String(c))
+				.find((c) => c.includes(LAUNCH)) ?? "";
+		const { paths } = await import("@dokploy/server/constants");
+
+		expect(launch).toContain(`${paths().BASE_PATH}/acme-backups`);
+		expect(launch).not.toContain(`${paths().MAIN_TRAEFIK_PATH}/acme-backups`);
+		expect(launch).not.toContain(
+			`${paths().DYNAMIC_TRAEFIK_PATH}/acme.json.bak`,
+		);
+	});
+});
+
+describe("an interrupted deletion and stale locks", () => {
+	beforeEach(async () => {
+		while (runningTraefikOperation(null) !== null) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		useLocal({ routes: routeLine("web", "live.example.com") });
+	});
+
+	it("shows Traefik as left stopped when a marker exists and no script is alive", async () => {
+		useLocal({
+			routes: routeLine("web", "live.example.com"),
+			status:
+				"DOKPLOY_LOCK 0\nDOKPLOY_STALE 1\nDOKPLOY_MARKER container stopped\n",
+		});
+
+		const overview = await overviewFor();
+
+		expect(overview.servers[0]).toMatchObject({
+			staleLock: true,
+			traefikLeftStopped: { kind: "container", phase: "stopped" },
+		});
+	});
+
+	it("does not call it left stopped while a script holds the lock", async () => {
+		useLocal({
+			routes: routeLine("web", "live.example.com"),
+			status: "DOKPLOY_LOCK 1\nDOKPLOY_MARKER container stopped\n",
+		});
+
+		const overview = await overviewFor();
+
+		expect(overview.servers[0]?.traefikLeftStopped).toBeNull();
+	});
+
+	it("shows nothing special on a healthy server", async () => {
+		const overview = await overviewFor();
+
+		expect(overview.servers[0]).toMatchObject({
+			staleLock: false,
+			traefikLeftStopped: null,
+		});
+	});
+
+	it("clears a stale lock and reports Traefik's state", async () => {
+		useLocal({
+			clear: "DOKPLOY_LOCKCLEAR cleared\nDOKPLOY_TRAEFIK stopped\n",
+		});
+
+		const result = await clearStaleDeletionLock("org-1", null);
+
+		expect(result).toMatchObject({ status: "cleared", traefik: "stopped" });
+	});
+
+	it("keeps a lock whose process is alive", async () => {
+		useLocal({
+			clear: "DOKPLOY_LOCKCLEAR alive\nDOKPLOY_TRAEFIK running\n",
+		});
+
+		const result = await clearStaleDeletionLock("org-1", null);
+
+		expect(result.status).toBe("alive");
+	});
+
+	it("does not clear a lock while this process runs an operation", async () => {
+		const release = acquireTraefikOperation(null, "reload");
+		await expect(clearStaleDeletionLock("org-1", null)).rejects.toMatchObject({
+			code: "CONFLICT",
+		});
+		release?.();
+	});
+
+	it("starts Traefik again on request and reports the result", async () => {
+		useLocal({ recover: "DOKPLOY_RESULT recovered\n" });
+
+		const result = await recoverInterruptedTraefik("org-1", null);
+
+		expect(result).toMatchObject({ status: "recovered" });
+		const sent =
+			mocks.execAsync.mock.calls
+				.map(([c]) => String(c))
+				.find((c) => c.includes("invalid_marker")) ?? "";
+		expect(sent).toContain("acme-delete.marker");
+	});
+
+	it("reads a failure result the script printed before exiting non-zero", async () => {
+		mocks.execAsync.mockImplementation(async (command: string) => {
+			throw new ExecError("failed", {
+				command,
+				stdout: "DOKPLOY_RESULT recovery_failed\n",
+				exitCode: 1,
+			});
+		});
+
+		const result = await recoverInterruptedTraefik("org-1", null);
+
+		expect(result).toMatchObject({ status: "recovery_failed" });
+	});
+
+	it("does not start anything on its own when the page is read", async () => {
+		useLocal({
+			routes: routeLine("web", "live.example.com"),
+			status: "DOKPLOY_LOCK 0\nDOKPLOY_MARKER container stopped\n",
+		});
+
+		await overviewFor();
+
+		const sent = mocks.execAsync.mock.calls.map(([c]) => String(c));
+		expect(sent.some((c) => c.includes("invalid_marker"))).toBe(false);
+		expect(sent.some((c) => c.includes("docker start"))).toBe(false);
+	});
+});
+
+describe("other Traefik operations during a deletion", () => {
+	beforeEach(() => {
+		useLocal({});
+	});
+
+	it("refuses while the host lock is held", async () => {
+		useLocal({ status: "DOKPLOY_LOCK 1\n" });
+
+		await expect(assertNoTraefikDeletion(null)).rejects.toMatchObject({
+			code: "CONFLICT",
+		});
+	});
+
+	it("refuses while a marker shows an interrupted deletion", async () => {
+		useLocal({ status: "DOKPLOY_LOCK 0\nDOKPLOY_MARKER container stopped\n" });
+
+		await expect(assertNoTraefikDeletion(null)).rejects.toThrow(
+			/Start Traefik again/,
+		);
+	});
+
+	it("allows the operation on a clean server and when the host cannot be asked", async () => {
+		await expect(assertNoTraefikDeletion(null)).resolves.toBeUndefined();
+		mocks.execAsync.mockRejectedValue(new Error("unreachable"));
+		await expect(assertNoTraefikDeletion(null)).resolves.toBeUndefined();
+	});
+});
+
+describe("one status poll for the watcher and the page", () => {
+	const storage = acmeDocument([{ main: "old.example.com", days: 80 }]);
+
+	it("answers page reads from the watcher's last poll", async () => {
+		deletionTiming.pollIntervalMs = 20;
+		deletionTiming.statusShareMs = 5_000;
+		deletionTiming.localWaitMs = 30;
+		deletionTiming.watchMaxMs = 400;
+		while (runningTraefikOperation(null) !== null) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+		}
+		const machine = {
+			routes: routeLine("web", "live.example.com"),
+			acme: storage,
+		};
+		mocks.execAsync.mockImplementation(async (command: string) => {
+			if (command.includes(STATUS)) {
+				return {
+					stdout:
+						"DOKPLOY_LOCK 1\nDOKPLOY_LOGFILE acme-delete-20261012T101500Z-abc123.log\nDOKPLOY_PRECHECK ok\n",
+					stderr: "",
+				};
+			}
+			return commandHandler(machine)(command);
+		});
+		await deleteUnusedCertificates("org-1", null, ["old.example.com"]);
+		const before = mocks.execAsync.mock.calls.filter(([c]) =>
+			String(c).includes(STATUS),
+		).length;
+
+		await overviewFor();
+		await overviewFor();
+
+		const after = mocks.execAsync.mock.calls.filter(([c]) =>
+			String(c).includes(STATUS),
+		).length;
+		expect(after - before).toBeLessThanOrEqual(2);
+		expect(
+			mocks.execAsync.mock.calls
+				.slice(before)
+				.filter(
+					([c]) =>
+						String(c).includes("latest=''") || String(c).includes('latest=""'),
+				).length,
+		).toBeLessThanOrEqual(2);
+	});
+});
+
+describe("the warning at panel start", () => {
+	it("logs when a marker exists and no script is alive, and stays quiet otherwise", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		useLocal({ status: "DOKPLOY_LOCK 0\nDOKPLOY_MARKER container stopped\n" });
+		await warnAboutInterruptedTraefikDeletion();
+		expect(warn).toHaveBeenCalledTimes(1);
+
+		useLocal({ status: "DOKPLOY_LOCK 1\nDOKPLOY_MARKER container stopped\n" });
+		await warnAboutInterruptedTraefikDeletion();
+		useLocal({});
+		await warnAboutInterruptedTraefikDeletion();
+		expect(warn).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
 	});
 });

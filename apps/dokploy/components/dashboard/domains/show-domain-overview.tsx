@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
+import { InterruptedDeletion } from "./interrupted-deletion";
 import {
 	CountBadge,
 	DnsCell,
@@ -325,6 +326,15 @@ export const ShowDomainOverview = () => {
 							certificatesVisible={data.certificatesVisible}
 						/>
 					)}
+					{data?.servers.map((item) => (
+						<InterruptedDeletion
+							key={`recovery-${item.serverId ?? "local"}`}
+							serverId={item.serverId}
+							name={item.name}
+							traefikLeftStopped={item.traefikLeftStopped}
+							staleLock={item.staleLock}
+						/>
+					))}
 					{data?.servers.map((item) =>
 						item.lastDeletion ? (
 							<AlertBlock

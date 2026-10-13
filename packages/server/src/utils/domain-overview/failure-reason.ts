@@ -11,6 +11,11 @@ const IPV4 = /\b\d{1,3}(?:\.\d{1,3}){3}\b(?::\d+)?/g;
 const CONNECTION_TARGET =
 	/\b(ENOTFOUND|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|ECONNRESET|EAI_AGAIN|EPIPE)\b(\s+)(?!\[)[^\s,;]+/g;
 
+const USER_AT_HOST = /[\w.-]+@[\w.-]+/g;
+const HOST_PHRASE =
+	/\b(connect to host|could not resolve hostname|resolve hostname|host key for|known_hosts for|no route to host)(\s+)[^\s,;:]+/gi;
+const QUOTED_HOST = /(['"])[\w-]+(?:\.[\w-]+)+\1/g;
+
 export const sanitizeFailureText = (text: string) => {
 	const firstLine =
 		text
@@ -20,6 +25,9 @@ export const sanitizeFailureText = (text: string) => {
 			.find((line) => line.length > 0) ?? "";
 	const cleaned = firstLine
 		.replace(SECRET_ASSIGNMENT, "[removed]")
+		.replace(USER_AT_HOST, "[removed]")
+		.replace(HOST_PHRASE, "$1$2[host]")
+		.replace(QUOTED_HOST, "[host]")
 		.replace(BRACKETED_ADDRESS, "[address]")
 		.replace(CONNECTION_TARGET, "$1$2[host]")
 		.replace(IPV6, "[address]")

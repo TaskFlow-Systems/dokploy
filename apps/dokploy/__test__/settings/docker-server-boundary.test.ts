@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	assertNoTraefikDeletion: vi.fn(),
 	assertLocalHostAccess: vi.fn(),
 	audit: vi.fn(),
 	checkGPUStatus: vi.fn(),
@@ -152,6 +153,10 @@ vi.mock("@dokploy/server/db", () => ({
 	db: {},
 }));
 
+vi.mock("@dokploy/server/services/domain-overview", () => ({
+	assertNoTraefikDeletion: mocks.assertNoTraefikDeletion,
+}));
+
 vi.mock("@dokploy/server/services/permission", () => ({
 	checkPermission: mocks.checkPermission,
 }));
@@ -250,6 +255,7 @@ describe("settings Docker server boundary", () => {
 			message: "Docker cleanup has been initiated in the background",
 		});
 		mocks.reloadDockerResource.mockResolvedValue(undefined);
+		mocks.assertNoTraefikDeletion.mockResolvedValue(undefined);
 		mocks.findServerById.mockResolvedValue({
 			enableDockerCleanup: false,
 			organizationId: "org-1",
@@ -900,4 +906,83 @@ describe("panel host update lock", () => {
 		await expect(createCaller().updateServer()).resolves.toBe(true);
 		expect(mocks.startServerUpdate).toHaveBeenCalledTimes(1);
 	});
+});
+
+describe("Traefik operations next to a certificate deletion", () => {
+	const ports = {
+		additionalPorts: [
+			{ protocol: "tcp" as const, publishedPort: 8443, targetPort: 8443 },
+		],
+		serverId: "server-1",
+	};
+
+	const operations = [
+		["reload", () => createCaller().reloadTraefik({ serverId: "server-1" })],
+		[
+			"dashboard toggle",
+			() =>
+				createCaller().toggleDashboard({
+					enableDashboard: false,
+					serverId: "server-1",
+				}),
+		],
+		["port change", () => createCaller().updateTraefikPorts(ports)],
+	] as const;
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.checkPermission.mockResolvedValue(undefined);
+		mocks.hasValidLicense.mockResolvedValue(true);
+		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
+		mocks.reloadDockerResource.mockResolvedValue(undefined);
+		mocks.assertNoTraefikDeletion.mockResolvedValue(undefined);
+		mocks.readPorts.mockResolvedValue([]);
+		mocks.readEnvironmentVariables.mockResolvedValue("");
+		mocks.checkPortInUse.mockResolvedValue({ isInUse: false });
+		mocks.writeTraefikSetup.mockResolvedValue(undefined);
+	});
+
+	it.each(operations)(
+		"refuses a %s while the host reports a deletion",
+		async (_name, run) => {
+			mocks.assertNoTraefikDeletion.mockRejectedValue(
+				Object.assign(new Error("deletion running"), { code: "CONFLICT" }),
+			);
+
+			await expect(run()).rejects.toThrow("deletion running");
+
+			expect(mocks.reloadDockerResource).not.toHaveBeenCalled();
+			expect(mocks.writeTraefikSetup).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(operations)(
+		"frees the lock after a refused %s",
+		async (_name, run) => {
+			mocks.assertNoTraefikDeletion.mockRejectedValueOnce(new Error("busy"));
+			await expect(run()).rejects.toThrow("busy");
+
+			await expect(run()).resolves.toBe(true);
+		},
+	);
+
+	it.each(operations)(
+		"refuses a %s while a deletion holds the in-process lock",
+		async (_name, run) => {
+			const { acquireTraefikOperation } = await import(
+				"@dokploy/server/setup/traefik-operation-lock"
+			);
+			const release = acquireTraefikOperation(
+				"server-1",
+				"certificate deletion",
+			);
+
+			await expect(run()).rejects.toMatchObject({ code: "CONFLICT" });
+			release?.();
+
+			expect(mocks.reloadDockerResource).not.toHaveBeenCalled();
+			expect(mocks.writeTraefikSetup).not.toHaveBeenCalled();
+			expect(mocks.assertNoTraefikDeletion).not.toHaveBeenCalled();
+		},
+	);
 });

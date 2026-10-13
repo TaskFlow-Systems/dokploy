@@ -198,7 +198,8 @@ export const readMonitoringConfig = async (readAll = false) => {
 
 // ACME storage and uploaded certificates hold TLS private keys, so the generic
 // Traefik file editor only opens them when the caller passed the super session
-// check (allowProtected).
+// check (allowProtected). Every sibling whose name starts with acme.json is
+// covered too: backups made by operators or Traefik hold the same keys.
 export const isProtectedTraefikPath = (
 	configPath: string,
 	serverId?: string,
@@ -209,7 +210,7 @@ export const isProtectedTraefikPath = (
 	const fileName = path.basename(resolvedPath).toLowerCase();
 
 	return (
-		fileName === "acme.json" ||
+		fileName.startsWith("acme.json") ||
 		fileName.endsWith(".key") ||
 		resolvedPath === certificatesPath ||
 		resolvedPath.startsWith(`${certificatesPath}${path.sep}`)

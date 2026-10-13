@@ -39,6 +39,34 @@ describe("failure reason", () => {
 		).not.toContain("AAAAB3NzaC1yc2E");
 	});
 
+	it.each([
+		[
+			"root@build.example.com: Permission denied (publickey).",
+			"build.example.com",
+		],
+		[
+			"ssh: connect to host build.example.com port 22: Connection refused",
+			"build.example.com",
+		],
+		[
+			"ssh: Could not resolve hostname build.example.com: Name or service not known",
+			"build.example.com",
+		],
+		[
+			"Warning: Permanently added 'build.example.com' (ED25519) to the list",
+			"build.example.com",
+		],
+		[
+			"Host key verification failed for ops@build.example.com",
+			"build.example.com",
+		],
+	])("strips the host name in %s", (text, leaked) => {
+		const result = sanitizeFailureText(text);
+
+		expect(result).not.toContain(leaked);
+		expect(result.length).toBeGreaterThan(0);
+	});
+
 	it("is at most about 200 characters", () => {
 		expect(sanitizeFailureText("x ".repeat(400)).length).toBeLessThanOrEqual(
 			203,
