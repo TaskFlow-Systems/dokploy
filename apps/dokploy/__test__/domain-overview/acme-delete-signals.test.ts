@@ -189,10 +189,18 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 					timeout: 80_000,
 				});
 
-			it("counts the wait for the stop in time, not in rounds", () => {
-				const result = exec({ waitSeconds: 1 }, { FAKE_STATE_HANG: "1" });
+			// Where only "inspect" hangs, stop and start answer at once, so a wide
+			// limit for them costs no time. A narrow one turns a start that stalls
+			// on a busy runner into traefik_not_restarted.
+			const wideStopLimit = { stopSeconds: 30 };
 
-				expect(resultOf(result.stdout)).toBe("stop_failed");
+			it("counts the wait for the stop in time, not in rounds", () => {
+				const result = exec(
+					{ waitSeconds: 1, ...wideStopLimit },
+					{ FAKE_STATE_HANG: "1" },
+				);
+
+				expect(resultOf(result.stdout), result.stdout).toBe("stop_failed");
 				const calls = callsOf();
 				const stopAt = calls.findIndex((c) => c.startsWith("stop "));
 				const startAt = calls.findIndex((c) => c.startsWith("start "));
@@ -206,11 +214,11 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 				const started = Date.now();
 
 				const result = exec(
-					{ waitSeconds: 60, deadlineSeconds: 2 },
+					{ waitSeconds: 60, deadlineSeconds: 2, ...wideStopLimit },
 					{ FAKE_STATE_HANG: "1" },
 				);
 
-				expect(["stop_failed", "deadline_exceeded"]).toContain(
+				expect(["stop_failed", "deadline_exceeded"], result.stdout).toContain(
 					resultOf(result.stdout),
 				);
 				expect(Date.now() - started).toBeLessThan(20_000);

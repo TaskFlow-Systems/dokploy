@@ -21,7 +21,7 @@ import {
 	buildAcmeDeleteScript,
 	parseDeletionStatus,
 } from "@dokploy/server/utils/domain-overview/acme-delete";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
 
 const found = new Map<string, string | null>();
 
@@ -245,10 +245,45 @@ export let markerFile: string;
 export let backupDir: string;
 export let logDir: string;
 
+// macOS checks a new executable file on its first run. That takes a quarter of
+// a second on an idle machine and longer on a busy one, and a copy of the same
+// script is a new file again. Written per test, the shims paid for that check
+// several times in every test, and it could land inside a docker call with a
+// time limit. So each shim exists once per test file, is run once here,
+// outside any limit, and is only linked afterwards.
+const SHEBANG = "#!/bin/sh\n";
+const WARM_UP = "ACME_DELETE_TEST_WARM_UP";
+const shimDir = mkdtempSync(path.join(tmpdir(), "acme-delete-shims-"));
+const shims = new Map<string, string>();
+
+const shimFor = (content: string) => {
+	const known = shims.get(content);
+	if (known) {
+		return known;
+	}
+	const file = path.join(shimDir, String(shims.size));
+	const warmable = content.startsWith(SHEBANG);
+	writeFileSync(
+		file,
+		warmable
+			? `${SHEBANG}[ -z "$${WARM_UP}" ] || exit 0\n${content.slice(SHEBANG.length)}`
+			: content,
+	);
+	chmodSync(file, 0o755);
+	if (warmable) {
+		spawnSync(file, { env: { ...process.env, [WARM_UP]: "1" } });
+	}
+	shims.set(content, file);
+	return file;
+};
+
+afterAll(() => {
+	rmSync(shimDir, { recursive: true, force: true });
+});
+
 export const writeExecutable = (file: string, content: string) => {
 	rmSync(file, { force: true });
-	writeFileSync(file, content);
-	chmodSync(file, 0o755);
+	symlinkSync(shimFor(content), file);
 };
 
 export const TIMEOUT_SHIM = `#!/bin/sh
@@ -312,7 +347,7 @@ export const setupBin = (options: {
 		writeFileSync(path.join(binDir, "setsid.py"), SETSID_SHIM);
 		writeExecutable(
 			path.join(binDir, "setsid"),
-			`#!/bin/sh\nexec ${which("python3")} ${path.join(binDir, "setsid.py")} "$@"\n`,
+			`#!/bin/sh\nexec ${which("python3")} "$(dirname "$0")/setsid.py" "$@"\n`,
 		);
 	}
 	rmSync(path.join(binDir, "ls"), { force: true });
