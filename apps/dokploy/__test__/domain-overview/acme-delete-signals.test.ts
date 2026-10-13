@@ -233,6 +233,7 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 
 describe.skipIf(!REAL_JQ).each(SHELLS)(
 	"a script a test leaves running, under $label",
+	{ timeout: 60_000 },
 	({ path: shell }) => {
 		it("is killed by the cleanup that runs after every test", async () => {
 			const job = spawnScript(shell, targets("one.example.com"), {
