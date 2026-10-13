@@ -3,6 +3,7 @@ import http from "node:http";
 import {
 	cleanupOldDokployImages,
 	createDefaultMiddlewares,
+	createDefaultProbeShield,
 	createDefaultServerTraefikConfig,
 	createDefaultTraefikConfig,
 	IS_CLOUD,
@@ -151,6 +152,7 @@ void app.prepare().then(async () => {
 		console.log(`Server Started on: http://${HOST}:${PORT}`);
 		if (process.env.NODE_ENV === "production" && !IS_CLOUD) {
 			createDefaultMiddlewares();
+			createDefaultProbeShield();
 			await initializeNetwork();
 			await initCronJobs();
 			await initSchedules();
