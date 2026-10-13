@@ -6,7 +6,10 @@ export type Row = Overview["rows"][number];
 export type UnusedCertificate = Overview["unusedCertificates"][number];
 type DnsStatus = Row["dns"]["status"];
 
-const DNS_STATUS: Record<DnsStatus, { label: string; className: string }> = {
+const DNS_STATUS: Record<
+	DnsStatus,
+	{ label: string; className: string; hint?: string }
+> = {
 	points_to_this_server: {
 		label: "Points to this server",
 		className: "text-emerald-600 dark:text-emerald-400",
@@ -14,6 +17,7 @@ const DNS_STATUS: Record<DnsStatus, { label: string; className: string }> = {
 	points_to_other_address: {
 		label: "Points to another address",
 		className: "text-yellow-600 dark:text-yellow-400",
+		hint: "Expected when a load balancer, CDN or proxy stands in front of this server. The page cannot check where that address forwards to.",
 	},
 	server_address_unknown: {
 		label: "Server address unknown",
@@ -52,6 +56,11 @@ export const DnsCell = ({ dns }: { dns: Row["dns"] }) => {
 			<span className={cn("font-medium", status.className)}>
 				{status.label}
 			</span>
+			{status.hint && (
+				<span className="max-w-xs text-xs text-muted-foreground">
+					{status.hint}
+				</span>
+			)}
 			{dns.addresses.length > 0 && (
 				<div className="flex flex-col gap-0.5 font-mono text-xs text-muted-foreground">
 					{dns.addresses.map((address) => (
