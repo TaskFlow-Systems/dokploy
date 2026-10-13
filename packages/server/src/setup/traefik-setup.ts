@@ -632,12 +632,22 @@ export const PROBE_SHIELD_EXEMPT_REGEXP = `(?i)^(?:${PROBE_SHIELD_EXEMPT_PREFIXE
 // it is the one exempt route where %2F is expected.
 export const PROBE_SHIELD_API_FILES_REGEXP = `(?i)^/api/v4/projects${PROBE_SHIELD_SEGMENT}/repository/files/.+$`;
 
-// Traefik keeps %2F encoded and decodes %5C, so ..%2F and ..\ survive its path cleaning.
-// An exemption must never be a way to walk out of its prefix.
-export const PROBE_SHIELD_ENCODED_SEPARATOR_REGEXP = "(?i)(%2f|%5c|[\\\\])";
-export const PROBE_SHIELD_TRAVERSAL_REGEXP = `(?i)(${PROBE_SHIELD_SEPARATOR})[.][.](${PROBE_SHIELD_SEPARATOR}|$)`;
+// Everything a backend could read as a way out of an exempt prefix. Traefik cleans plain
+// "..", keeps %2F and %3B encoded and decodes %5C; servers such as Tomcat drop ";..." from
+// a segment, so "..;/" climbs there; %25 covers a backend that decodes twice.
+const PROBE_SHIELD_CLIMB = [
+	"[.][.]",
+	";",
+	"%3b",
+	"%5c",
+	"[\\\\]",
+	"%25",
+	"%00",
+];
+export const PROBE_SHIELD_EXEMPT_UNSAFE_REGEXP = `(?i)(${["%2f", ...PROBE_SHIELD_CLIMB].join("|")})`;
+export const PROBE_SHIELD_API_FILES_UNSAFE_REGEXP = `(?i)(${PROBE_SHIELD_CLIMB.join("|")})`;
 
-export const PROBE_SHIELD_RULE = `PathRegexp(\`${PROBE_SHIELD_SECRET_REGEXP}\`) && (!PathRegexp(\`${PROBE_SHIELD_EXEMPT_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_ENCODED_SEPARATOR_REGEXP}\`)) && (!PathRegexp(\`${PROBE_SHIELD_API_FILES_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_TRAVERSAL_REGEXP}\`))`;
+export const PROBE_SHIELD_RULE = `PathRegexp(\`${PROBE_SHIELD_SECRET_REGEXP}\`) && (!PathRegexp(\`${PROBE_SHIELD_EXEMPT_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_EXEMPT_UNSAFE_REGEXP}\`)) && (!PathRegexp(\`${PROBE_SHIELD_API_FILES_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_API_FILES_UNSAFE_REGEXP}\`))`;
 
 const PROBE_SHIELD_HEADER = `# Answers requests for secret files (.env*, .git, .aws, .ssh, .docker, ...) with a 404
 # from Traefik itself, on every host, so they never reach a deployed application.
@@ -650,7 +660,8 @@ const PROBE_SHIELD_HEADER = `# Answers requests for secret files (.env*, .git, .
 #   GitLab: /{group}/{project}/-/(blob|raw|tree|blame|edit|new|update|preview|commits)/{ref}/...
 #     /-/ide/project/... and /api/v4/projects/{id}/repository/files/...
 #   Nextcloud and ownCloud: /remote.php/(dav|webdav)/... and /public.php/(dav|webdav)/...
-# A path with ..%2F or ..\\ in it is never let through. Git over HTTP on a bare repository
+# A path with "..", ";", an encoded slash or backslash, or %25 in it is never let through
+# (the GitLab files API alone may use %2F). Git over HTTP on a bare repository
 # (/{owner}/{repo}.git/...) is not blocked at all. Git over HTTP on a repository with a
 # working tree (/project/.git/info/refs) stays blocked: with a query string, the same URL
 # is what a plain file server answers with the file.

@@ -32,18 +32,13 @@ const ruleParts = () => {
 		.map((source: string) => new RegExp(source.replace(/^\(\?i\)/, ""), "i"));
 };
 
-const [secret, exempt, encodedSeparator, apiFiles, traversal] = ruleParts() as [
-	RegExp,
-	RegExp,
-	RegExp,
-	RegExp,
-	RegExp,
-];
+const [secret, exempt, exemptUnsafe, apiFiles, apiFilesUnsafe] =
+	ruleParts() as [RegExp, RegExp, RegExp, RegExp, RegExp];
 
 const isBlocked = (requestPath: string) =>
 	secret.test(requestPath) &&
-	(!exempt.test(requestPath) || encodedSeparator.test(requestPath)) &&
-	(!apiFiles.test(requestPath) || traversal.test(requestPath));
+	(!exempt.test(requestPath) || exemptUnsafe.test(requestPath)) &&
+	(!apiFiles.test(requestPath) || apiFilesUnsafe.test(requestPath));
 
 const PANEL_API_DIR = path.resolve(__dirname, "../../pages/api");
 
@@ -335,6 +330,27 @@ describe("probe shield path pattern", () => {
 				expect(isBlocked(`${prefix}/a${climb}${climb}.git%2Fconfig`)).toBe(
 					true,
 				);
+			}
+		}
+	});
+
+	// Tomcat and Jetty drop ";..." from a segment, so "..;/" is ".." to them, and a
+	// backend that decodes twice reads %252e%252e as "..".
+	it("never exempts a path that a backend could read as climbing out", () => {
+		const prefixes = [
+			"/o/r/src/branch/main",
+			"/o/r/_edit/main",
+			"/api/v1/repos/o/r/contents",
+			"/g/p/-/blob/main",
+			"/-/ide/project/g/p/edit/main/-",
+			"/api/v4/projects/1/repository/files",
+			"/remote.php/dav/files/u",
+		];
+		const climbs = ["..;/", "..;x=1/", "..%3B/", "..%3b/", ";/", "%252e%252e/"];
+		for (const prefix of prefixes) {
+			for (const climb of climbs) {
+				expect(isBlocked(`${prefix}/${climb}.env`)).toBe(true);
+				expect(isBlocked(`${prefix}/${climb.repeat(6)}.git/config`)).toBe(true);
 			}
 		}
 	});
