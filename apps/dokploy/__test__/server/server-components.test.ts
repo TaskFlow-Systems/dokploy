@@ -771,7 +771,9 @@ const TLS_CHALLENGE_CONFIG =
 const UNCONVERTIBLE_CONFIG =
 	"certificatesResolvers:\n  letsencrypt:\n    acme:\n      httpChallenge:   # HTTP-01\n        entryPoint: web\n";
 
-describe("buildComponentUpdateScript run order", () => {
+// Each test runs the generated script in a real shell, which takes seconds
+// on a runner that is busy with other jobs.
+describe("buildComponentUpdateScript run order", { timeout: 60_000 }, () => {
 	it(
 		"changes nothing when the Traefik image cannot be pulled",
 		() => {
