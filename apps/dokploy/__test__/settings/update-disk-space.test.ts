@@ -152,6 +152,12 @@ describe("update disk space", () => {
 			requiredBytes: 4_450_000_000,
 			oldImageCount: 1,
 			oldImageBytes: 1_500_000_000,
+			oldImages: [
+				expect.objectContaining({
+					id: "sha256:old",
+					uniqueSizeBytes: 1_500_000_000,
+				}),
+			],
 			buildCacheBytes: 6_193_000_000,
 		});
 	});
@@ -166,6 +172,7 @@ describe("update disk space", () => {
 			requiredBytes: null,
 			oldImageCount: 0,
 			oldImageBytes: 0,
+			oldImages: [],
 			buildCacheBytes: 0,
 		});
 	});

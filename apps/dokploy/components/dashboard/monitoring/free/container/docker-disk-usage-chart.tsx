@@ -41,21 +41,22 @@ const chartConfig = {
 	value: {
 		label: "Size",
 	},
+	// The same colours as in the disk space card above it on the page.
 	images: {
 		label: "Images",
-		color: "hsl(var(--chart-1))",
+		color: "var(--disk-images)",
 	},
 	containers: {
 		label: "Containers",
-		color: "hsl(var(--chart-2))",
+		color: "var(--disk-containers)",
 	},
 	volumes: {
 		label: "Volumes",
-		color: "hsl(var(--chart-3))",
+		color: "var(--disk-volumes)",
 	},
 	buildCache: {
 		label: "Build Cache",
-		color: "hsl(var(--chart-4))",
+		color: "var(--disk-build-cache)",
 	},
 } satisfies ChartConfig;
 

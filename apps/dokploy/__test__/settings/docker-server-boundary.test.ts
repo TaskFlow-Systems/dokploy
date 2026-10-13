@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
 	readPorts: vi.fn(),
 	recreateDirectory: vi.fn(),
 	reloadDockerResource: vi.fn(),
+	refreshDiskUsage: vi.fn(),
 	removeOldDokployImages: vi.fn(),
 	removeJob: vi.fn(),
 	schedule: vi.fn(),
@@ -76,6 +77,7 @@ const redactWebServerSettings = <T>(settings: T) => settings;
 vi.mock("@dokploy/server", async () => ({
 	CLEANUP_CRON_JOB: "0 0 * * *",
 	DEFAULT_UPDATE_DATA: {},
+	diskHistoryInputSchema: (await import("zod")).z.any(),
 	dockerDiskUsageDetailLimitSchema: (await import("zod")).z.any(),
 	DOKPLOY_KEEP_IMAGES_MAX: 5,
 	DOKPLOY_KEEP_IMAGES_MIN: 3,
@@ -131,6 +133,7 @@ vi.mock("@dokploy/server", async () => ({
 	readPorts: mocks.readPorts,
 	recreateDirectory: mocks.recreateDirectory,
 	reloadDockerResource: mocks.reloadDockerResource,
+	refreshDiskUsage: mocks.refreshDiskUsage,
 	removeOldDokployImages: mocks.removeOldDokployImages,
 	sendDockerCleanupNotifications: mocks.sendDockerCleanupNotifications,
 	setupGPUSupport: mocks.setupGPUSupport,
@@ -247,6 +250,7 @@ describe("settings Docker server boundary", () => {
 		});
 		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
 		mocks.cleanupBuilders.mockResolvedValue(undefined);
+		mocks.refreshDiskUsage.mockResolvedValue(undefined);
 		mocks.cleanupContainers.mockResolvedValue(undefined);
 		mocks.cleanupImages.mockResolvedValue(undefined);
 		mocks.cleanupSystem.mockResolvedValue(undefined);
@@ -463,6 +467,23 @@ describe("settings Docker server boundary", () => {
 
 		expect(mocks.removeOldDokployImages).toHaveBeenCalledTimes(1);
 		expect(mocks.cleanupBuilders).not.toHaveBeenCalled();
+	});
+
+	it("samples the disk after a cleanup, and answers even when that fails", async () => {
+		const space = { availableBytes: 2, oldImageCount: 0 };
+		mocks.isServerUpdateRunning.mockReturnValue(false);
+		mocks.getUpdateDiskSpace.mockResolvedValue(space);
+		mocks.refreshDiskUsage.mockRejectedValue(new Error("docker is down"));
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+
+		await expect(
+			createCaller().freeUpdateDiskSpace({ buildCache: false }),
+		).resolves.toEqual(space);
+
+		expect(mocks.refreshDiskUsage).toHaveBeenCalledWith({ force: true });
+		consoleError.mockRestore();
 	});
 
 	it("clears the build cache only when asked", async () => {
