@@ -56,6 +56,11 @@ export const readTraefikLogOutput = (stdout: string): TraefikLogReadResult => {
 };
 
 const ACME_LINE = /acme|certificate|letsencrypt|tls-alpn/i;
+// Traefik colours its console output when it runs with a TTY.
+const ANSI_CODE = new RegExp(
+	`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`,
+	"g",
+);
 
 export const selectAcmeLogLines = (
 	output: string,
@@ -63,15 +68,40 @@ export const selectAcmeLogLines = (
 ) =>
 	output
 		.split("\n")
-		.map((line) => line.trimEnd())
+		.map((line) => line.replace(ANSI_CODE, "").trimEnd())
 		.filter((line) => line.length > 0 && ACME_LINE.test(line))
 		.slice(-limit);
 
-export const readLogLevel = (line: string) =>
-	line.match(/\blevel"?[=:]\s*"?([a-z]+)/i)?.[1]?.toLowerCase() ?? null;
+const LOG_TIMESTAMP =
+	/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[\d.]*(?:Z|[+-]\d{2}:\d{2})/;
+const CONSOLE_LEVELS: Record<string, string> = {
+	TRC: "trace",
+	DBG: "debug",
+	INF: "info",
+	WRN: "warn",
+	ERR: "error",
+	FTL: "fatal",
+	PNC: "panic",
+};
+const CONSOLE_LEVEL = new RegExp(
+	`${LOG_TIMESTAMP.source}\\s+(${Object.keys(CONSOLE_LEVELS).join("|")})\\b`,
+);
+
+// Traefik v3 writes "<time> ERR <message> key=value" by default; the
+// level= and time= fields only exist in the logfmt and JSON formats.
+export const readLogLevel = (line: string) => {
+	const field = line.match(/\blevel"?[=:]\s*"?([a-z]+)/i)?.[1];
+	if (field) {
+		return field.toLowerCase();
+	}
+	const short = line.match(CONSOLE_LEVEL)?.[1];
+	return short ? (CONSOLE_LEVELS[short] ?? null) : null;
+};
 
 export const readLogTime = (line: string) =>
-	line.match(/\btime"?[=:]\s*"?([^"\s,}]+)/)?.[1] ?? null;
+	line.match(/\btime"?[=:]\s*"?([^"\s,}]+)/)?.[1] ??
+	line.match(LOG_TIMESTAMP)?.[0] ??
+	null;
 
 export const isErrorLine = (line: string) => readLogLevel(line) === "error";
 
