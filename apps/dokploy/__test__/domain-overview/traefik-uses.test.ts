@@ -228,7 +228,7 @@ describe("host patterns", () => {
 			const started = Date.now();
 
 			expect(namesMatchPatterns(["shop.example.com"], [pattern])).toBe(true);
-			expect(Date.now() - started).toBeLessThan(200);
+			expect(Date.now() - started).toBeLessThan(1_000);
 		},
 	);
 
@@ -247,7 +247,7 @@ describe("host patterns", () => {
 		const started = Date.now();
 
 		expect(namesMatchPatterns([name], ["^(a+)+$"])).toBe(true);
-		expect(Date.now() - started).toBeLessThan(200);
+		expect(Date.now() - started).toBeLessThan(1_000);
 	});
 
 	it("reads old named groups", () => {

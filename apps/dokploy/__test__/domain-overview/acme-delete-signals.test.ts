@@ -224,7 +224,7 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 					.split("\n")
 					.filter(Boolean)
 					.map(Number);
-				await waitFor(() => pids.every((pid) => !alive(pid)), 5_000);
+				await waitFor(() => pids.every((pid) => !alive(pid)));
 				expect(pids.length).toBeGreaterThan(0);
 			});
 		});
@@ -245,7 +245,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 
 			killLeftovers();
 
-			await waitFor(() => !alive(pid), 5_000);
+			await waitFor(() => !alive(pid));
 			expect(job.child.signalCode).toBe("SIGKILL");
 		});
 	},
