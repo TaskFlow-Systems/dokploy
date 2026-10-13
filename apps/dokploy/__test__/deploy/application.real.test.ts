@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import type { ApplicationNested } from "@dokploy/server";
 import { paths } from "@dokploy/server/constants";
@@ -198,6 +198,17 @@ async function cleanupFiles(appName: string) {
 	}
 }
 
+const printDeploymentLog = (logPath: string | undefined) => {
+	if (!logPath || !existsSync(logPath)) {
+		console.log("📄 The failed test left no deployment log");
+		return;
+	}
+	const lines = readFileSync(logPath, "utf8").trimEnd().split("\n");
+	console.log(
+		`📄 Last lines of the deployment log (${lines.length} in total):\n${lines.slice(-80).join("\n")}`,
+	);
+};
+
 // A deploy ends in a swarm service, so a running daemon alone is not enough.
 const hasSwarm = () => {
 	try {
@@ -213,8 +224,12 @@ const hasSwarm = () => {
 };
 
 // CI never skips: a runner that lost Docker has to fail, not go quiet.
+// These tests clone from GitHub and resolve base images at a registry, so one
+// failed attempt is retried: it may be the network, and its build log is
+// printed either way.
 describe.skipIf(!process.env.CI && !hasSwarm())(
 	"deployApplication - REAL Execution Tests",
+	{ timeout: REAL_TEST_TIMEOUT, retry: 1 },
 	() => {
 		let currentAppName: string;
 		let currentDeployment: any;
@@ -251,7 +266,13 @@ describe.skipIf(!process.env.CI && !hasSwarm())(
 			);
 		});
 
-		afterEach(async () => {
+		afterEach(async ({ task }) => {
+			// The cleanup below removes the build log, the only place where a
+			// failed clone or build says why.
+			if (task.result?.state === "fail") {
+				printDeploymentLog(currentDeployment?.logPath);
+			}
+
 			// ALWAYS cleanup, even if test failed or passed
 			console.log(`\n🧹 Cleaning up test: ${currentAppName}`);
 
@@ -551,5 +572,4 @@ describe.skipIf(!process.env.CI && !hasSwarm())(
 			REAL_TEST_TIMEOUT,
 		);
 	},
-	REAL_TEST_TIMEOUT,
 );
