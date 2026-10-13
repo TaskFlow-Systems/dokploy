@@ -602,16 +602,64 @@ const PROBE_SHIELD_SECRET_NAMES = [
 	".bash_history",
 ];
 
-export const PROBE_SHIELD_PATH_REGEXP = `(?i)(${PROBE_SHIELD_SEPARATOR})([.]env|(${PROBE_SHIELD_SECRET_NAMES.map((name) => name.replaceAll(".", "[.]")).join("|")})(${PROBE_SHIELD_SEPARATOR}|$)|proc(${PROBE_SHIELD_SEPARATOR})self(${PROBE_SHIELD_SEPARATOR}))`;
+export const PROBE_SHIELD_SECRET_REGEXP = `(?i)(${PROBE_SHIELD_SEPARATOR})([.]env|(${PROBE_SHIELD_SECRET_NAMES.map((name) => name.replaceAll(".", "[.]")).join("|")})(${PROBE_SHIELD_SEPARATOR}|$)|proc(${PROBE_SHIELD_SEPARATOR})self(${PROBE_SHIELD_SEPARATOR}))`;
+
+// User and group names never start with a dot, so a dot name is not read as an owner.
+const PROBE_SHIELD_OWNER = "/[^/.][^/]*";
+const PROBE_SHIELD_SEGMENT = "/[^/]+";
+
+// Routes of products that show or serve repository or synced files, where a dot name
+// after the prefix is a file the user asked for. Each prefix is a fixed word chain that
+// an ordinary site or a static file tree does not have, so the exemption never covers
+// /.env, /src/.env, /raw/.env or /blob/.env.
+const PROBE_SHIELD_EXEMPT_PREFIXES = [
+	// Gitea and Forgejo web UI.
+	`${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:src|raw|render|commits|blame|media|tree-list|tree-view)/(?:branch|tag|commit)/[^/]+`,
+	`${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:_edit|_new|_delete|_upload|_diffpatch|_preview)/[^/]+`,
+	`${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:lastcommit|_cherrypick)/[^/]+`,
+	// Gitea and Forgejo API.
+	`/api/v1/repos${PROBE_SHIELD_OWNER}${PROBE_SHIELD_SEGMENT}/(?:contents|contents-ext|raw|media|editorconfig)`,
+	// GitLab web UI (the group path can be nested) and Web IDE.
+	`(?:${PROBE_SHIELD_OWNER})+/-/(?:blob|raw|tree|blame|edit|new|update|preview|commits)/[^/]+`,
+	"/-/ide/project",
+	// Nextcloud and ownCloud WebDAV.
+	"/(?:remote|public)[.]php/(?:dav|webdav)",
+];
+
+export const PROBE_SHIELD_EXEMPT_REGEXP = `(?i)^(?:${PROBE_SHIELD_EXEMPT_PREFIXES.join("|")})/.+$`;
+
+// GitLab's repository files API takes the whole file path as one encoded segment, so
+// it is the one exempt route where %2F is expected.
+export const PROBE_SHIELD_API_FILES_REGEXP = `(?i)^/api/v4/projects${PROBE_SHIELD_SEGMENT}/repository/files/.+$`;
+
+// Traefik keeps %2F encoded and decodes %5C, so ..%2F and ..\ survive its path cleaning.
+// An exemption must never be a way to walk out of its prefix.
+export const PROBE_SHIELD_ENCODED_SEPARATOR_REGEXP = "(?i)(%2f|%5c|[\\\\])";
+export const PROBE_SHIELD_TRAVERSAL_REGEXP = `(?i)(${PROBE_SHIELD_SEPARATOR})[.][.](${PROBE_SHIELD_SEPARATOR}|$)`;
+
+export const PROBE_SHIELD_RULE = `PathRegexp(\`${PROBE_SHIELD_SECRET_REGEXP}\`) && (!PathRegexp(\`${PROBE_SHIELD_EXEMPT_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_ENCODED_SEPARATOR_REGEXP}\`)) && (!PathRegexp(\`${PROBE_SHIELD_API_FILES_REGEXP}\`) || PathRegexp(\`${PROBE_SHIELD_TRAVERSAL_REGEXP}\`))`;
 
 const PROBE_SHIELD_HEADER = `# Answers requests for secret files (.env*, .git, .aws, .ssh, .docker, ...) with a 404
 # from Traefik itself, on every host, so they never reach a deployed application.
 # Dokploy creates this file only when it is missing and never rewrites it.
 #
+# These routes are let through, so the products behind them work without any edit:
+#   Gitea and Forgejo: /{owner}/{repo}/(src|raw|render|commits|blame|media|tree-list|tree-view)/(branch|tag|commit)/{ref}/...
+#     /{owner}/{repo}/(_edit|_new|_delete|_upload|_diffpatch|_preview)/{ref}/...
+#     /api/v1/repos/{owner}/{repo}/(contents|contents-ext|raw|media|editorconfig)/...
+#   GitLab: /{group}/{project}/-/(blob|raw|tree|blame|edit|new|update|preview|commits)/{ref}/...
+#     /-/ide/project/... and /api/v4/projects/{id}/repository/files/...
+#   Nextcloud and ownCloud: /remote.php/(dav|webdav)/... and /public.php/(dav|webdav)/...
+# A path with ..%2F or ..\\ in it is never let through. Git over HTTP on a bare repository
+# (/{owner}/{repo}.git/...) is not blocked at all. Git over HTTP on a repository with a
+# working tree (/project/.git/info/refs) stays blocked: with a query string, the same URL
+# is what a plain file server answers with the file.
+#
 # Turn it off: replace the whole content of this file with a comment line such as "# off".
 # Do not delete the file, it is created again the next time the panel starts.
-# Skip one host (for example a Git web UI that serves .env.example): add
-# && !Host(\`git.example.com\`) at the end of the rule below.
+# Skip one host (for example S3-compatible storage, where an object key can be any path
+# such as /bucket/project/.env, or a Git service not listed above): add
+# && !Host(\`s3.example.com\`) at the end of the rule below.
 `;
 
 export const getDefaultProbeShield = () => {
@@ -619,7 +667,7 @@ export const getDefaultProbeShield = () => {
 		http: {
 			routers: {
 				"probe-shield": {
-					rule: `PathRegexp(\`${PROBE_SHIELD_PATH_REGEXP}\`)`,
+					rule: PROBE_SHIELD_RULE,
 					priority: PROBE_SHIELD_PRIORITY,
 					entryPoints: ["websecure"],
 					middlewares: ["probe-shield-deny"],

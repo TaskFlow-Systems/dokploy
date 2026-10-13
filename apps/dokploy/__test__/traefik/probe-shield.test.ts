@@ -8,7 +8,6 @@ import {
 	createDefaultProbeShield,
 	getDefaultProbeShield,
 	PROBE_SHIELD_FILE,
-	PROBE_SHIELD_PATH_REGEXP,
 	PROBE_SHIELD_PRIORITY,
 } from "@dokploy/server/setup/traefik-setup";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -18,10 +17,50 @@ const generated = () => parse(getDefaultProbeShield());
 
 // The rule uses only syntax that Go's RE2 and JavaScript read the same way, so the
 // path cases below can run without Traefik. The real-Traefik run is in the PR.
-const shieldPattern = new RegExp(
-	PROBE_SHIELD_PATH_REGEXP.replace(/^\(\?i\)/, ""),
-	"i",
-);
+// The parts are read back out of the generated rule, not taken from the constants,
+// so the test checks what is really written to the file.
+const RULE_SHAPE =
+	/^PathRegexp\(`([^`]+)`\) && \(!PathRegexp\(`([^`]+)`\) \|\| PathRegexp\(`([^`]+)`\)\) && \(!PathRegexp\(`([^`]+)`\) \|\| PathRegexp\(`([^`]+)`\)\)$/;
+
+const ruleParts = () => {
+	const match = generated().http.routers["probe-shield"].rule.match(RULE_SHAPE);
+	if (!match) {
+		throw new Error("The shield rule does not have the expected shape");
+	}
+	return match
+		.slice(1)
+		.map((source: string) => new RegExp(source.replace(/^\(\?i\)/, ""), "i"));
+};
+
+const [secret, exempt, encodedSeparator, apiFiles, traversal] = ruleParts() as [
+	RegExp,
+	RegExp,
+	RegExp,
+	RegExp,
+	RegExp,
+];
+
+const isBlocked = (requestPath: string) =>
+	secret.test(requestPath) &&
+	(!exempt.test(requestPath) || encodedSeparator.test(requestPath)) &&
+	(!apiFiles.test(requestPath) || traversal.test(requestPath));
+
+const PANEL_API_DIR = path.resolve(__dirname, "../../pages/api");
+
+const panelApiRoutes = (dir = PANEL_API_DIR): string[] =>
+	fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			return panelApiRoutes(full);
+		}
+		const route = path
+			.relative(path.resolve(PANEL_API_DIR, ".."), full)
+			.replace(/\.[tj]sx?$/, "")
+			.replace(/\/index$/, "")
+			.replace(/\[\.\.\.[^\]]+\]/g, "a/b")
+			.replace(/\[[^\]]+\]/g, "0a1b2c3d4e");
+		return [`/${route}`];
+	});
 
 const BLOCKED = [
 	"/.env",
@@ -68,6 +107,47 @@ const BLOCKED = [
 	"/uploads/..%5C..%5C.env",
 	"/uploads/..\\..\\.env",
 	"/x/..%2F.git%2Fconfig",
+	"/.git/HEAD",
+	"/project/.git/config",
+	"/project/.git/HEAD",
+	"/x/.git/info/refs",
+	"/x/.git/git-upload-pack",
+	"/x/.git/git-receive-pack",
+	"/src/.env",
+	"/raw/.env",
+	"/blob/.env",
+	"/media/.env",
+	"/owner/repo/.git/config",
+	"/owner/repo/.env",
+	"/owner/repo/src/.env",
+	"/owner/repo/raw/.env",
+	"/owner/repo/blob/main/.env",
+	"/owner/repo/src/main/.env",
+	"/owner/repo/src/branch/.env",
+	"/owner/repo/raw/branch/.env",
+	"/owner/repo/src/branch/main/..%2F..%2F.env",
+	"/owner/repo/raw/branch/main/..%2F..%2F..%2F.git%2Fconfig",
+	"/owner/repo/src/branch/main/..%5C.env",
+	"/owner/repo/src/branch/main/..\\.env",
+	"/owner/repo/src/branch/main/x%2F.env",
+	"/owner/repo/src/branch/main/x%5C.env",
+	"/.env/repo/src/branch/main/file",
+	"/api/v1/repos/owner/repo/contents/..%2F..%2F.env",
+	"/api/v1/repos/owner/repo/.git/config",
+	"/api/v4/projects/1/repository/files/..%2F..%2F.env",
+	"/api/v4/projects/1/repository/files/a%2F..%2F..%2F.env",
+	"/api/v4/projects/1/repository/files/..%2F.git%2Fconfig",
+	"/api/v4/projects/1/repository/tree/.env",
+	"/group/project/-/blob/main/..%2F.env",
+	"/group/project/-/blob/.env",
+	"/-/blob/main/.env",
+	"/-/ide/project/..%2F.env",
+	"/remote.php/.env",
+	"/remote.php/dav/files/u/..%2F.env",
+	"/x/remote.php/dav/files/u/.env",
+	"/other.php/dav/files/u/.env",
+	"/dav/files/u/.env",
+	"/static/other/files/config%2F.env",
 ];
 
 const ALLOWED = [
@@ -92,20 +172,82 @@ const ALLOWED = [
 	"/secrets.json",
 	"/x/.npmrcx",
 	"/.gitx/y",
+	"/owner/repo.git/git-upload-pack",
+	"/owner/repo.git/git-receive-pack",
+	"/owner/repo.git/info/lfs/objects/batch",
+	"/owner/.github.git/info/refs",
+	"/owner/.github",
+	"/owner/.github/src/branch/main/README.md",
+	"/owner/repo/src/branch/main/.env.example",
+	"/owner/repo/src/branch/main/.env",
+	"/owner/repo/src/commit/0a1b2c3d4e/.gitignore",
+	"/owner/repo/src/tag/v1.0/.github/workflows/ci.yml",
+	"/owner/repo/src/branch/feature/deep/name/.env.example",
+	"/owner/repo/src/branch/main/my%20dir/.env.example",
+	"/owner/repo/src/branch/main/.ssh",
+	"/owner/repo/src/branch/main/.ssh/config",
+	"/owner/repo/src/branch/main/.docker/config.json",
+	"/owner/repo/raw/branch/main/.env.example",
+	"/owner/repo/raw/commit/0a1b2c3d4e/.env",
+	"/owner/repo/media/branch/main/.env.example",
+	"/owner/repo/blame/branch/main/.env.example",
+	"/owner/repo/commits/branch/main/.env",
+	"/owner/repo/render/branch/main/.env.example",
+	"/owner/repo/tree-view/branch/main/.ssh",
+	"/owner/repo/_edit/main/.env.example",
+	"/owner/repo/_new/main/.ssh",
+	"/owner/repo/_delete/main/.env.example",
+	"/owner/repo/_upload/main/.ssh",
+	"/owner/repo/lastcommit/0a1b2c3d4e/.ssh",
+	"/api/v1/repos/owner/repo/contents/.env.example",
+	"/api/v1/repos/owner/repo/contents/.ssh/config",
+	"/api/v1/repos/owner/repo/raw/.env.example",
+	"/api/v1/repos/owner/repo/media/.env.example",
+	"/group/project/-/blob/main/.env.example",
+	"/group/subgroup/project/-/raw/main/.env.example",
+	"/group/project/-/tree/main/.github",
+	"/group/project/-/tree/main/.ssh",
+	"/group/project/-/blame/main/.env.example",
+	"/group/project/-/edit/main/.env.example",
+	"/group/project/-/commits/main/.env",
+	"/-/ide/project/group/project/edit/main/-/.env.example",
+	"/api/v4/projects/5/repository/files/.env.example",
+	"/api/v4/projects/5/repository/files/config%2F.env.example",
+	"/api/v4/projects/5/repository/files/config%2F%2Eenv/raw",
+	"/api/v4/projects/group%2Fproject/repository/files/.ssh%2Fconfig",
+	"/remote.php/dav/files/user/project/.env",
+	"/remote.php/dav/files/user/.git/config",
+	"/remote.php/dav/files/user/My%20Docs/.env",
+	"/remote.php/webdav/project/.git/HEAD",
+	"/public.php/dav/files/token/.env",
+	"/public.php/webdav/.env",
 ];
 
 describe("getDefaultProbeShield", () => {
 	it("starts with a comment that says what it does and how to turn it off", () => {
 		const lines = getDefaultProbeShield().split("\n");
-		const comment = lines.slice(
-			0,
-			lines.findIndex((line) => line === "http:"),
-		);
+		const comment = lines.slice(0, lines.indexOf("http:"));
 
 		expect(comment.length).toBeGreaterThan(0);
 		expect(comment.every((line) => line.startsWith("#"))).toBe(true);
 		expect(comment.join("\n")).toContain("replace the whole content");
-		expect(comment.join("\n")).toContain("!Host(`git.example.com`)");
+		expect(comment.join("\n")).toContain("!Host(`s3.example.com`)");
+	});
+
+	it("tells the admin what is let through and what is not", () => {
+		const comment = getDefaultProbeShield().split("\nhttp:")[0];
+
+		for (const word of [
+			"Gitea",
+			"Forgejo",
+			"GitLab",
+			"Nextcloud",
+			"ownCloud",
+		]) {
+			expect(comment).toContain(word);
+		}
+		expect(comment).toContain("S3-compatible");
+		expect(comment).toContain("/project/.git/info/refs");
 	});
 
 	it("defines one router on the HTTPS entry point at the highest priority a user may set", () => {
@@ -125,7 +267,7 @@ describe("getDefaultProbeShield", () => {
 	it("matches every host: the rule has no Host and no lookaround", () => {
 		const { rule } = generated().http.routers["probe-shield"];
 
-		expect(rule).toMatch(/^PathRegexp\(`[^`]+`\)$/);
+		expect(rule).toMatch(RULE_SHAPE);
 		expect(rule).not.toMatch(/Host/i);
 		expect(rule).not.toMatch(/\(\?[=!<]/);
 	});
@@ -158,11 +300,61 @@ describe("getDefaultProbeShield", () => {
 
 describe("probe shield path pattern", () => {
 	it.each(BLOCKED)("blocks %s", (requestPath) => {
-		expect(shieldPattern.test(requestPath)).toBe(true);
+		expect(isBlocked(requestPath)).toBe(true);
 	});
 
 	it.each(ALLOWED)("lets %s through", (requestPath) => {
-		expect(shieldPattern.test(requestPath)).toBe(false);
+		expect(isBlocked(requestPath)).toBe(false);
+	});
+
+	it("keeps every Git and WebDAV exemption behind a fixed word chain", () => {
+		for (const dotName of [".env", ".git/config", ".aws/credentials"]) {
+			for (const bare of ["src", "raw", "blob", "media", "dav", "api", "-"]) {
+				expect(isBlocked(`/${bare}/${dotName}`)).toBe(true);
+				expect(isBlocked(`/x/${bare}/${dotName}`)).toBe(true);
+				expect(isBlocked(`/x/y/${bare}/${dotName}`)).toBe(true);
+			}
+		}
+	});
+
+	it("never exempts a path that climbs out of its prefix", () => {
+		const prefixes = [
+			"/o/r/src/branch/main",
+			"/o/r/raw/tag/v1",
+			"/o/r/_edit/main",
+			"/api/v1/repos/o/r/contents",
+			"/g/p/-/blob/main",
+			"/-/ide/project/g/p/edit/main/-",
+			"/api/v4/projects/1/repository/files",
+			"/remote.php/dav/files/u",
+			"/public.php/webdav",
+		];
+		for (const prefix of prefixes) {
+			for (const climb of ["..%2F", "..%2f", "..%5C", "..%5c", "..\\"]) {
+				expect(isBlocked(`${prefix}/${climb}.env`)).toBe(true);
+				expect(isBlocked(`${prefix}/a${climb}${climb}.git%2Fconfig`)).toBe(
+					true,
+				);
+			}
+		}
+	});
+});
+
+describe("panel routes that Git providers and other callers use", () => {
+	const routes = panelApiRoutes();
+
+	it("finds the webhook and provider routes", () => {
+		expect(routes).toContain("/api/deploy/0a1b2c3d4e");
+		expect(routes).toContain("/api/deploy/compose/0a1b2c3d4e");
+		expect(routes).toContain("/api/deploy/github");
+		expect(routes).toContain("/api/providers/github/webhook");
+		expect(routes).toContain("/api/providers/gitlab/callback");
+		expect(routes).toContain("/api/providers/gitea/callback");
+	});
+
+	it.each(routes)("is not touched by the shield: %s", (route) => {
+		expect(isBlocked(route)).toBe(false);
+		expect(secret.test(route)).toBe(false);
 	});
 });
 
