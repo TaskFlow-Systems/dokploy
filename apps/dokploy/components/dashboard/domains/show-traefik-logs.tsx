@@ -25,7 +25,7 @@ export const ShowTraefikLogs = ({ serverId, serverName }: Props) => {
 						<h3 className="text-lg font-semibold">Traefik log: {serverName}</h3>
 						<p className="text-sm text-muted-foreground">
 							The last 300 lines that mention certificates or ACME, from the
-							last 7 days. Read only.
+							last 72 hours. Read only.
 						</p>
 					</div>
 					<Button

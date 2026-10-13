@@ -115,7 +115,10 @@ describe("application env upsert endpoint and the super session", () => {
 			userId: "user-1",
 			password: "super-password-1",
 		});
-		await service.openSuperSession({ userId: "user-1", sessionId: "session-1" });
+		await service.openSuperSession({
+			userId: "user-1",
+			sessionId: "session-1",
+		});
 
 		const response = await callUpsert();
 

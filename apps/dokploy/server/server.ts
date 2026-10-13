@@ -15,6 +15,7 @@ import {
 	sendDokployRestartNotifications,
 	setupDirectories,
 } from "@dokploy/server";
+import { warnAboutInterruptedTraefikDeletion } from "@dokploy/server/services/domain-overview";
 import { config } from "dotenv";
 import type { NextApiRequest, NextApiResponse } from "next";
 import next from "next";
@@ -157,6 +158,7 @@ void app.prepare().then(async () => {
 			await initVolumeBackupsCronJobs();
 			await sendDokployRestartNotifications();
 			void cleanupOldDokployImages();
+			void warnAboutInterruptedTraefikDeletion();
 		}
 		await initEnterpriseBackupCronJobs();
 

@@ -61,7 +61,7 @@ ENV NODE_ENV=production
 ENV DOKPLOY_OFFICIAL_VERSION=$DOKPLOY_OFFICIAL_VERSION
 ENV DOKPLOY_FORK_VERSION=$DOKPLOY_FORK_VERSION
 
-RUN apt-get update && apt-get install -y tini curl unzip zip apache2-utils iproute2 rsync git-lfs && git lfs install && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y tini curl unzip zip apache2-utils iproute2 rsync jq git-lfs && git lfs install && rm -rf /var/lib/apt/lists/*
 
 # Copy only the necessary files
 COPY --from=build /usr/src/app/apps/dokploy/.next ./.next

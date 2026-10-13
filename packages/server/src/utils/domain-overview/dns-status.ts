@@ -35,33 +35,57 @@ export const resolvedAddresses = (records: DnsRecords) => [
 const isTransientFailure = (lookup: DnsLookup) =>
 	!lookup.ok && lookup.code !== "ENOTFOUND" && lookup.code !== "ENODATA";
 
-const sameAddress = (left: string, right: string) =>
-	left.toLowerCase() === right.toLowerCase();
+const normalizeAddress = (address: string) => {
+	const family = isIP(address);
+	if (family === 6) {
+		try {
+			return new URL(`http://[${address}]`).hostname.slice(1, -1);
+		} catch {
+			return address.toLowerCase();
+		}
+	}
+	return address.toLowerCase();
+};
 
+const sameAddress = (left: string, right: string) =>
+	normalizeAddress(left) === normalizeAddress(right);
+
+// "Points to another address" is only claimed when the domain resolves to an
+// address of a family the server's own addresses are known for. Otherwise the
+// comparison would be a guess, so the answer is "server address unknown".
 export const mapDnsStatus = ({
 	records,
-	serverAddress,
+	serverAddresses,
 }: {
 	records: DnsRecords;
-	serverAddress: string | null;
+	serverAddresses: readonly string[];
 }): DnsStatus => {
 	const { a, aaaa } = records;
 	const addresses = resolvedAddresses(records);
+	const known = serverAddresses.filter((address) => isIP(address) !== 0);
 
 	if (
-		serverAddress &&
-		addresses.some((address) => sameAddress(address, serverAddress))
+		addresses.some((address) =>
+			known.some((serverAddress) => sameAddress(address, serverAddress)),
+		)
 	) {
 		return "points_to_this_server";
 	}
 
-	const serverFamily = serverAddress && isIP(serverAddress) === 6 ? aaaa : a;
-	if (serverAddress && isTransientFailure(serverFamily)) {
+	const knownV4 = known.some((address) => isIP(address) === 4);
+	const knownV6 = known.some((address) => isIP(address) === 6);
+	if (
+		(knownV4 && isTransientFailure(a)) ||
+		(knownV6 && isTransientFailure(aaaa))
+	) {
 		return "lookup_failed";
 	}
 
 	if (addresses.length > 0) {
-		return serverAddress ? "points_to_other_address" : "server_address_unknown";
+		const comparable = addresses.some((address) =>
+			isIP(address) === 6 ? knownV6 : knownV4,
+		);
+		return comparable ? "points_to_other_address" : "server_address_unknown";
 	}
 
 	if (isTransientFailure(a) || isTransientFailure(aaaa)) {

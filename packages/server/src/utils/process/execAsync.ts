@@ -1,4 +1,4 @@
-import { exec, execFile } from "node:child_process";
+import { exec, execFile, spawn } from "node:child_process";
 import util from "node:util";
 import { findServerById } from "@dokploy/server/services/server";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
@@ -30,10 +30,110 @@ type ExecErrorLike = Error & {
 	stderr?: Buffer | string;
 };
 
+export class CommandTimeoutError extends Error {
+	readonly timeoutMs: number;
+
+	constructor(timeoutMs: number) {
+		super(`Command timed out after ${timeoutMs} ms`);
+		this.name = "CommandTimeoutError";
+		this.timeoutMs = timeoutMs;
+	}
+}
+
+const MAX_TIMED_OUTPUT_BYTES = 8 * 1024 * 1024;
+
+// exec only kills the shell on timeout, and a grandchild such as docker logs
+// keeps running. A detached process group lets the whole tree be killed.
+const execWithTimeout = (
+	command: string,
+	timeoutMs: number,
+	options: { cwd?: string; env?: NodeJS.ProcessEnv },
+): Promise<{ stdout: string; stderr: string }> =>
+	new Promise((resolve, reject) => {
+		const child = spawn("/bin/sh", ["-c", command], {
+			cwd: options.cwd,
+			env: options.env,
+			detached: true,
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		let stdout = "";
+		let stderr = "";
+		let settled = false;
+		const killTree = () => {
+			try {
+				if (child.pid) {
+					process.kill(-child.pid, "SIGKILL");
+				}
+			} catch {
+				child.kill("SIGKILL");
+			}
+		};
+		const timer = setTimeout(() => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			killTree();
+			reject(new CommandTimeoutError(timeoutMs));
+		}, timeoutMs);
+		const append = (current: string, chunk: Buffer) =>
+			current.length >= MAX_TIMED_OUTPUT_BYTES
+				? current
+				: current + chunk.toString();
+		child.stdout.on("data", (chunk: Buffer) => {
+			stdout = append(stdout, chunk);
+		});
+		child.stderr.on("data", (chunk: Buffer) => {
+			stderr = append(stderr, chunk);
+		});
+		child.on("error", (error) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			reject(
+				new ExecError(`Command execution error: ${error.message}`, {
+					command,
+					stdout,
+					stderr,
+					originalError: error,
+				}),
+			);
+		});
+		child.on("close", (code) => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			clearTimeout(timer);
+			if (code === 0) {
+				resolve({ stdout, stderr });
+				return;
+			}
+			reject(
+				new ExecError(`Command execution failed: exit code ${code}`, {
+					command,
+					stdout,
+					stderr,
+					exitCode: code ?? undefined,
+				}),
+			);
+		});
+	});
+
 export const execAsync = async (
 	command: string,
-	options?: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: string },
+	options?: {
+		cwd?: string;
+		env?: NodeJS.ProcessEnv;
+		shell?: string;
+		timeoutMs?: number;
+	},
 ): Promise<{ stdout: string; stderr: string }> => {
+	if (options?.timeoutMs !== undefined) {
+		return execWithTimeout(command, options.timeoutMs, options);
+	}
 	try {
 		const result = await execAsyncBase(command, options);
 		return {
@@ -165,6 +265,7 @@ export const execAsyncRemote = async (
 	serverId: string | null,
 	command: string,
 	onData?: (data: string) => void,
+	options: { timeoutMs?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> => {
 	if (!serverId) return { stdout: "", stderr: "" };
 	const server = await findServerById(serverId);
@@ -175,12 +276,21 @@ export const execAsyncRemote = async (
 	let stderr = "";
 	return new Promise((resolve, reject) => {
 		const conn = new Client();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		if (options.timeoutMs !== undefined) {
+			const timeoutMs = options.timeoutMs;
+			timer = setTimeout(() => {
+				conn.destroy();
+				reject(new CommandTimeoutError(timeoutMs));
+			}, timeoutMs);
+		}
 
 		sleep(1000);
 		conn
 			.once("ready", () => {
 				conn.exec(command, (err, stream) => {
 					if (err) {
+						clearTimeout(timer);
 						onData?.(err.message);
 						reject(
 							new ExecError(`Remote command execution failed: ${err.message}`, {
@@ -193,6 +303,7 @@ export const execAsyncRemote = async (
 					}
 					stream
 						.on("close", (code: number, _signal: string) => {
+							clearTimeout(timer);
 							conn.end();
 							if (code === 0) {
 								resolve({ stdout, stderr });
@@ -222,6 +333,7 @@ export const execAsyncRemote = async (
 				});
 			})
 			.on("error", (err) => {
+				clearTimeout(timer);
 				conn.end();
 				if (err.level === "client-authentication") {
 					const technicalDetail = `Error: ${err.message} ${err.level}`;
