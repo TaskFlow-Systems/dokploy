@@ -21,6 +21,8 @@ import {
 	backupDir,
 	baseEnv,
 	callsOf,
+	firstShellOnly,
+	idOf,
 	lockFile,
 	logDir,
 	mains,
@@ -45,19 +47,26 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 	"signals and the marker, under $label",
 	{ timeout: 90_000 },
 	({ path: shell }) => {
+		const once = firstShellOnly(shell);
 		beforeEach(() => {
 			setupBin({ jq: true, shell });
 		});
 
 		it("still restarts Traefik when a second TERM arrives during the restart", async () => {
-			const run = spawnScript(shell, targets("one.example.com"), {
-				FAKE_HANG: "stop",
-				FAKE_START_SLOW: "1",
-			});
+			const run = spawnScript(
+				shell,
+				targets("one.example.com"),
+				{
+					FAKE_HANG: "stop",
+					FAKE_START_SLOW: "1",
+				},
+				0,
+				{ cleanupWaitSeconds: 1 },
+			);
 			await waitFor(() => callsOf().some((c) => c.startsWith("stop ")));
 
 			run.child.kill("SIGTERM");
-			await new Promise((resolve) => setTimeout(resolve, 300));
+			await waitFor(() => callsOf().some((c) => c.startsWith("start ")));
 			run.child.kill("SIGTERM");
 			await run.exited;
 
@@ -83,23 +92,26 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(existsSync(markerFile)).toBe(false);
 		});
 
-		it("writes the marker before the stop and removes it after the start", () => {
-			const result = run(shell, targets("one.example.com"), {
-				FAKE_MARKER: markerFile,
-			});
+		once(
+			"writes the marker before the stop and removes it after the start",
+			() => {
+				const result = run(shell, targets("one.example.com"), {
+					FAKE_MARKER: markerFile,
+				});
 
-			expect(resultOf(result.stdout)).toBe("ok");
-			const atStop = readFileSync(
-				path.join(stateDir, "marker-at-stop"),
-				"utf8",
-			);
-			expect(atStop).toContain("kind=container");
-			expect(atStop).toContain("replicas=1");
-			expect(atStop).toContain("phase=stopping");
-			expect(existsSync(markerFile)).toBe(false);
-		});
+				expect(resultOf(result.stdout)).toBe("ok");
+				const atStop = readFileSync(
+					path.join(stateDir, "marker-at-stop"),
+					"utf8",
+				);
+				expect(atStop).toContain("kind=container");
+				expect(atStop).toContain("replicas=1");
+				expect(atStop).toContain("phase=stopping");
+				expect(existsSync(markerFile)).toBe(false);
+			},
+		);
 
-		it("records a swarm service with its replica count", () => {
+		once("records a swarm service with its replica count", () => {
 			const result = run(shell, targets("one.example.com"), {
 				FAKE_MODE: "service",
 				FAKE_MARKER: markerFile,
@@ -111,11 +123,11 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 				"utf8",
 			);
 			expect(atStop).toBe(
-				"kind=service\nreplicas=1\nts=20261012T101500Z\nphase=stopping\nbackup=\n",
+				"kind=service\nreplicas=1\nts=20261012T101500Z\nphase=stopping\nbackup=\nnew=\n",
 			);
 		});
 
-		it("refuses without stopping when the marker cannot be written", () => {
+		once("refuses without stopping when the marker cannot be written", () => {
 			if (process.getuid?.() === 0) {
 				return;
 			}
@@ -150,6 +162,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 							logDir,
 							lockFile,
 							markerFile,
+							acmeFile,
 						}),
 					],
 					{ encoding: "utf8", env: baseEnv() },
@@ -186,6 +199,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 	"recovery and stale lock commands, under $label",
 	{ timeout: 90_000 },
 	({ path: shell }) => {
+		const once = firstShellOnly(shell);
 		beforeEach(() => {
 			setupBin({ jq: true, shell });
 		});
@@ -223,20 +237,20 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 				{ encoding: "utf8", env: baseEnv() },
 			);
 
-		const writeMarker = (phase: string, backup = "") =>
+		const writeMarker = (phase: string, backup = "", newId = "") =>
 			writeFileSync(
 				markerFile,
-				`kind=container\nreplicas=1\nts=20261012T101500Z\nphase=${phase}\nbackup=${backup}\n`,
+				`kind=container\nreplicas=1\nts=20261012T101500Z\nphase=${phase}\nbackup=${backup}\nnew=${newId}\n`,
 			);
 
-		it("does nothing without a marker", () => {
+		once("does nothing without a marker", () => {
 			const result = recover();
 
 			expect(parseRecoveryStatus(result.stdout)).toBe("no_marker");
 			expect(callsOf()).toEqual([]);
 		});
 
-		it("only removes the marker when Traefik already runs", () => {
+		once("only removes the marker when Traefik already runs", () => {
 			writeMarker("stopped");
 
 			const result = recover();
@@ -266,7 +280,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(existsSync(markerFile)).toBe(true);
 		});
 
-		it("starts a stopped Traefik and clears the marker", () => {
+		once("starts a stopped Traefik and clears the marker", () => {
 			writeMarker("stopped");
 			writeFileSync(path.join(stateDir, "running"), "false\n");
 
@@ -277,39 +291,45 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(existsSync(markerFile)).toBe(false);
 		});
 
-		it("puts the post-stop backup back when the edited file does not start", () => {
-			mkdirSync(backupDir);
-			const original = readFileSync(acmeFile, "utf8");
-			const backup = path.join(backupDir, "acme.json.bak-20261012T101500Z");
-			writeFileSync(backup, original);
-			writeAcme({ letsencrypt: { Account: {}, Certificates: [] } });
-			writeMarker("edited", backup);
-			writeFileSync(path.join(stateDir, "running"), "false\n");
+		once(
+			"puts the post-stop backup back when the edited file does not start",
+			() => {
+				mkdirSync(backupDir);
+				const original = readFileSync(acmeFile, "utf8");
+				const backup = path.join(backupDir, "acme.json.bak-20261012T101500Z");
+				writeFileSync(backup, original);
+				writeAcme({ letsencrypt: { Account: {}, Certificates: [] } });
+				writeMarker("edited", backup, idOf(acmeFile));
+				writeFileSync(path.join(stateDir, "running"), "false\n");
 
-			const result = recover({ FAKE_START_FAIL: "once" });
+				const result = recover({ FAKE_START_FAIL: "once" });
 
-			expect(parseRecoveryStatus(result.stdout)).toBe("recovered_restored");
-			expect(readFileSync(acmeFile, "utf8")).toBe(original);
-			expect(running()).toBe("true");
-			expect(existsSync(markerFile)).toBe(false);
-		});
+				expect(parseRecoveryStatus(result.stdout)).toBe("recovered_restored");
+				expect(readFileSync(acmeFile, "utf8")).toBe(original);
+				expect(running()).toBe("true");
+				expect(existsSync(markerFile)).toBe(false);
+			},
+		);
 
-		it("keeps the edited file when Traefik did not start but the edit was not in place yet", () => {
-			mkdirSync(backupDir);
-			const backup = path.join(backupDir, "acme.json.bak-20261012T101500Z");
-			writeFileSync(backup, "{}");
-			writeMarker("stopped", backup);
-			writeFileSync(path.join(stateDir, "running"), "false\n");
-			const before = readFileSync(acmeFile, "utf8");
+		once(
+			"keeps the edited file when Traefik did not start but the edit was not in place yet",
+			() => {
+				mkdirSync(backupDir);
+				const backup = path.join(backupDir, "acme.json.bak-20261012T101500Z");
+				writeFileSync(backup, "{}");
+				writeMarker("stopped", backup);
+				writeFileSync(path.join(stateDir, "running"), "false\n");
+				const before = readFileSync(acmeFile, "utf8");
 
-			const result = recover({ FAKE_START_FAIL: "always" });
+				const result = recover({ FAKE_START_FAIL: "always" });
 
-			expect(parseRecoveryStatus(result.stdout)).toBe("recovery_failed");
-			expect(readFileSync(acmeFile, "utf8")).toBe(before);
-			expect(existsSync(markerFile)).toBe(true);
-		});
+				expect(parseRecoveryStatus(result.stdout)).toBe("recovery_failed");
+				expect(readFileSync(acmeFile, "utf8")).toBe(before);
+				expect(existsSync(markerFile)).toBe(true);
+			},
+		);
 
-		it("refuses a marker with unexpected content", () => {
+		once("refuses a marker with unexpected content", () => {
 			writeFileSync(markerFile, "kind=$(id)\nreplicas=1\n");
 
 			const result = recover();
@@ -318,7 +338,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(callsOf()).toEqual([]);
 		});
 
-		it("refuses a backup path outside the backup file naming", () => {
+		once("refuses a backup path outside the backup file naming", () => {
 			writeMarker("edited", "/etc/passwd");
 			writeFileSync(path.join(stateDir, "running"), "false\n");
 
@@ -327,7 +347,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(parseRecoveryStatus(result.stdout)).toBe("recovery_failed");
 		});
 
-		it("clears a stale lock and reports Traefik's state", () => {
+		once("clears a stale lock and reports Traefik's state", () => {
 			writeFileSync(lockFile, "999999 none other-boot\n");
 			writeFileSync(path.join(stateDir, "running"), "false\n");
 
@@ -367,11 +387,11 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			}
 		});
 
-		it("says there is nothing to clear when no lock exists", () => {
+		once("says there is nothing to clear when no lock exists", () => {
 			expect(parseClearLockOutcome(clear().stdout).status).toBe("none");
 		});
 
-		it("reports unknown instead of guessing when docker fails", () => {
+		once("reports unknown instead of guessing when docker fails", () => {
 			writeFileSync(lockFile, "999999 none other-boot\n");
 
 			const result = spawnSync(

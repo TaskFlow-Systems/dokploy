@@ -107,6 +107,9 @@ import { and, eq } from "drizzle-orm";
 const LOCAL_KEY = "local";
 const LOCAL_NAME = "Dokploy server";
 const SERVER_COMMAND_TIMEOUT_MS = 15_000;
+// Five commands at 15 s each would keep one unresponsive server busy for over a
+// minute; the whole read of one server stops here instead.
+const SERVER_READ_BUDGET_MS = 30_000;
 const LAUNCH_TIMEOUT_MS = 30_000;
 const LOG_LINE_MAX_LENGTH = 2000;
 const LOCAL_APPLY_START_DELAY_SECONDS = 3;
@@ -482,7 +485,7 @@ const isTransportFailure = (error: unknown, target: ServerTarget) =>
 
 const describeFailure = (error: unknown, target: ServerTarget) => {
 	if (isTimeout(error)) {
-		return `no answer within ${SERVER_COMMAND_TIMEOUT_MS / 1000} s`;
+		return "no answer in time";
 	}
 	if (error instanceof AcmeFileFormatError) {
 		return error.message;
@@ -550,16 +553,21 @@ const backupDirFor = (target: ServerTarget) =>
 
 const logDirFor = (target: ServerTarget) => paths(!target.isLocal).LOGS_PATH;
 
-const readRoutes = async (target: ServerTarget) => {
-	const { stdout } = await runOnServer(target, buildTraefikRoutesCommand());
+const readRoutes = async (target: ServerTarget, timeoutMs?: number) => {
+	const { stdout } = await runOnServer(
+		target,
+		buildTraefikRoutesCommand(),
+		timeoutMs,
+	);
 	return parseTraefikUses(stdout);
 };
 
-const readDynamicUses = async (target: ServerTarget) => {
+const readDynamicUses = async (target: ServerTarget, timeoutMs?: number) => {
 	try {
 		const { stdout } = await runOnServer(
 			target,
 			buildDynamicHostsCommand(dynamicPathFor(target), staticConfigFor(target)),
+			timeoutMs,
 		);
 		return parseDynamicConfigUses(stdout);
 	} catch (error) {
@@ -573,11 +581,12 @@ const readDynamicUses = async (target: ServerTarget) => {
 	}
 };
 
-const readCertificates = async (target: ServerTarget) => {
+const readCertificates = async (target: ServerTarget, timeoutMs?: number) => {
 	try {
 		const { stdout } = await runOnServer(
 			target,
 			buildAcmeReadCommand(acmeFileFor(target)),
+			timeoutMs,
 		);
 		return parseAcmeCertificates(stdout);
 	} catch (error) {
@@ -623,6 +632,7 @@ const readDeletionStatus = (
 			logDir: logDirFor(target),
 			lockFile: lockFileFor(target),
 			markerFile: markerFileFor(target),
+			acmeFile: acmeFileFor(target),
 			logFile: options.logFile,
 		}),
 	).then(({ stdout }) => parseDeletionStatus(stdout));
@@ -642,12 +652,15 @@ type LogRead =
 	| { status: "missing" }
 	| { status: "failed"; reason: string };
 
-const readLogs = async (target: ServerTarget): Promise<LogRead> => {
+const readLogs = async (
+	target: ServerTarget,
+	timeoutMs = TRAEFIK_LOG_NODE_TIMEOUT_MS,
+): Promise<LogRead> => {
 	try {
 		const { stdout } = await runOnServer(
 			target,
 			buildTraefikLogsCommand(),
-			TRAEFIK_LOG_NODE_TIMEOUT_MS,
+			Math.min(timeoutMs, TRAEFIK_LOG_NODE_TIMEOUT_MS),
 		);
 		const parsed = readTraefikLogOutput(stdout);
 		return parsed.ok
@@ -675,11 +688,12 @@ const readServer = async (
 	const errors: string[] = [];
 	let usageVerified = true;
 	let connectionLost = false;
+	const budgetEnd = Date.now() + SERVER_READ_BUDGET_MS;
 
 	const stage = async <T>(
 		name: string,
 		fallback: T,
-		read: () => Promise<T>,
+		read: (timeoutMs: number) => Promise<T>,
 		affectsUsage: boolean,
 	) => {
 		if (connectionLost) {
@@ -688,7 +702,17 @@ const readServer = async (
 			}
 			return fallback;
 		}
-		const result = await readStage(target, name, fallback, read);
+		const remaining = budgetEnd - Date.now();
+		if (remaining <= 0) {
+			errors.push(`${name}: skipped, this server was too slow to answer`);
+			if (affectsUsage) {
+				usageVerified = false;
+			}
+			return fallback;
+		}
+		const result = await readStage(target, name, fallback, () =>
+			read(Math.min(SERVER_COMMAND_TIMEOUT_MS, remaining)),
+		);
 		if (result.error) {
 			errors.push(result.error);
 			if (affectsUsage) {
@@ -736,7 +760,7 @@ const readServer = async (
 			patterns: [],
 			unreadable: false,
 		} as ReturnType<typeof parseTraefikUses>,
-		() => readRoutes(target),
+		(timeoutMs) => readRoutes(target, timeoutMs),
 		true,
 	);
 	if (uses.unreadable) {
@@ -746,7 +770,7 @@ const readServer = async (
 	const dynamic = await stage<DynamicConfigUses | null>(
 		"Dynamic config",
 		null,
-		() => readDynamicUses(target),
+		(timeoutMs) => readDynamicUses(target, timeoutMs),
 		true,
 	);
 	if (dynamic?.unreadable) {
@@ -757,14 +781,14 @@ const readServer = async (
 		? await stage(
 				"Certificates",
 				[] as AcmeCertificate[],
-				() => readCertificates(target),
+				(timeoutMs) => readCertificates(target, timeoutMs),
 				true,
 			)
 		: [];
 	const logs = await stage<LogRead>(
 		"Traefik logs",
 		{ status: "failed", reason: "not read" },
-		() => readLogs(target),
+		(timeoutMs) => readLogs(target, timeoutMs),
 		false,
 	);
 	if (logs.status === "failed" && !connectionLost) {
@@ -1478,9 +1502,11 @@ const runDeletion = async (
 		lockFile: lockFileFor(target),
 		markerFile: markerFileFor(target),
 		backupDir: backupDirFor(target),
+		staticFile: staticConfigFor(target),
 		targets: chosen.map((certificate) => ({
 			resolver: certificate.resolver,
 			domain: certificate.main ?? "",
+			names: certificate.names,
 		})),
 		timestamp,
 		startDelaySeconds: target.isLocal ? LOCAL_APPLY_START_DELAY_SECONDS : 0,

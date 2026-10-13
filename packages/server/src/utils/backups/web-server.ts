@@ -15,6 +15,7 @@ import {
 import { findDestinationById } from "@dokploy/server/services/destination";
 import { sendDokployBackupNotifications } from "../notifications/dokploy-backup";
 import { execAsync } from "../process/execAsync";
+import { buildFilesystemCopyCommand } from "./filesystem-copy";
 import { redactRcloneCredentials } from "./redact";
 import {
 	assertRcloneS3DestinationAllowed,
@@ -90,7 +91,7 @@ export const runWebServerBackup = async (backup: BackupSchedule) => {
 			await execAsync(cleanupCommand);
 
 			await execAsync(
-				`rsync -a --ignore-errors --no-specials --no-devices --exclude='volume-backups/' --exclude='${ENCRYPTION_KEY_BACKUP_FILE}' ${BASE_PATH}/ ${tempDir}/filesystem/`,
+				buildFilesystemCopyCommand(BASE_PATH, `${tempDir}/filesystem`),
 			);
 
 			writeStream.write("Copied filesystem to temp directory\n");

@@ -68,6 +68,57 @@ release_stale_lock() {
 	rm -f "$STALE_COPY" 2>/dev/null
 	return 1
 }
+
+create_lock() {
+	ln "$TMPLOCK" "$LOCK" 2>/dev/null && return 0
+	[ ! -e "$LOCK" ] && ( set -C; echo "$MYOWNER" > "$LOCK" ) 2>/dev/null
+}
+
+take_lock() {
+	ps_start="$(proc_start $$)"
+	[ -n "$ps_start" ] || ps_start=none
+	MYOWNER="$$ $ps_start $(boot_id)"
+	TMPLOCK="$LOCK.tmp.$$"
+	( echo "$MYOWNER" > "$TMPLOCK" ) 2>/dev/null || return 1
+	if create_lock; then
+		HAVE_LOCK=1
+		return 0
+	fi
+	lock_state
+	if [ "$LOCK_STATE" = stale ] && release_stale_lock && create_lock; then
+		HAVE_LOCK=1
+		return 0
+	fi
+	return 1
+}
+
+release_lock() {
+	[ "$HAVE_LOCK" = 1 ] || return 0
+	if [ "$(cat "$LOCK" 2>/dev/null)" = "$MYOWNER" ]; then
+		rm -f "$LOCK" 2>/dev/null
+	fi
+	HAVE_LOCK=0
+}
+
+sweep_leftovers() {
+	for f in "$LOCK".tmp.[0-9]* "$LOCK".out.[0-9]* "$LOCK".stale.[0-9]* "$MARKER".tmp.[0-9]* "$ACME".new-[0-9]*Z "$ACME".restore-*; do
+		[ "$f" != "$TMPLOCK" ] && [ -f "$f" ] && rm -f "$f" 2>/dev/null
+	done
+	return 0
+}
+
+file_id() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+	elif command -v openssl >/dev/null 2>&1; then
+		openssl dgst -sha256 "$1" 2>/dev/null | sed 's/^.*= *//'
+	else
+		f_stat="$(stat -c '%s-%Y' "$1" 2>/dev/null || stat -f '%z-%m' "$1" 2>/dev/null)"
+		[ -z "$f_stat" ] || echo "stat:$f_stat"
+	fi
+}
 `;
 
 export const DOCKER_FUNCTIONS = `
@@ -79,39 +130,55 @@ nap() {
 	fi
 }
 
-dk() {
+dk_launch() {
 	DK_SECS="$1"
 	shift
-	rm -f "$OUT.rc" 2>/dev/null
+	rm -f "$OUT.rc" "$OUT.pid" 2>/dev/null
 	if [ -n "$TO" ]; then
-		( $TO "$DK_SECS" $SUDO docker "$@" >"$OUT" 2>/dev/null; echo $? >"$OUT.rc" ) &
+		( $TO "$DK_SECS" $SUDO docker "$@" >"$OUT" 2>/dev/null & echo $! >"$OUT.pid"; wait $!; echo $? >"$OUT.rc" ) &
+		DK_END=$(($(date +%s) + DK_SECS + 4))
 	else
-		( $SUDO docker "$@" >"$OUT" 2>/dev/null; echo $? >"$OUT.rc" ) &
+		( $SUDO docker "$@" >"$OUT" 2>/dev/null & echo $! >"$OUT.pid"; wait $!; echo $? >"$OUT.rc" ) &
+		DK_END=$(($(date +%s) + DK_SECS + 1))
 	fi
 	CHILD=$!
-	if [ -z "$TO" ]; then
-		DK_END=$(($(date +%s) + DK_SECS + 1))
-		DK_I=0
-		until [ -s "$OUT.rc" ]; do
-			if [ "$(date +%s)" -ge "$DK_END" ]; then
-				kill "$CHILD" 2>/dev/null
-				break
-			fi
-			DK_I=$((DK_I + 1))
-			nap
-		done
-	fi
-	while [ ! -s "$OUT.rc" ]; do
-		wait "$CHILD" 2>/dev/null
-		[ -s "$OUT.rc" ] && break
-		kill -0 "$CHILD" 2>/dev/null || break
+}
+
+dk_wait() {
+	DK_I=0
+	until [ -s "$OUT.rc" ]; do
+		if [ "$(date +%s)" -ge "$DK_END" ]; then
+			k_pid="$(cat "$OUT.pid" 2>/dev/null)"
+			case "$k_pid" in
+				'' | *[!0-9]*) ;;
+				*) kill "$k_pid" 2>/dev/null ;;
+			esac
+			kill "$CHILD" 2>/dev/null
+			CHILD=""
+			return 124
+		fi
+		DK_I=$((DK_I + 1))
+		nap
 	done
+	wait "$CHILD" 2>/dev/null
 	CHILD=""
 	DK_RC="$(cat "$OUT.rc" 2>/dev/null)"
 	case "$DK_RC" in
 		'' | *[!0-9]*) DK_RC=124 ;;
 	esac
 	return "$DK_RC"
+}
+
+dk() {
+	dk_launch "$@"
+	dk_wait
+}
+
+dk_settle() {
+	[ -n "$CHILD" ] || return 0
+	c_end=$(($(date +%s) + CLEANUP_WAIT))
+	[ "$DK_END" -le "$c_end" ] || DK_END="$c_end"
+	dk_wait
 }
 
 traefik_state() {
@@ -134,12 +201,11 @@ traefik_state() {
 
 wait_state() {
 	w_want="$1"
-	w_i=0
+	w_end="$2"
 	while :; do
 		traefik_state
 		[ "$STATE" = "$w_want" ] && return 0
-		w_i=$((w_i + 1))
-		[ "$w_i" -le "$WAIT_SECONDS" ] || return 1
+		[ "$(date +%s)" -lt "$w_end" ] || return 1
 		sleep "$POLL_SECONDS"
 	done
 }
@@ -170,7 +236,9 @@ traefik_stop() {
 		container) dk "$STOP_SECONDS" stop "$TRAEFIK" ;;
 		*) return 0 ;;
 	esac
-	wait_state stopped
+	w_cap=$(($(date +%s) + WAIT_SECONDS))
+	[ "$w_cap" -le "$DEADLINE_AT" ] || w_cap="$DEADLINE_AT"
+	wait_state stopped "$w_cap"
 }
 
 traefik_start() {
@@ -183,9 +251,9 @@ traefik_start() {
 	traefik_state
 	if [ "$STATE" != running ]; then
 		[ "$s_rc" -eq 0 ] || return 1
-		wait_state running || return 1
+		wait_state running $(($(date +%s) + WAIT_SECONDS)) || return 1
 	fi
-	sleep "$POLL_SECONDS"
+	sleep "$SETTLE_SECONDS"
 	traefik_state
 	[ "$STATE" = running ] || return 1
 	STOPPED=0

@@ -21,6 +21,7 @@ import {
 	baseEnv,
 	binDir,
 	callsOf,
+	firstShellOnly,
 	leftovers,
 	lockFile,
 	logDir,
@@ -42,6 +43,7 @@ import {
 describe.skipIf(!REAL_JQ).each(SHELLS)(
 	"detached launch under $label",
 	({ path: shell }) => {
+		const once = firstShellOnly(shell);
 		const RUN_ID = "abc123";
 		const LOG_NAME = `acme-delete-20261012T101500Z-${RUN_ID}.log`;
 
@@ -81,6 +83,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 							logDir,
 							lockFile,
 							markerFile,
+							acmeFile,
 							logFile,
 						}),
 					],
@@ -103,55 +106,64 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(mode(path.join(logDir, LOG_NAME))).toBe(0o600);
 		});
 
-		it("reports a log directory that cannot be used and starts nothing", () => {
-			writeFileSync(path.join(workDir, "plain-file"), "x");
-			const original = readFileSync(acmeFile, "utf8");
+		once(
+			"reports a log directory that cannot be used and starts nothing",
+			() => {
+				writeFileSync(path.join(workDir, "plain-file"), "x");
+				const original = readFileSync(acmeFile, "utf8");
 
-			const result = launch(
-				targets("one.example.com"),
-				path.join(workDir, "plain-file", "logs"),
-			);
+				const result = launch(
+					targets("one.example.com"),
+					path.join(workDir, "plain-file", "logs"),
+				);
 
-			expect(result.status).toBe(1);
-			expect(resultOf(result.stdout)).toBe("log_dir_failed");
-			expect(readFileSync(acmeFile, "utf8")).toBe(original);
-			expect(callsOf()).toEqual([]);
-			expect(leftovers()).toEqual([]);
-			expect(existsSync(lockFile)).toBe(false);
-		});
+				expect(result.status).toBe(1);
+				expect(resultOf(result.stdout)).toBe("log_dir_failed");
+				expect(readFileSync(acmeFile, "utf8")).toBe(original);
+				expect(callsOf()).toEqual([]);
+				expect(leftovers()).toEqual([]);
+				expect(existsSync(lockFile)).toBe(false);
+			},
+		);
 
-		it("reports a result and leaves no edited copy when the job refuses", async () => {
-			const result = launch(targets("missing.example.com"));
+		once(
+			"reports a result and leaves no edited copy when the job refuses",
+			async () => {
+				const result = launch(targets("missing.example.com"));
 
-			expect(result.status).toBe(0);
-			await waitFor(() => /DOKPLOY_RESULT/.test(logText()));
-			expect(logText()).toContain("DOKPLOY_RESULT count_mismatch");
-			expect(leftovers()).toEqual([]);
-		});
+				expect(result.status).toBe(0);
+				await waitFor(() => /DOKPLOY_RESULT/.test(logText()));
+				expect(logText()).toContain("DOKPLOY_RESULT count_mismatch");
+				expect(leftovers()).toEqual([]);
+			},
+		);
 
-		it("never reuses a log: two launches in the same second keep two logs", async () => {
-			launch(targets("one.example.com"), logDir, "aaaaaa");
-			await waitFor(() =>
-				/DOKPLOY_RESULT/.test(
-					logText("acme-delete-20261012T101500Z-aaaaaa.log"),
-				),
-			);
-			launch(targets("one.example.com"), logDir, "bbbbbb");
-			await waitFor(() =>
-				/DOKPLOY_RESULT/.test(
-					logText("acme-delete-20261012T101500Z-bbbbbb.log"),
-				),
-			);
+		once(
+			"never reuses a log: two launches in the same second keep two logs",
+			async () => {
+				launch(targets("one.example.com"), logDir, "aaaaaa");
+				await waitFor(() =>
+					/DOKPLOY_RESULT/.test(
+						logText("acme-delete-20261012T101500Z-aaaaaa.log"),
+					),
+				);
+				launch(targets("one.example.com"), logDir, "bbbbbb");
+				await waitFor(() =>
+					/DOKPLOY_RESULT/.test(
+						logText("acme-delete-20261012T101500Z-bbbbbb.log"),
+					),
+				);
 
-			expect(logText("acme-delete-20261012T101500Z-aaaaaa.log")).toContain(
-				"DOKPLOY_RESULT ok",
-			);
-			expect(logText("acme-delete-20261012T101500Z-bbbbbb.log")).toContain(
-				"DOKPLOY_RESULT count_mismatch",
-			);
-		});
+				expect(logText("acme-delete-20261012T101500Z-aaaaaa.log")).toContain(
+					"DOKPLOY_RESULT ok",
+				);
+				expect(logText("acme-delete-20261012T101500Z-bbbbbb.log")).toContain(
+					"DOKPLOY_RESULT count_mismatch",
+				);
+			},
+		);
 
-		it("refuses to launch over an existing log of the same name", () => {
+		once("refuses to launch over an existing log of the same name", () => {
 			mkdirSync(logDir);
 			writeFileSync(path.join(logDir, LOG_NAME), "earlier run\n");
 
@@ -161,7 +173,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 			expect(logText()).toBe("earlier run\n");
 		});
 
-		it("keeps only the newest five logs", () => {
+		once("keeps only the newest five logs", () => {
 			mkdirSync(logDir);
 			for (let day = 1; day <= 7; day += 1) {
 				writeFileSync(

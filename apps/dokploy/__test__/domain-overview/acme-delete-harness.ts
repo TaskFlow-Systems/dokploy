@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	existsSync,
@@ -20,13 +21,18 @@ import {
 	buildAcmeDeleteScript,
 	parseDeletionStatus,
 } from "@dokploy/server/utils/domain-overview/acme-delete";
-import { afterEach, beforeEach, expect } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
+
+const found = new Map<string, string | null>();
 
 export const which = (name: string) => {
-	const found = spawnSync("sh", ["-c", `command -v ${name}`], {
-		encoding: "utf8",
-	}).stdout.trim();
-	return found || null;
+	if (!found.has(name)) {
+		const path = spawnSync("sh", ["-c", `command -v ${name}`], {
+			encoding: "utf8",
+		}).stdout.trim();
+		found.set(name, path || null);
+	}
+	return found.get(name) ?? null;
 };
 
 export const REAL_JQ = which("jq");
@@ -43,6 +49,9 @@ export const SHELLS = shellCandidates.filter(
 			(other) => realpathSync(other.path) === realpathSync(shell.path),
 		) === index,
 );
+
+export const firstShellOnly = (shell: string) =>
+	(shell === SHELLS[0]?.path ? it : () => undefined) as typeof it;
 
 export const TOOLS = [
 	"cp",
@@ -74,6 +83,9 @@ export const TOOLS = [
 	"find",
 	"ps",
 	"sysctl",
+	"sha256sum",
+	"shasum",
+	"openssl",
 ];
 
 export const KEY_ONE = "DUMMY-PRIVATE-KEY-ONE-0f9a8c7d6e5b4a3f";
@@ -116,8 +128,13 @@ export const FAKE_DOCKER = `#!/bin/sh
 state="$FAKE_STATE"
 echo "$*" >> "$state/calls"
 case "$FAKE_HANG" in
-	"$1" | "$1 $2") exec sleep 20 ;;
+	"$1" | "$1 $2") echo $$ >> "$state/hung.pids"; exec sleep 20 ;;
 esac
+if [ -n "$FAKE_STATE_HANG" ] && [ -e "$state/stopped-once" ] && [ ! -e "$state/restarted" ]; then
+	case "$1" in
+		ps | inspect) echo $$ >> "$state/hung.pids"; exec sleep 20 ;;
+	esac
+fi
 state_fails() {
 	[ -n "$FAKE_STATE_FAILS" ] && [ -e "$state/stopped-once" ] && [ ! -e "$state/restarted" ]
 }
@@ -131,6 +148,22 @@ add_certificate() {
 		"$REAL_JQ" '.letsencrypt.Certificates += [{"domain":{"main":"added.example.com","sans":[]},"certificate":"AA==","key":"DUMMY-ADDED-KEY"}]' "$FAKE_ACME" > "$FAKE_ACME.late" && mv "$FAKE_ACME.late" "$FAKE_ACME"
 	}
 }
+if [ "$1" = info ] && [ "$2" = --format ] && [ "$3" = "{{.Swarm.ControlAvailable}}" ]; then
+	[ -z "$FAKE_SERVICE_LABELS" ] || echo true
+	exit 0
+fi
+if [ "$1" = service ] && [ "$2" = ls ]; then
+	echo svc1
+	exit 0
+fi
+if [ "$1" = service ] && [ "$2" = inspect ] && [ "$3" = --format ]; then
+	echo "$FAKE_SERVICE_LABELS"
+	exit 0
+fi
+if [ "$1" = inspect ] && [ "$2" = --format ]; then
+	echo "$FAKE_LABELS"
+	exit 0
+fi
 if [ "$1" = service ] && [ "$2" = inspect ]; then
 	[ "$FAKE_MODE" = service ] || [ "$FAKE_MODE" = global ] || exit 1
 	case "$*" in
@@ -158,6 +191,7 @@ if [ "$1" = inspect ]; then
 fi
 if [ "$1" = stop ]; then
 	[ -z "$FAKE_MARKER" ] || cp "$FAKE_MARKER" "$state/marker-at-stop" 2>/dev/null
+	[ -z "$FAKE_STOP_SLOW" ] || sleep "$FAKE_STOP_SLOW"
 	touch "$state/stopped-once"
 	echo false > "$state/running"
 	add_certificate
@@ -166,6 +200,7 @@ if [ "$1" = stop ]; then
 fi
 if [ "$1" = start ]; then
 	[ -z "$FAKE_START_SLOW" ] || sleep 1
+	[ -z "$FAKE_START_WRITES" ] || printf '{"letsencrypt":{"Certificates":[]}}' > "$FAKE_ACME"
 	ls "$(dirname "$FAKE_ACME")" > "$state/dir-at-start" 2>/dev/null
 	touch "$state/restarted"
 	if [ "$FAKE_START_FAIL" = always ]; then exit 1; fi
@@ -211,6 +246,7 @@ export let backupDir: string;
 export let logDir: string;
 
 export const writeExecutable = (file: string, content: string) => {
+	rmSync(file, { force: true });
 	writeFileSync(file, content);
 	chmodSync(file, 0o755);
 };
@@ -245,18 +281,24 @@ export const setupBin = (options: {
 	shell: string;
 	timeout?: boolean;
 	setsid?: boolean;
+	sudo?: boolean;
 }) => {
 	rmSync(binDir, { recursive: true, force: true });
 	mkdirSync(binDir);
 	for (const tool of TOOLS) {
-		const found = which(tool);
-		if (found) {
-			symlinkSync(found, path.join(binDir, tool));
+		const tracked = which(tool);
+		if (tracked) {
+			symlinkSync(tracked, path.join(binDir, tool));
 		}
 	}
 	symlinkSync(options.shell, path.join(binDir, "sh"));
 	writeExecutable(path.join(binDir, "docker"), FAKE_DOCKER);
-	writeExecutable(path.join(binDir, "sudo"), '#!/bin/sh\nexec "$@"\n');
+	if (options.sudo) {
+		writeExecutable(
+			path.join(binDir, "sudo"),
+			'#!/bin/sh\necho "$*" >> "$FAKE_STATE/sudo"\nexec "$@"\n',
+		);
+	}
 	if (options.jq && REAL_JQ) {
 		writeExecutable(path.join(binDir, "jq"), FAKE_JQ);
 	}
@@ -295,7 +337,11 @@ export const mains = (document: { letsencrypt: { Certificates: unknown[] } }) =>
 export const targets = (...domains: string[]): AcmeDeleteTarget[] =>
 	domains.map((domain) => ({ resolver: "letsencrypt", domain }));
 
-export const scriptFor = (list: AcmeDeleteTarget[], startDelaySeconds = 0) =>
+export const scriptFor = (
+	list: AcmeDeleteTarget[],
+	startDelaySeconds = 0,
+	extra: Partial<Parameters<typeof buildAcmeDeleteScript>[0]> = {},
+) =>
 	buildAcmeDeleteScript({
 		acmeFile,
 		lockFile,
@@ -304,8 +350,10 @@ export const scriptFor = (list: AcmeDeleteTarget[], startDelaySeconds = 0) =>
 		targets: list,
 		timestamp: "20261012T101500Z",
 		pollSeconds: 0,
+		settleSeconds: 0,
 		waitSeconds: 3,
 		startDelaySeconds,
+		...extra,
 	});
 
 export const baseEnv = (extra: Record<string, string> = {}) =>
@@ -356,6 +404,9 @@ export const leftovers = () =>
 	readdirSync(acmeDir).filter(
 		(name) => name.includes(".new-") || name.includes(".restore-"),
 	);
+
+export const idOf = (file: string) =>
+	createHash("sha256").update(readFileSync(file)).digest("hex");
 
 export const mode = (file: string) => statSync(file).mode & 0o777;
 
@@ -411,12 +462,17 @@ export const spawnScript = (
 	list: AcmeDeleteTarget[],
 	env: Record<string, string> = {},
 	delay = 0,
+	extra: Partial<Parameters<typeof buildAcmeDeleteScript>[0]> = {},
 ) => {
-	const child: ChildProcess = spawn(shell, ["-c", scriptFor(list, delay)], {
-		env: baseEnv(env),
-		detached: true,
-		stdio: ["ignore", "pipe", "pipe"],
-	});
+	const child: ChildProcess = spawn(
+		shell,
+		["-c", scriptFor(list, delay, extra)],
+		{
+			env: baseEnv(env),
+			detached: true,
+			stdio: ["ignore", "pipe", "pipe"],
+		},
+	);
 	const state = { output: "" };
 	child.stdout?.on("data", (chunk) => {
 		state.output += chunk.toString();
@@ -436,6 +492,7 @@ export const fastScript = (list: AcmeDeleteTarget[], extra = {}) =>
 		targets: list,
 		timestamp: "20261012T101500Z",
 		pollSeconds: 0,
+		settleSeconds: 0,
 		waitSeconds: 1,
 		dockerSeconds: 2,
 		stopSeconds: 2,

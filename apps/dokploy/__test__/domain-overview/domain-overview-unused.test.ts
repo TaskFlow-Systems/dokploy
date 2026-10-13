@@ -515,6 +515,36 @@ describe("defect 2: remote commands that fail over SSH", () => {
 		expect(peak).toBe(1);
 	});
 
+	it("gives one server a time budget and skips the stages left after it", async () => {
+		let clock = Date.now();
+		const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
+		mocks.execAsyncRemote.mockImplementation(
+			async (_id: string, command: string) => {
+				if (command.includes(ROUTES)) {
+					clock += 31_000;
+				}
+				return commandHandler({
+					acme: acmeDocument([{ main: "old.example.com", days: 80 }]),
+				})(command);
+			},
+		);
+
+		const overview = await overviewFor();
+		now.mockRestore();
+
+		const commands = mocks.execAsyncRemote.mock.calls.map(([, c]) => String(c));
+		expect(commands.some((c) => c.includes(DYNAMIC))).toBe(false);
+		expect(commands.some((c) => c.includes(ACME_READ))).toBe(false);
+		const server = overview.servers.find(
+			(item) => item.serverId === "server-1",
+		);
+		expect(server?.usageVerified).toBe(false);
+		expect(
+			overview.serverErrors.map((item) => item.message).join("\n"),
+		).toContain("skipped");
+		expect(overview.unusedCertificates).toEqual([]);
+	});
+
 	it("reads remote Traefik files from the same directory as the certificates", async () => {
 		useRemote({});
 

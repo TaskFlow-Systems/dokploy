@@ -196,25 +196,71 @@ export const readMonitoringConfig = async (readAll = false) => {
 	return null;
 };
 
+type TraefikFileAccessOptions = { allowProtected?: boolean };
+
 // ACME storage and uploaded certificates hold TLS private keys, so the generic
 // Traefik file editor only opens them when the caller passed the super session
-// check (allowProtected). Every sibling whose name starts with acme.json is
-// covered too: backups made by operators or Traefik hold the same keys.
+// check (allowProtected). Backups made by operators or Traefik hold the same
+// keys, so every path segment is checked, not only the last one: acme.json
+// siblings, children of a directory with such a name, and names like
+// old-acme.json or acme.bak.json. Ordinary config names such as acme-shop.yml
+// stay editable.
+const isProtectedSegment = (segment: string) => {
+	const name = segment.toLowerCase();
+	return (
+		name.includes("acme.json") || /^acme[._-].*\.(?:json|bak)\b/.test(name)
+	);
+};
+
+const hasProtectedSegment = (resolvedPath: string) =>
+	resolvedPath.split(path.sep).some(isProtectedSegment);
+
+const realPathOf = (target: string): string => {
+	try {
+		return fs.realpathSync(target);
+	} catch {
+		const parent = path.dirname(target);
+		return parent === target
+			? target
+			: path.join(realPathOf(parent), path.basename(target));
+	}
+};
+
 export const isProtectedTraefikPath = (
 	configPath: string,
 	serverId?: string,
 ) => {
 	const { CERTIFICATES_PATH } = paths(!!serverId);
 	const certificatesPath = path.resolve(CERTIFICATES_PATH);
-	const resolvedPath = path.resolve(configPath);
-	const fileName = path.basename(resolvedPath).toLowerCase();
-
-	return (
-		fileName.startsWith("acme.json") ||
-		fileName.endsWith(".key") ||
+	const check = (resolvedPath: string) =>
+		hasProtectedSegment(resolvedPath) ||
+		path.basename(resolvedPath).toLowerCase().endsWith(".key") ||
 		resolvedPath === certificatesPath ||
-		resolvedPath.startsWith(`${certificatesPath}${path.sep}`)
+		resolvedPath.startsWith(`${certificatesPath}${path.sep}`);
+
+	const resolvedPath = path.resolve(configPath);
+	if (check(resolvedPath)) {
+		return true;
+	}
+	return !serverId && check(realPathOf(resolvedPath));
+};
+
+const assertRemoteLinkTarget = async (
+	configPath: string,
+	serverId: string,
+	options: TraefikFileAccessOptions,
+) => {
+	if (options.allowProtected) {
+		return;
+	}
+	const { stdout } = await execAsyncRemote(
+		serverId,
+		`readlink -f -- ${quote([configPath])} 2>/dev/null || true`,
 	);
+	const target = stdout.trim();
+	if (target && isProtectedTraefikPath(target, serverId)) {
+		throw new Error("Access to this Traefik file is not allowed");
+	}
 };
 
 export const filterProtectedTraefikEntries = <
@@ -233,8 +279,6 @@ export const filterProtectedTraefikEntries = <
 					}
 				: entry,
 		);
-
-type TraefikFileAccessOptions = { allowProtected?: boolean };
 
 export const resolveTraefikConfigPath = (
 	pathFile: string,
@@ -275,6 +319,7 @@ export const readConfigInPath = async (
 	const configPath = resolveTraefikConfigPath(pathFile, serverId, options);
 
 	if (serverId) {
+		await assertRemoteLinkTarget(configPath, serverId, options ?? {});
 		const { stdout } = await execAsyncRemote(
 			serverId,
 			`cat ${quote([configPath])}`,
@@ -320,6 +365,9 @@ export const writeTraefikConfigInPath = async (
 	options?: TraefikFileAccessOptions,
 ) => {
 	const configPath = resolveTraefikConfigPath(pathFile, serverId, options);
+	if (serverId) {
+		await assertRemoteLinkTarget(configPath, serverId, options ?? {});
+	}
 
 	try {
 		if (serverId) {

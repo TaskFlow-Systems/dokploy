@@ -21,6 +21,16 @@ const RESOLVER_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
 const TIMESTAMP = /^\d{8}T\d{6}Z$/;
 const RUN_ID = /^[0-9a-f]{6}$/;
 
+// Paths, relative to BASE_PATH, that only exist while a deletion runs or after
+// one: key backups, the lock, the marker and the temporary files of either.
+export const ACME_DELETE_BACKUP_EXCLUDES = [
+	`/${ACME_BACKUP_DIR_NAME}/`,
+	`/${ACME_DELETE_LOCK_NAME}*`,
+	`/${ACME_DELETE_MARKER_NAME}*`,
+	"acme.json.new-*",
+	"acme.json.restore-*",
+];
+
 export const isValidCertificateDomain = (name: string) =>
 	name.length <= 253 && DOMAIN_NAME.test(name);
 
@@ -55,23 +65,32 @@ export type AcmeDeleteStatus =
 	| "start_failed_after_restore"
 	| "start_failed_restore_failed"
 	| "interrupted"
+	| "traefik_not_restarted"
+	| "in_use"
 	| "log_dir_failed"
 	| "launch_failed";
 
-export type AcmeDeleteTarget = { resolver: string; domain: string };
+export type AcmeDeleteTarget = {
+	resolver: string;
+	domain: string;
+	names?: string[];
+};
 
 export type AcmeDeleteScriptOptions = {
 	acmeFile: string;
 	lockFile: string;
 	markerFile: string;
 	backupDir: string;
+	staticFile?: string;
 	targets: AcmeDeleteTarget[];
 	timestamp: string;
 	waitSeconds?: number;
 	pollSeconds?: number;
+	settleSeconds?: number;
 	startDelaySeconds?: number;
 	dockerSeconds?: number;
 	stopSeconds?: number;
+	cleanupWaitSeconds?: number;
 	deadlineSeconds?: number;
 };
 
@@ -120,9 +139,23 @@ export const buildAcmeDeleteScript = (options: AcmeDeleteScriptOptions) => {
 	const pairs = JSON.stringify(
 		targets.map((item) => ({ r: item.resolver, m: item.domain })),
 	);
-	const wait = wholeSeconds(options.waitSeconds, 60);
+	const wait = wholeSeconds(options.waitSeconds, 20);
 	const poll = Math.max(0, options.pollSeconds ?? 1);
+	const settle = Math.max(0, options.settleSeconds ?? 3);
 	const delay = Math.max(0, Math.floor(options.startDelaySeconds ?? 0));
+	const needles = [
+		...new Set(
+			targets.flatMap((item) =>
+				[item.domain, ...(item.names ?? [])].map((name) =>
+					name.toLowerCase().replace(/^\*\./, ""),
+				),
+			),
+		),
+	].filter(isValidCertificateDomain);
+	const staticFile = options.staticFile ?? "";
+	if (staticFile) {
+		assertSafePath(staticFile, "", "static config file");
+	}
 
 	return `
 umask 077
@@ -131,16 +164,20 @@ ACME_DIR=${shellQuote(dirnameOf(acmeFile))}
 LOCK=${shellQuote(lockFile)}
 MARKER=${shellQuote(markerFile)}
 BACKUP_DIR=${shellQuote(backupDir)}
+STATIC=${shellQuote(staticFile)}
+NEEDLES=${shellQuote(needles.join(" "))}
 DEL=${shellQuote(pairs)}
 EXPECTED=${targets.length}
 TS=${shellQuote(timestamp)}
 TRAEFIK=${shellQuote(TRAEFIK_RESOURCE_NAME)}
 WAIT_SECONDS=${wait}
 POLL_SECONDS=${poll}
+SETTLE_SECONDS=${settle}
 START_DELAY=${delay}
-DOCKER_SECONDS=${wholeSeconds(options.dockerSeconds, 20)}
-STOP_SECONDS=${wholeSeconds(options.stopSeconds, 60)}
-DEADLINE_SECONDS=${wholeSeconds(options.deadlineSeconds, 300)}
+DOCKER_SECONDS=${wholeSeconds(options.dockerSeconds, 10)}
+STOP_SECONDS=${wholeSeconds(options.stopSeconds, 20)}
+CLEANUP_WAIT=${wholeSeconds(options.cleanupWaitSeconds, 15)}
+DEADLINE_SECONDS=${wholeSeconds(options.deadlineSeconds, 60)}
 KEEP_FILES=${ACME_DELETE_KEEP_FILES}
 BAK="$BACKUP_DIR/acme.json.bak-$TS"
 NEW="$ACME.new-$TS"
@@ -151,7 +188,10 @@ REPLICAS=1
 STOPPED=0
 HAVE_LOCK=0
 RESULT_DONE=0
+RESULT_CODE=""
 COMPLETED=0
+DOWN=0
+NEW_ID=""
 CHILD=""
 MYOWNER=""
 TMPLOCK=""
@@ -167,6 +207,7 @@ REST_PROG='with_entries(if (.value | type) == "object" then .value |= del(.Certi
 
 finish() {
 	RESULT_DONE=1
+	RESULT_CODE="$1"
 	echo "DOKPLOY_RESULT $1"
 	[ "$1" = ok ] && exit 0
 	exit 1
@@ -176,22 +217,21 @@ check_deadline() {
 	[ "$(date +%s)" -lt "$DEADLINE_AT" ] || finish deadline_exceeded
 }
 
-release_lock() {
-	[ "$HAVE_LOCK" = 1 ] || return 0
-	if [ "$(cat "$LOCK" 2>/dev/null)" = "$MYOWNER" ]; then
-		rm -f "$LOCK" 2>/dev/null
-	fi
-}
-
 cleanup() {
 	trap ':' HUP INT TERM
-	[ -z "$CHILD" ] || kill "$CHILD" 2>/dev/null
-	if [ "$STOPPED" = 1 ]; then
-		traefik_start || echo "DOKPLOY_NOTE traefik_not_restarted"
+	dk_settle
+	if [ "$STOPPED" = 1 ] && ! traefik_start; then
+		DOWN=1
+		echo "DOKPLOY_NOTE traefik_not_restarted"
 	fi
-	rm -f "$NEW" "$RESTORE" "$OUT" "$OUT.rc" "$TMPLOCK" 2>/dev/null
+	rm -f "$NEW" "$RESTORE" "$OUT" "$OUT.rc" "$OUT.pid" "$TMPLOCK" "$MARKER.tmp.$$" 2>/dev/null
 	release_lock
-	if [ "$RESULT_DONE" != 1 ]; then
+	if [ "$DOWN" = 1 ]; then
+		case "$RESULT_CODE" in
+			start_failed_*) ;;
+			*) echo "DOKPLOY_RESULT traefik_not_restarted" ;;
+		esac
+	elif [ "$RESULT_DONE" != 1 ]; then
 		if [ "$COMPLETED" = 1 ]; then
 			echo "DOKPLOY_RESULT ok"
 		else
@@ -202,26 +242,37 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-take_lock() {
-	ps_start="$(proc_start $$)"
-	[ -n "$ps_start" ] || ps_start=none
-	MYOWNER="$$ $ps_start $(boot_id)"
-	TMPLOCK="$LOCK.tmp.$$"
-	( echo "$MYOWNER" > "$TMPLOCK" ) 2>/dev/null || finish busy
-	if ln "$TMPLOCK" "$LOCK" 2>/dev/null; then
-		HAVE_LOCK=1
-		return 0
-	fi
-	lock_state
-	if [ "$LOCK_STATE" = stale ] && release_stale_lock && ln "$TMPLOCK" "$LOCK" 2>/dev/null; then
-		HAVE_LOCK=1
-		return 0
-	fi
-	finish busy
+write_marker() {
+	( printf 'kind=%s\\nreplicas=%s\\nts=%s\\nphase=%s\\nbackup=%s\\nnew=%s\\n' "$KIND" "$REPLICAS" "$TS" "$1" "$2" "$3" > "$MARKER.tmp.$$" ) 2>/dev/null && mv -f "$MARKER.tmp.$$" "$MARKER" 2>/dev/null
 }
 
-write_marker() {
-	( printf 'kind=%s\\nreplicas=%s\\nts=%s\\nphase=%s\\nbackup=%s\\n' "$KIND" "$REPLICAS" "$TS" "$1" "$2" > "$MARKER.tmp.$$" ) 2>/dev/null && mv -f "$MARKER.tmp.$$" "$MARKER" 2>/dev/null
+out_mentions() {
+	for n in $NEEDLES; do
+		grep -qiF -e "$n" "$OUT" 2>/dev/null && return 0
+	done
+	return 1
+}
+
+check_usage() {
+	for n in $NEEDLES; do
+		[ -z "$(find -L "$ACME_DIR" -type f \\( -name '*.yml' -o -name '*.yaml' -o -name '*.toml' \\) -exec grep -liF -e "$n" {} + 2>/dev/null)" ] || finish in_use
+		[ -z "$STATIC" ] || [ ! -f "$STATIC" ] || ! grep -qiF -e "$n" "$STATIC" 2>/dev/null || finish in_use
+	done
+	dk "$DOCKER_SECONDS" ps -q || finish docker_unavailable
+	ids="$(cat "$OUT" 2>/dev/null)"
+	if [ -n "$ids" ]; then
+		dk "$DOCKER_SECONDS" inspect --format '{{json .Config.Labels}}' $ids || finish docker_unavailable
+		! out_mentions || finish in_use
+	fi
+	dk "$DOCKER_SECONDS" info --format '{{.Swarm.ControlAvailable}}' || finish docker_unavailable
+	if [ "$(cat "$OUT" 2>/dev/null)" = true ]; then
+		dk "$DOCKER_SECONDS" service ls -q || finish docker_unavailable
+		ids="$(cat "$OUT" 2>/dev/null)"
+		if [ -n "$ids" ]; then
+			dk "$DOCKER_SECONDS" service inspect --format '{{json .Spec.Labels}}' $ids || finish docker_unavailable
+			! out_mentions || finish in_use
+		fi
+	fi
 }
 
 ensure_backup_dir() {
@@ -243,7 +294,8 @@ prune_backups() {
 }
 
 echo "DOKPLOY_STARTED"
-take_lock
+take_lock || finish busy
+sweep_leftovers
 command -v jq >/dev/null 2>&1 || finish jq_missing
 [ -f "$ACME" ] || finish no_file
 ensure_backup_dir || finish backup_failed
@@ -262,6 +314,7 @@ check_deadline
 echo "DOKPLOY_PRECHECK ok"
 [ "$START_DELAY" -le 0 ] || sleep "$START_DELAY"
 check_deadline
+check_usage
 
 if [ "$KIND" != none ]; then
 	write_marker stopping "" || finish marker_failed
@@ -282,7 +335,7 @@ if command -v cmp >/dev/null 2>&1 && ! cmp -s "$ACME" "$BAK"; then
 	finish backup_failed
 fi
 echo "DOKPLOY_BACKUP $(basename "$BAK")"
-[ "$KIND" = none ] || write_marker stopped "$BAK"
+[ "$KIND" = none ] || write_marker stopped "$BAK" ""
 ( set -C; umask 077; jq --argjson del "$DEL" "$EDIT_PROG" "$ACME" > "$NEW" ) 2>/dev/null || finish verify_failed
 jq -e . "$NEW" >/dev/null 2>&1 || finish verify_failed
 after="$(jq "$TOTAL_PROG" "$NEW" 2>/dev/null)"
@@ -292,16 +345,19 @@ esac
 [ $((before - after)) -eq "$EXPECTED" ] || finish verify_failed
 [ "$(jq -c "$REST_PROG" "$ACME" 2>/dev/null)" = "$(jq -c "$REST_PROG" "$NEW" 2>/dev/null)" ] || finish verify_failed
 chmod 600 "$NEW" 2>/dev/null || finish verify_failed
+NEW_ID="$(file_id "$NEW")"
+[ "$KIND" = none ] || write_marker editing "$BAK" "$NEW_ID" || finish marker_failed
 owner="$(stat -c '%u:%g' "$ACME" 2>/dev/null || stat -f '%u:%g' "$ACME" 2>/dev/null)"
 [ -z "$owner" ] || chown "$owner" "$NEW" 2>/dev/null || true
 mv -f "$NEW" "$ACME" 2>/dev/null || finish move_failed
-[ "$KIND" = none ] || write_marker edited "$BAK"
+[ "$KIND" = none ] || write_marker edited "$BAK" "$NEW_ID"
 
 if traefik_start; then
 	COMPLETED=1
 	prune_backups
 	finish ok
 fi
+[ -n "$NEW_ID" ] && [ "$(file_id "$ACME")" = "$NEW_ID" ] || finish start_failed_restore_failed
 if ( umask 077; cp "$BAK" "$RESTORE" ) 2>/dev/null && chmod 600 "$RESTORE" 2>/dev/null && mv -f "$RESTORE" "$ACME" 2>/dev/null; then
 	if traefik_start; then
 		finish start_failed_restored
@@ -322,21 +378,77 @@ export type DeletionStatusFile = {
 	marker: { kind: string; phase: string } | null;
 };
 
+const STATUS_CLEANUP = `
+cleanup() {
+	trap ':' HUP INT TERM
+	dk_settle
+	rm -f "$OUT" "$OUT.rc" "$OUT.pid" "$TMPLOCK" 2>/dev/null
+	release_lock
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+finish() {
+	exit 0
+}
+
+drop_marker_if_running() {
+	KIND="$(sed -n 's/^kind=//p' "$MARKER" 2>/dev/null | head -n 1)"
+	case "$KIND" in
+		container | service) ;;
+		*) return 0 ;;
+	esac
+	traefik_state
+	[ "$STATE" = running ] || return 0
+	take_lock || return 0
+	sweep_leftovers
+	traefik_state
+	[ "$STATE" != running ] || rm -f "$MARKER" 2>/dev/null
+	release_lock
+}
+`;
+
 export const buildDeletionStatusCommand = (options: {
 	logDir: string;
 	lockFile: string;
 	markerFile: string;
+	acmeFile: string;
 	logFile?: string;
+	dockerSeconds?: number;
 }) => {
 	if (options.logFile !== undefined && !LOG_FILE.test(options.logFile)) {
 		throw new Error("Invalid log file name");
 	}
+	assertSafePath(options.lockFile, `/${ACME_DELETE_LOCK_NAME}`, "lock file");
+	assertSafePath(
+		options.markerFile,
+		`/${ACME_DELETE_MARKER_NAME}`,
+		"marker file",
+	);
+	assertSafePath(options.acmeFile, "", "ACME file");
 	return [
 		`LOGDIR=${shellQuote(options.logDir)}`,
 		`LOCK=${shellQuote(options.lockFile)}`,
 		`MARKER=${shellQuote(options.markerFile)}`,
+		`ACME=${shellQuote(options.acmeFile)}`,
+		`TRAEFIK=${shellQuote(TRAEFIK_RESOURCE_NAME)}`,
+		`DOCKER_SECONDS=${wholeSeconds(options.dockerSeconds, 5)}`,
+		"STOP_SECONDS=20",
+		"CLEANUP_WAIT=5",
+		"WAIT_SECONDS=1",
+		"POLL_SECONDS=0",
+		"SETTLE_SECONDS=0",
+		'KIND=none; REPLICAS=1; STOPPED=0; HAVE_LOCK=0; CHILD=""; MYOWNER=""; TMPLOCK=""',
+		'OUT="$LOCK.out.$$"',
+		TIMEOUT_SETUP,
 		LOCK_FUNCTIONS,
+		DOCKER_FUNCTIONS,
+		STATUS_CLEANUP,
 		"lock_state",
+		'if [ -f "$MARKER" ] && [ "$LOCK_STATE" != held ]; then',
+		"\tdrop_marker_if_running",
+		"\tlock_state",
+		"fi",
 		'if [ "$LOCK_STATE" = held ]; then echo "DOKPLOY_LOCK 1"; else echo "DOKPLOY_LOCK 0"; fi',
 		'[ "$LOCK_STATE" != stale ] || echo "DOKPLOY_STALE 1"',
 		'if [ -f "$MARKER" ]; then',
@@ -515,8 +627,10 @@ MARKER=${shellQuote(options.markerFile)}
 TRAEFIK=${shellQuote(TRAEFIK_RESOURCE_NAME)}
 DOCKER_SECONDS=${wholeSeconds(options.dockerSeconds, 20)}
 STOP_SECONDS=60
+CLEANUP_WAIT=5
 WAIT_SECONDS=1
 POLL_SECONDS=0
+SETTLE_SECONDS=0
 KIND=none
 REPLICAS=1
 STOPPED=0
@@ -526,7 +640,7 @@ ${TIMEOUT_SETUP}
 ${LOCK_FUNCTIONS}
 ${DOCKER_FUNCTIONS}
 ${MINIMAL_FINISH}
-trap 'rm -f "$OUT" "$OUT.rc"' EXIT
+trap 'rm -f "$OUT" "$OUT.rc" "$OUT.pid"' EXIT
 report_traefik() {
 	detect_traefik
 	if [ "$KIND" = none ]; then
@@ -584,8 +698,10 @@ export type TraefikRecoveryOptions = {
 	backupDir: string;
 	waitSeconds?: number;
 	pollSeconds?: number;
+	settleSeconds?: number;
 	dockerSeconds?: number;
 	stopSeconds?: number;
+	cleanupWaitSeconds?: number;
 };
 
 // Starts Traefik again after a run that was killed hard (SIGKILL, OOM, panel
@@ -612,10 +728,12 @@ LOCK=${shellQuote(options.lockFile)}
 MARKER=${shellQuote(options.markerFile)}
 BACKUP_DIR=${shellQuote(options.backupDir)}
 TRAEFIK=${shellQuote(TRAEFIK_RESOURCE_NAME)}
-WAIT_SECONDS=${wholeSeconds(options.waitSeconds, 60)}
+WAIT_SECONDS=${wholeSeconds(options.waitSeconds, 20)}
 POLL_SECONDS=${Math.max(0, options.pollSeconds ?? 1)}
-DOCKER_SECONDS=${wholeSeconds(options.dockerSeconds, 20)}
-STOP_SECONDS=${wholeSeconds(options.stopSeconds, 60)}
+SETTLE_SECONDS=${Math.max(0, options.settleSeconds ?? 3)}
+DOCKER_SECONDS=${wholeSeconds(options.dockerSeconds, 10)}
+STOP_SECONDS=${wholeSeconds(options.stopSeconds, 20)}
+CLEANUP_WAIT=${wholeSeconds(options.cleanupWaitSeconds, 15)}
 KIND=none
 REPLICAS=1
 STOPPED=0
@@ -635,37 +753,23 @@ finish() {
 }
 cleanup() {
 	trap ':' HUP INT TERM
-	[ -z "$CHILD" ] || kill "$CHILD" 2>/dev/null
-	rm -f "$OUT" "$OUT.rc" "$TMPLOCK" "$RESTORE" 2>/dev/null
-	if [ "$HAVE_LOCK" = 1 ] && [ "$(cat "$LOCK" 2>/dev/null)" = "$MYOWNER" ]; then
-		rm -f "$LOCK" 2>/dev/null
-	fi
+	dk_settle
+	rm -f "$OUT" "$OUT.rc" "$OUT.pid" "$TMPLOCK" "$RESTORE" 2>/dev/null
+	release_lock
 }
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
 [ -f "$MARKER" ] || finish no_marker
-lock_state
-[ "$LOCK_STATE" != held ] || finish busy
-ps_start="$(proc_start $$)"
-[ -n "$ps_start" ] || ps_start=none
-MYOWNER="$$ $ps_start $(boot_id)"
-TMPLOCK="$LOCK.tmp.$$"
-( echo "$MYOWNER" > "$TMPLOCK" ) 2>/dev/null || finish busy
-if ! ln "$TMPLOCK" "$LOCK" 2>/dev/null; then
-	if [ "$LOCK_STATE" = stale ] && release_stale_lock && ln "$TMPLOCK" "$LOCK" 2>/dev/null; then
-		:
-	else
-		finish busy
-	fi
-fi
-HAVE_LOCK=1
+take_lock || finish busy
+sweep_leftovers
 
 KIND="$(sed -n 's/^kind=//p' "$MARKER" 2>/dev/null | head -n 1)"
 REPLICAS="$(sed -n 's/^replicas=//p' "$MARKER" 2>/dev/null | head -n 1)"
 PHASE="$(sed -n 's/^phase=//p' "$MARKER" 2>/dev/null | head -n 1)"
 BACKUP_NAME="$(sed -n 's/^backup=//p' "$MARKER" 2>/dev/null | head -n 1)"
 BACKUP_NAME="$(basename "$BACKUP_NAME" 2>/dev/null)"
+NEW_ID="$(sed -n 's/^new=//p' "$MARKER" 2>/dev/null | head -n 1)"
 case "$KIND" in container | service) ;; *) finish invalid_marker ;; esac
 case "$REPLICAS" in '' | *[!0-9]*) finish invalid_marker ;; esac
 case "$BACKUP_NAME" in acme.json.bak-????????T??????Z) ;; *) BACKUP_NAME="" ;; esac
@@ -679,7 +783,7 @@ fi
 if traefik_start; then
 	finish recovered
 fi
-if [ "$PHASE" = edited ] && [ -n "$BACKUP_NAME" ] && [ -f "$BACKUP_DIR/$BACKUP_NAME" ]; then
+if { [ "$PHASE" = edited ] || [ "$PHASE" = editing ]; } && [ -n "$NEW_ID" ] && [ -n "$BACKUP_NAME" ] && [ -f "$BACKUP_DIR/$BACKUP_NAME" ] && [ "$(file_id "$ACME")" = "$NEW_ID" ] && [ -z "$(find "$ACME" -newer "$MARKER" 2>/dev/null)" ]; then
 	if ( cp "$BACKUP_DIR/$BACKUP_NAME" "$RESTORE" ) 2>/dev/null && chmod 600 "$RESTORE" 2>/dev/null && mv -f "$RESTORE" "$ACME" 2>/dev/null; then
 		if traefik_start; then
 			finish recovered_restored
@@ -710,7 +814,7 @@ export const RECOVERY_MESSAGES: Record<RecoveryStatus, string> = {
 	docker_unavailable:
 		"Docker did not answer, so Traefik was not touched. Try again in a moment.",
 	recovery_failed:
-		"Traefik could not be started. Check docker ps and the Traefik log on the server.",
+		"Traefik is still stopped: it did not start and nothing could be restored safely. Press Start Traefik again to retry, or check docker ps and the Traefik log on the server.",
 };
 
 export const ACME_DELETE_MESSAGES: Record<AcmeDeleteStatus, string> = {
@@ -731,7 +835,7 @@ export const ACME_DELETE_MESSAGES: Record<AcmeDeleteStatus, string> = {
 	deadline_exceeded:
 		"The deletion took longer than its time limit. The original file was not changed and Traefik was started again.",
 	marker_failed:
-		"The recovery marker could not be written, so Traefik was not stopped. Nothing was changed.",
+		"The recovery marker could not be written, so the certificate file was not changed. Traefik is running, or was started again.",
 	unsupported_traefik_mode:
 		"Traefik runs as a swarm service that cannot be stopped by scaling. Nothing was changed.",
 	backup_failed:
@@ -745,11 +849,15 @@ export const ACME_DELETE_MESSAGES: Record<AcmeDeleteStatus, string> = {
 	start_failed_restored:
 		"Traefik did not start with the edited file. The backup was restored and Traefik was started again.",
 	start_failed_after_restore:
-		"Traefik did not start with the edited file. The backup was restored, but Traefik still does not start. Check it with docker ps and the Traefik log.",
+		"Traefik did not start with the edited file. The backup was restored, but Traefik is still not running (it is stopped). Press Start Traefik again on this page, or check docker ps and the Traefik log.",
 	start_failed_restore_failed:
-		"Traefik did not start and the backup could not be restored automatically. Restore the backup file by hand and start dokploy-traefik.",
+		"Traefik did not start with the edited file, and the backup was not put back automatically (the file changed after the edit, or the copy failed). If Traefik is stopped, press Start Traefik again on this page; if it still fails, restore the backup file by hand.",
 	interrupted:
 		"The deletion was interrupted. Check that Traefik is running and look at the backup file before trying again.",
+	traefik_not_restarted:
+		"The deletion stopped before it finished and Traefik is not confirmed running: it is stopped or still stopping. Press Start Traefik again on this page. If that does not help, start dokploy-traefik on the server by hand.",
+	in_use:
+		"A requested certificate is mentioned by a route or a Traefik config file now. Nothing was changed.",
 	log_dir_failed:
 		"The log directory could not be used, so nothing was started. Nothing was changed.",
 	launch_failed: "The deletion did not start. Nothing was changed.",

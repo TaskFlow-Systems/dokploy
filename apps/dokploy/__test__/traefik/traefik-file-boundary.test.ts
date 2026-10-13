@@ -1,4 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	execAsync: vi.fn(),
@@ -291,5 +300,93 @@ describe("Traefik file path boundary", () => {
 		for (const [, command] of mocks.execAsyncRemote.mock.calls) {
 			expect(command).not.toContain("middlewares'$(id).yml");
 		}
+	});
+});
+
+describe("Traefik editor protection of key backups", () => {
+	let root = "";
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		root = mkdtempSync(path.join(tmpdir(), "traefik-boundary-"));
+		mkdirSync(path.join(root, "dynamic", "certificates"), { recursive: true });
+		mocks.paths.mockImplementation((remote?: boolean) => ({
+			CERTIFICATES_PATH: remote
+				? "/etc/dokploy/traefik/dynamic/certificates"
+				: path.join(root, "dynamic", "certificates"),
+			DYNAMIC_TRAEFIK_PATH: remote
+				? "/etc/dokploy/traefik/dynamic"
+				: path.join(root, "dynamic"),
+			MAIN_TRAEFIK_PATH: remote ? "/etc/dokploy/traefik" : root,
+		}));
+	});
+
+	afterEach(() => {
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it.each([
+		"dynamic/acme.json.d/inner.yml",
+		"dynamic/acme.json.bak/deep/inner.json",
+		"dynamic/old-acme.json",
+		"dynamic/acme.bak.json",
+		"dynamic/acme-backup.json",
+		"dynamic/ACME.JSON.OLD",
+		"dynamic/acme.json",
+	])("protects %s", (relative) => {
+		expect(isProtectedTraefikPath(path.join(root, relative))).toBe(true);
+	});
+
+	it.each([
+		"dynamic/acme-shop.yml",
+		"dynamic/acme.yml",
+		"dynamic/middlewares.yml",
+		"dynamic/my-app-acme.yml",
+		"traefik.yml",
+	])("leaves %s editable", (relative) => {
+		expect(isProtectedTraefikPath(path.join(root, relative))).toBe(false);
+	});
+
+	it("follows a symlink to a protected file before deciding", async () => {
+		writeFileSync(path.join(root, "dynamic", "acme.json"), "{}");
+		symlinkSync(
+			path.join(root, "dynamic", "acme.json"),
+			path.join(root, "dynamic", "innocent.yml"),
+		);
+		mkdirSync(path.join(root, "dynamic", "acme.json.d"));
+		symlinkSync(
+			path.join(root, "dynamic", "acme.json.d"),
+			path.join(root, "dynamic", "folder"),
+		);
+
+		const link = path.join(root, "dynamic", "innocent.yml");
+		expect(isProtectedTraefikPath(link)).toBe(true);
+		expect(
+			isProtectedTraefikPath(path.join(root, "dynamic", "folder", "x.yml")),
+		).toBe(true);
+		await expect(readConfigInPath(link)).rejects.toThrow(
+			"Access to this Traefik file is not allowed",
+		);
+		await expect(
+			readConfigInPath(link, undefined, { allowProtected: true }),
+		).resolves.toBe("{}");
+	});
+
+	it("resolves a remote symlink with readlink before it reads or writes", async () => {
+		mocks.execAsyncRemote.mockImplementation(
+			async (_server, command: string) =>
+				command.startsWith("readlink")
+					? { stdout: "/etc/dokploy/traefik/dynamic/acme.json\n" }
+					: { stdout: "KEY" },
+		);
+		const link = "/etc/dokploy/traefik/dynamic/innocent.yml";
+
+		await expect(readConfigInPath(link, "server-1")).rejects.toThrow(
+			"Access to this Traefik file is not allowed",
+		);
+		await expect(
+			writeTraefikConfigInPath(link, "x", "server-1"),
+		).rejects.toThrow("Access to this Traefik file is not allowed");
+		expect(mocks.writeFileRemote).not.toHaveBeenCalled();
 	});
 });
