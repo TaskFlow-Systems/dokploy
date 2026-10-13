@@ -24,6 +24,14 @@ describe("traefik ACME error classifier", () => {
 		);
 	});
 
+	it("classifies a missing DNS record on a full line that names the Let's Encrypt directory", () => {
+		const result = classifyTraefikError(
+			'2026-10-10T22:30:12Z ERR Error renewing ACME certificate: {gone.example.test []} error="resolver: one or more domains had a problem: [gone.example.test: invalid authorization: acme: error: 400 :: urn:ietf:params:acme:error:dns :: DNS problem: NXDOMAIN looking up A for gone.example.test - check that a DNS record exists for this domain]" acmeCA=https://acme-v02.api.letsencrypt.org/directory providerName=letsencrypt.acme',
+		);
+
+		expect(result.cause).toBe("no_dns_record");
+	});
+
 	it("classifies a DNS record that has no address", () => {
 		const result = classifyTraefikError(
 			"DNS problem: no valid A records found for example.test",

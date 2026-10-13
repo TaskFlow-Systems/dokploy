@@ -42,6 +42,9 @@ import {
 
 describe.skipIf(!REAL_JQ).each(SHELLS)(
 	"detached launch under $label",
+	// The tests wait up to 15 s for a detached process; vitest's default
+	// 5 s cuts them first on a busy runner.
+	{ timeout: 60_000 },
 	({ path: shell }) => {
 		const once = firstShellOnly(shell);
 		const RUN_ID = "abc123";

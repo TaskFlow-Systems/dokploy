@@ -49,9 +49,11 @@ const recover = (shell: string, env: Record<string, string> = {}) =>
 				backupDir,
 				pollSeconds: 0,
 				settleSeconds: 0,
-				waitSeconds: 1,
-				dockerSeconds: 2,
-				stopSeconds: 2,
+				// The script counts in whole seconds of the wall clock, so a
+				// limit of 2 can be barely one second on a busy CI runner.
+				waitSeconds: 5,
+				dockerSeconds: 5,
+				stopSeconds: 5,
 			}),
 		],
 		{ encoding: "utf8", env: baseEnv(env) },
@@ -175,8 +177,8 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 					timestamp: "20261012T101500Z",
 					pollSeconds: 0,
 					settleSeconds: 0,
-					dockerSeconds: 2,
-					stopSeconds: 2,
+					dockerSeconds: 4,
+					stopSeconds: 5,
 					...extra,
 				});
 
@@ -222,7 +224,7 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 					.split("\n")
 					.filter(Boolean)
 					.map(Number);
-				await waitFor(() => pids.every((pid) => !alive(pid)), 5_000);
+				await waitFor(() => pids.every((pid) => !alive(pid)));
 				expect(pids.length).toBeGreaterThan(0);
 			});
 		});
@@ -231,6 +233,7 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 
 describe.skipIf(!REAL_JQ).each(SHELLS)(
 	"a script a test leaves running, under $label",
+	{ timeout: 60_000 },
 	({ path: shell }) => {
 		it("is killed by the cleanup that runs after every test", async () => {
 			const job = spawnScript(shell, targets("one.example.com"), {
@@ -242,7 +245,7 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 
 			killLeftovers();
 
-			await waitFor(() => !alive(pid), 5_000);
+			await waitFor(() => !alive(pid));
 			expect(job.child.signalCode).toBe("SIGKILL");
 		});
 	},

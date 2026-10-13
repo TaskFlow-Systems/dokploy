@@ -81,9 +81,14 @@ const RULES: ReadonlyArray<{
 	},
 ];
 
+// Every ACME line names the Let's Encrypt directory in acmeCA=, which would
+// make each of them look like a failure to reach Let's Encrypt.
+const ACME_CA_FIELD = /\bacmeCA=\S+/g;
+
 export const classifyTraefikError = (
 	message: string,
 ): ClassifiedTraefikError => {
-	const cause = RULES.find((rule) => rule.matches(message))?.cause ?? "unknown";
+	const text = message.replace(ACME_CA_FIELD, "");
+	const cause = RULES.find((rule) => rule.matches(text))?.cause ?? "unknown";
 	return { cause, explanation: EXPLANATIONS[cause] };
 };

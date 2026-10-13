@@ -28,6 +28,45 @@ describe("Traefik log line selection", () => {
 	});
 });
 
+const consoleLine = (colour: boolean) => {
+	const paint = (code: string, text: string) =>
+		colour ? `\u001b[${code}m${text}\u001b[0m` : text;
+	return `${paint("90", "2026-10-10T22:30:12Z")} ${paint("31", "ERR")} ${paint("1", "Error renewing ACME certificate: {gone.example.test []}")} ${paint("36", "error=")}"resolver: one or more domains had a problem: [gone.example.test: DNS problem: NXDOMAIN looking up A for gone.example.test]" ${paint("36", "acmeCA=")}https://acme-v02.api.letsencrypt.org/directory ${paint("36", "providerName=")}letsencrypt.acme`;
+};
+
+describe("Traefik console log format", () => {
+	it("removes colour codes from the selected lines", () => {
+		expect(selectAcmeLogLines(consoleLine(true))).toEqual([consoleLine(false)]);
+	});
+
+	it("reads the level, time and domain of a coloured console line", () => {
+		const [line] = selectAcmeLogLines(consoleLine(true));
+
+		expect(readLogLevel(line!)).toBe("error");
+		expect(isErrorLine(line!)).toBe(true);
+		expect(readLogTime(line!)).toBe("2026-10-10T22:30:12Z");
+		expect(extractLogDomain(line!, new Set(["gone.example.test"]))).toBe(
+			"gone.example.test",
+		);
+		expect(extractLogDomain(line!, new Set())).toBe("gone.example.test");
+	});
+
+	it("reads the level behind a docker service logs prefix", () => {
+		const line = `dokploy-traefik.1.abc@node    | ${consoleLine(false)}`;
+
+		expect(readLogLevel(line)).toBe("error");
+		expect(readLogTime(line)).toBe("2026-10-10T22:30:12Z");
+	});
+
+	it("does not read an error level from an informational console line", () => {
+		const line =
+			"2026-10-10T22:30:12Z INF Testing certificate renew... acmeCA=https://acme-v02.api.letsencrypt.org/directory providerName=letsencrypt.acme";
+
+		expect(readLogLevel(line)).toBe("info");
+		expect(isErrorLine(line)).toBe(false);
+	});
+});
+
 describe("Traefik log fields", () => {
 	it("reads the level and time from logfmt lines", () => {
 		const line =

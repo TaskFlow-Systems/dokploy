@@ -23,6 +23,7 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { api } from "@/utils/api";
+import { deletionTargets, selectedItems, toggleAll } from "./selection";
 import {
 	CountBadge,
 	DnsCell,
@@ -62,7 +63,7 @@ const DeleteDialog = ({
 	onClose,
 }: {
 	items: UnusedCertificate[] | null;
-	onClose: () => void;
+	onClose: (deleted: boolean) => void;
 }) => {
 	const utils = api.useUtils();
 	const [typed, setTyped] = useState("");
@@ -104,7 +105,7 @@ const DeleteDialog = ({
 				toast.success(`${result.message}${backup}`);
 			}
 			setTyped("");
-			onClose();
+			onClose(result.status !== "failed");
 			await utils.domainOverview.list.invalidate();
 		} catch (error) {
 			toast.error(
@@ -119,13 +120,17 @@ const DeleteDialog = ({
 			onOpenChange={(open) => {
 				if (!open && !isPending) {
 					setTyped("");
-					onClose();
+					onClose(false);
 				}
 			}}
 		>
 			<AlertDialogContent>
 				<AlertDialogHeader>
-					<AlertDialogTitle>Delete unused certificates</AlertDialogTitle>
+					<AlertDialogTitle>
+						{items && items.length > 1
+							? `Delete ${items.length} unused certificates`
+							: "Delete unused certificate"}
+					</AlertDialogTitle>
 					<AlertDialogDescription asChild>
 						<div className="flex flex-col gap-3 text-sm">
 							<ul className="list-disc pl-5 font-mono text-xs break-all">
@@ -177,9 +182,10 @@ export const UnusedCertificatesTable = ({
 	const [pending, setPending] = useState<UnusedCertificate[] | null>(null);
 
 	const chosen = useMemo(
-		() => items.filter((item) => selected.has(item.key) && item.deletable),
+		() => selectedItems(items, selected),
 		[items, selected],
 	);
+	const deletableCount = items.filter((item) => item.deletable).length;
 	const servers = new Set(chosen.map((item) => item.serverId ?? "local"));
 	const canDeleteSelected =
 		certificatesVisible && chosen.length > 0 && servers.size === 1;
@@ -218,7 +224,7 @@ export const UnusedCertificatesTable = ({
 						onClick={() => setPending(chosen)}
 					>
 						<Trash2 className="size-4" />
-						Delete selected
+						Delete selected ({chosen.length})
 					</Button>
 				</div>
 			</div>
@@ -232,7 +238,18 @@ export const UnusedCertificatesTable = ({
 				<Table>
 					<TableHeader>
 						<TableRow>
-							<TableHead className="w-10" />
+							<TableHead className="w-10">
+								<Checkbox
+									checked={
+										deletableCount > 0 && chosen.length === deletableCount
+									}
+									disabled={!certificatesVisible || deletableCount === 0}
+									onCheckedChange={() =>
+										setSelected(toggleAll(items, selected))
+									}
+									aria-label="Select all unused certificates"
+								/>
+							</TableHead>
 							<TableHead>Domain</TableHead>
 							<TableHead>Server</TableHead>
 							<TableHead>Stored in</TableHead>
@@ -320,10 +337,14 @@ export const UnusedCertificatesTable = ({
 											variant="outline"
 											size="sm"
 											disabled={!item.deletable}
-											onClick={() => setPending([item])}
+											onClick={() =>
+												setPending(deletionTargets(item, items, selected))
+											}
 										>
 											<Trash2 className="size-4" />
-											Delete
+											{selected.has(item.key) && chosen.length > 1
+												? "Delete selected"
+												: "Delete"}
 										</Button>
 									</TableCell>
 								</TableRow>
@@ -334,9 +355,11 @@ export const UnusedCertificatesTable = ({
 			</div>
 			<DeleteDialog
 				items={pending}
-				onClose={() => {
+				onClose={(deleted) => {
 					setPending(null);
-					setSelected(new Set());
+					if (deleted) {
+						setSelected(new Set());
+					}
 				}}
 			/>
 		</div>

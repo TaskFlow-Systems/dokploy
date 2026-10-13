@@ -516,9 +516,9 @@ export const fastScript = (list: AcmeDeleteTarget[], extra = {}) =>
 		timestamp: "20261012T101500Z",
 		pollSeconds: 0,
 		settleSeconds: 0,
-		waitSeconds: 1,
-		dockerSeconds: 2,
-		stopSeconds: 2,
+		waitSeconds: 3,
+		dockerSeconds: 4,
+		stopSeconds: 4,
 		...extra,
 	});
 
