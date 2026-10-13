@@ -7,6 +7,7 @@ import { createOpenApiNextHandler } from "@dokploy/trpc-openapi";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { appRouter } from "@/server/api/root";
 import { createTRPCContext } from "@/server/api/trpc";
+import { logProcedureFailure } from "@/server/api/utils/procedure-error-log";
 import { handleApplicationEnvUpsert } from "./application.env.upsert";
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
@@ -58,14 +59,23 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 		router: appRouter,
 		createContext: createTRPCContext,
 		maxBodySize: OPENAPI_MAX_JSON_BODY_SIZE,
-		onError:
-			process.env.NODE_ENV === "development"
-				? ({ path, error }: { path: string | undefined; error: Error }) => {
-						console.error(
-							`❌ OpenAPI failed on ${path ?? "<no-path>"}: ${error.message}`,
-						);
-					}
-				: undefined,
+		onError: ({
+			path,
+			type,
+			error,
+		}: {
+			path: string | undefined;
+			type: string;
+			error: Error;
+		}) => {
+			if (process.env.NODE_ENV === "development") {
+				console.error(
+					`❌ OpenAPI failed on ${path ?? "<no-path>"}: ${error.message}`,
+				);
+				return;
+			}
+			void logProcedureFailure({ source: "openapi", path, type, error });
+		},
 	})(req, res);
 };
 
