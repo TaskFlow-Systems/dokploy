@@ -553,6 +553,8 @@ export interface UpdateDiskSpace {
 	requiredBytes: number | null;
 	oldImageCount: number;
 	oldImageBytes: number;
+	/** The old builds a cleanup removes, newest first. */
+	oldImages: DokployImageInfo[];
 	buildCacheBytes: number;
 }
 
@@ -616,6 +618,7 @@ export const getUpdateDiskSpace = async (): Promise<UpdateDiskSpace> => {
 			(sum, image) => sum + (image.uniqueSizeBytes ?? image.sizeBytes),
 			0,
 		),
+		oldImages: removable,
 		buildCacheBytes,
 	};
 };

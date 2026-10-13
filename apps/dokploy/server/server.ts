@@ -14,6 +14,7 @@ import {
 	initVolumeBackupsCronJobs,
 	sendDokployRestartNotifications,
 	setupDirectories,
+	startDiskHistorySampler,
 } from "@dokploy/server";
 import { warnAboutInterruptedTraefikDeletion } from "@dokploy/server/services/domain-overview";
 import { config } from "dotenv";
@@ -158,6 +159,7 @@ void app.prepare().then(async () => {
 			await initVolumeBackupsCronJobs();
 			await sendDokployRestartNotifications();
 			void cleanupOldDokployImages();
+			startDiskHistorySampler();
 			void warnAboutInterruptedTraefikDeletion();
 		}
 		await initEnterpriseBackupCronJobs();

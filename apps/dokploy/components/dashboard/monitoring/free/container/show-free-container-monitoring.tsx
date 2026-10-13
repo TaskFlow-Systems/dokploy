@@ -5,9 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { api } from "@/utils/api";
 import { ContainerResourceUsage } from "../../container-resource-usage/container-resource-usage";
+import { DiskUsageCard } from "./disk-usage/disk-usage-card";
 import { DockerBlockChart } from "./docker-block-chart";
 import { DockerCpuChart } from "./docker-cpu-chart";
-import { DockerDiskChart } from "./docker-disk-chart";
 import { DockerDiskUsageChart } from "./docker-disk-usage-chart";
 import { getDockerDiskUsageCardClassName } from "./docker-disk-usage-layout";
 import { DockerMemoryChart } from "./docker-memory-chart";
@@ -314,24 +314,12 @@ export const ContainerFreeMonitoring = ({
 					</CardContent>
 				</Card>
 				{appName === "dokploy" && (
-					<Card className="bg-background">
+					<Card className="bg-background lg:col-span-2">
 						<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 							<CardTitle className="text-sm font-medium">Disk Space</CardTitle>
 						</CardHeader>
 						<CardContent>
-							<div className="flex flex-col gap-2 w-full">
-								<span className="text-sm text-muted-foreground">
-									{`Used:  ${currentData.disk.value.diskUsage} GB / Limit: ${currentData.disk.value.diskTotal} GB`}
-								</span>
-								<Progress
-									value={currentData.disk.value.diskUsedPercentage}
-									className="w-full"
-								/>
-								<DockerDiskChart
-									accumulativeData={accumulativeData.disk}
-									diskTotal={currentData.disk.value.diskTotal}
-								/>
-							</div>
+							<DiskUsageCard />
 						</CardContent>
 					</Card>
 				)}

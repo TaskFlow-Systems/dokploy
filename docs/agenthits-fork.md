@@ -37,7 +37,9 @@ Fork: off_v0.29.8/Fork_<commits-since-official>+<short-sha>
 - Installer `install-agenthits.sh` ставит форк напрямую из GHCR, создает Docker
   secrets для runtime secret values и поддерживает `postgres:18+` volume target.
 - Мониторинг содержит дополнительные улучшения: breakdown ресурсов контейнеров,
-  детализацию Docker disk usage и отображение swap usage.
+  детализацию Docker disk usage, отображение swap usage и историю занятого
+  диска по категориям за день, 3, 7 и 30 дней с очисткой старых образов панели
+  и кэша сборки.
 - Добавлена безопасная upsert-логика application environment variables.
 - Исправлено сопоставление GitHub webhook deploys по owner login.
 - Ветка содержит security hardening поверх официального `v0.29.8`: проверки
@@ -95,7 +97,9 @@ commits, the fork version looks like `off_v0.29.8/Fork_157+abc123def456`.
   secrets for runtime secret values, and supports the `postgres:18+` volume
   target.
 - Monitoring includes extra improvements: container resource breakdown, Docker
-  disk usage details, and swap usage display.
+  disk usage details, swap usage display, and a disk usage history by category
+  for 1, 3, 7 and 30 days with a cleanup of old panel images and the build
+  cache.
 - Safe application environment variable upsert logic was added.
 - GitHub webhook deploy matching was fixed to use owner login.
 - The branch includes security hardening on top of official `v0.29.8`: access

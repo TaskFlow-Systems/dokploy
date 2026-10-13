@@ -16,11 +16,13 @@ import {
 	DEFAULT_UPDATE_DATA,
 	DOKPLOY_KEEP_IMAGES_MAX,
 	DOKPLOY_KEEP_IMAGES_MIN,
+	diskHistoryInputSchema,
 	dockerDiskUsageDetailLimitSchema,
 	filterProtectedTraefikEntries,
 	findServerById,
 	getAgentHitsUpdateCommand,
 	getAgentHitsUpdateImage,
+	getDiskUsageHistory,
 	getDockerDiskUsage,
 	getDokployImageKeepCount,
 	getDokployImages,
@@ -53,6 +55,7 @@ import {
 	readPorts,
 	recreateDirectory,
 	redactWebServerSettings,
+	refreshDiskUsage,
 	reloadDockerResource,
 	removeOldDokployImages,
 	resolveDockerDiskUsageDetailLimit,
@@ -441,6 +444,14 @@ export const settingsRouter = createTRPCRouter({
 				resolveDockerDiskUsageDetailLimit(input?.detailLimit),
 			);
 		}),
+	getDiskUsageHistory: adminProcedure
+		.input(diskHistoryInputSchema)
+		.query(async ({ input }) => {
+			if (IS_CLOUD) {
+				return null;
+			}
+			return await getDiskUsageHistory(input.period, input.utcOffsetMinutes);
+		}),
 	saveSSHPrivateKey: adminProcedure
 		.input(apiSaveSSHKey)
 		.mutation(async ({ input, ctx }) => {
@@ -816,6 +827,11 @@ export const settingsRouter = createTRPCRouter({
 				resourceName: input.buildCache
 					? "free-update-disk-space-with-build-cache"
 					: "free-update-disk-space",
+			});
+			// The page asks for the history right after this; without a new
+			// sample it would still show the space as taken.
+			await refreshDiskUsage({ force: true }).catch((error) => {
+				console.error("Disk usage: sampling after the cleanup failed", error);
 			});
 			return await getUpdateDiskSpace();
 		}),

@@ -93,6 +93,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@dokploy/server", async () => ({
 	CLEANUP_CRON_JOB: "0 0 * * *",
 	DEFAULT_UPDATE_DATA: {},
+	diskHistoryInputSchema: (await import("zod")).z.any(),
 	dockerDiskUsageDetailLimitSchema: (await import("zod")).z.any(),
 	DOKPLOY_KEEP_IMAGES_MAX: 5,
 	DOKPLOY_KEEP_IMAGES_MIN: 3,
