@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
 	rows: new Map<unknown, Record<string, unknown>[]>(),
 	selects: 0,
+	gate: null as Promise<void> | null,
 }));
 
 vi.mock("@dokploy/server/db", () => ({
@@ -11,7 +12,14 @@ vi.mock("@dokploy/server/db", () => ({
 		select: () => ({
 			from: async (table: unknown) => {
 				state.selects += 1;
-				return state.rows.get(table) ?? [];
+				const rows = state.rows.get(table) ?? [];
+				// The rows are read before the wait, like a query that started
+				// before a later write.
+				const gate = state.gate;
+				if (gate) {
+					await gate;
+				}
+				return rows;
 			},
 		}),
 	},
@@ -30,6 +38,7 @@ const TABLE_COUNT = 11;
 beforeEach(() => {
 	state.rows.clear();
 	state.selects = 0;
+	state.gate = null;
 	resetKnownSecretMatcherCache();
 });
 
@@ -143,5 +152,49 @@ describe("getKnownSecretMatcher", () => {
 
 		state.rows.get = original;
 		await expect(getKnownSecretMatcher()).resolves.toMatchObject({ size: 0 });
+	});
+
+	const holdLoads = () => {
+		let release = () => {};
+		state.gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		return release;
+	};
+
+	it("does not cache a load that was running when a write reset the cache", async () => {
+		state.rows.set(schema.projects, [
+			{ env: "SHARED_KEY=Before-Write-Value-1" },
+		]);
+		const release = holdLoads();
+		const overtaken = getKnownSecretMatcher();
+
+		state.rows.set(schema.projects, [
+			{ env: "SHARED_KEY=After-Write-Value-1" },
+		]);
+		resetKnownSecretMatcherCache();
+		state.gate = null;
+		release();
+		await overtaken;
+
+		const matcher = await getKnownSecretMatcher();
+		expect(scrubSecretText("is After-Write-Value-1", matcher)).toBe(`is ${R}`);
+		expect(state.selects).toBe(TABLE_COUNT * 2);
+	});
+
+	it("keeps the newer load shared when an overtaken one finishes first", async () => {
+		const releaseFirst = holdLoads();
+		const first = getKnownSecretMatcher();
+		resetKnownSecretMatcherCache();
+		const releaseSecond = holdLoads();
+		const second = getKnownSecretMatcher();
+
+		releaseFirst();
+		await first;
+		const third = getKnownSecretMatcher();
+		expect(state.selects).toBe(TABLE_COUNT * 2);
+
+		releaseSecond();
+		expect(await third).toBe(await second);
 	});
 });

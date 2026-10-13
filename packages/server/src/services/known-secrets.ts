@@ -26,6 +26,9 @@ const CACHE_TTL_MS = 30_000;
 
 let cached: { matcher: KnownSecretMatcher; expiresAt: number } | null = null;
 let pending: Promise<KnownSecretMatcher> | null = null;
+// A load that was already running when a write reset the cache read the rows
+// from before that write, so its result must not become the cached one.
+let generation = 0;
 
 const loadKnownSecretValues = async () => {
 	const [
@@ -142,19 +145,29 @@ export const getKnownSecretMatcher = async (): Promise<KnownSecretMatcher> => {
 	if (cached && cached.expiresAt > Date.now()) {
 		return cached.matcher;
 	}
-	pending ??= loadKnownSecretValues()
+	if (pending) {
+		return pending;
+	}
+	const startedIn = generation;
+	const load: Promise<KnownSecretMatcher> = loadKnownSecretValues()
 		.then((values) => {
 			const matcher = buildKnownSecretMatcher(values);
-			cached = { matcher, expiresAt: Date.now() + CACHE_TTL_MS };
+			if (startedIn === generation) {
+				cached = { matcher, expiresAt: Date.now() + CACHE_TTL_MS };
+			}
 			return matcher;
 		})
 		.finally(() => {
-			pending = null;
+			if (pending === load) {
+				pending = null;
+			}
 		});
-	return pending;
+	pending = load;
+	return load;
 };
 
 export const resetKnownSecretMatcherCache = () => {
+	generation += 1;
 	cached = null;
 	pending = null;
 };
