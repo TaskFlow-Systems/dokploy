@@ -57,7 +57,7 @@ export const DnsCell = ({ dns }: { dns: Row["dns"] }) => {
 				{status.label}
 			</span>
 			{status.hint && (
-				<span className="max-w-xs text-xs text-muted-foreground">
+				<span className="max-w-xs whitespace-normal text-xs text-muted-foreground">
 					{status.hint}
 				</span>
 			)}
@@ -83,7 +83,7 @@ export const LastErrorCell = ({
 }) => {
 	if (!error) {
 		return (
-			<span className="text-sm text-muted-foreground">
+			<span className="whitespace-normal text-sm text-muted-foreground">
 				{logAvailable
 					? "No error in the recent Traefik log"
 					: "Log not available"}
@@ -91,7 +91,7 @@ export const LastErrorCell = ({
 		);
 	}
 	return (
-		<div className="flex flex-col gap-2 text-sm max-w-md">
+		<div className="flex flex-col gap-2 text-sm max-w-md whitespace-normal">
 			<span className="text-xs text-muted-foreground">
 				{formatTime(error.time)}
 			</span>
