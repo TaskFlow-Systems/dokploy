@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/card";
 import { api } from "@/utils/api";
 import { StatusRow } from "./gpu-support";
+import { HardenServer } from "./harden-server";
 
 interface Props {
 	serverId: string;
@@ -18,6 +19,8 @@ interface Props {
 
 export const SecurityAudit = ({ serverId }: Props) => {
 	const [isRefreshing, setIsRefreshing] = useState(false);
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canExecute = permissions?.server.execute ?? false;
 	const { data, refetch, error, isPending, isError } =
 		api.server.security.useQuery(
 			{ serverId },
@@ -43,17 +46,26 @@ export const SecurityAudit = ({ serverId }: Props) => {
 									Check the security suggestions
 								</CardDescription>
 							</div>
-							<Button
-								isLoading={isRefreshing}
-								onClick={async () => {
-									setIsRefreshing(true);
-									await refetch();
-									setIsRefreshing(false);
-								}}
-							>
-								<RefreshCw className="size-4" />
-								Refresh
-							</Button>
+							<div className="flex flex-row gap-2 max-sm:flex-col">
+								{canExecute && (
+									<HardenServer
+										serverId={serverId}
+										audit={data}
+										onFinished={() => void refetch()}
+									/>
+								)}
+								<Button
+									isLoading={isRefreshing}
+									onClick={async () => {
+										setIsRefreshing(true);
+										await refetch();
+										setIsRefreshing(false);
+									}}
+								>
+									<RefreshCw className="size-4" />
+									Refresh
+								</Button>
+							</div>
 						</div>
 						<div className="flex items-center gap-2 w-full">
 							{isError && (

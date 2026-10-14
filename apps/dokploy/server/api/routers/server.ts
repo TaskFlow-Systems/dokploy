@@ -13,12 +13,15 @@ import {
 	getPublicIpWithFallback,
 	getServicesByServerId,
 	getWebServerSettings,
+	hardenServer,
 	haveActiveServices,
 	IS_CLOUD,
 	redactServer,
 	redactServers,
 	removeDeploymentsByServerId,
 	resolveServerMetricsConfigUpdate,
+	SERVER_HARDENING_FAILED,
+	SERVER_HARDENING_ITEMS,
 	serverAudit,
 	serverComponentsStatus,
 	serverSetup,
@@ -614,6 +617,50 @@ export const serverRouter = createTRPCRouter({
 					.catch((error) => {
 						emit.next(
 							`${error instanceof Error ? error.message : error}\n${COMPONENTS_UPDATE_FAILED}\n`,
+						);
+					})
+					.finally(() => {
+						emit.complete();
+					});
+			});
+		}),
+	hardenWithLogs: withPermission("server", "execute")
+		.meta({
+			openapi: {
+				path: "/server/harden-with-logs",
+				method: "POST",
+				override: true,
+				enabled: false,
+			},
+		})
+		.input(
+			z.object({
+				serverId: z.string(),
+				items: z.array(z.enum(SERVER_HARDENING_ITEMS)).min(1),
+			}),
+		)
+		.subscription(async ({ input, ctx }) => {
+			await assertServerAccess(ctx, input.serverId);
+			const server = await findServerById(input.serverId);
+			if (server.organizationId !== ctx.session.activeOrganizationId) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "You are not authorized to harden this server",
+				});
+			}
+			await audit(ctx, {
+				action: "update",
+				resourceType: "server",
+				resourceId: input.serverId,
+				resourceName: server.name,
+			});
+			return observable<string>((emit) => {
+				hardenServer(input.serverId, input.items, (log) => {
+					emit.next(log);
+				})
+					.catch((error) => {
+						emit.next(
+							`\n${error instanceof Error ? error.message : error}\n${SERVER_HARDENING_FAILED}\n`,
 						);
 					})
 					.finally(() => {

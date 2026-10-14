@@ -574,6 +574,7 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"server.getServerMetrics": "read",
 	"server.getServerTime": "read",
 	"server.getServices": "read",
+	"server.hardenWithLogs": "write",
 	"server.one": "read",
 	"server.publicIp": "read",
 	"server.remove": "dangerous",
