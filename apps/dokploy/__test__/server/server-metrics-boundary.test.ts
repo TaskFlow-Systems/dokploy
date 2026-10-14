@@ -38,6 +38,7 @@ const mocks = vi.hoisted(() => ({
 	getDokployUrl: vi.fn(),
 	getPublicIpWithFallback: vi.fn(),
 	getWebServerSettings: vi.fn(),
+	hardenServer: vi.fn(),
 	hasValidLicense: vi.fn(),
 	haveActiveServices: vi.fn(),
 	removeDeploymentsByServerId: vi.fn(),
@@ -85,6 +86,9 @@ vi.mock("@dokploy/server", () => ({
 	],
 	serverComponentsStatus: async () => [],
 	updateServerComponents: async () => undefined,
+	SERVER_HARDENING_FAILED: "Security hardening failed ❌",
+	SERVER_HARDENING_ITEMS: ["ufw", "ssh", "fail2ban"],
+	hardenServer: mocks.hardenServer,
 	IS_CLOUD: false,
 	createServer: mocks.createServer,
 	defaultCommand: mocks.defaultCommand,
@@ -132,6 +136,9 @@ vi.mock("@dokploy/server/index", () => ({
 	],
 	serverComponentsStatus: async () => [],
 	updateServerComponents: async () => undefined,
+	SERVER_HARDENING_FAILED: "Security hardening failed ❌",
+	SERVER_HARDENING_ITEMS: ["ufw", "ssh", "fail2ban"],
+	hardenServer: mocks.hardenServer,
 	IS_CLOUD: false,
 	createServer: mocks.createServer,
 	defaultCommand: mocks.defaultCommand,
@@ -553,6 +560,31 @@ describe("server router assigned-server boundary", () => {
 		expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
 			server: ["execute"],
 		});
+	});
+
+	it("denies inaccessible server hardening before remote side effects", async () => {
+		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-2"]));
+
+		await expect(
+			createCaller().hardenWithLogs({ serverId: "server-1", items: ["ufw"] }),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+		expect(mocks.hardenServer).not.toHaveBeenCalled();
+		expect(mocks.audit).not.toHaveBeenCalled();
+		expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
+			server: ["execute"],
+		});
+	});
+
+	it("rejects hardening items outside the known list", async () => {
+		await expect(
+			createCaller().hardenWithLogs({
+				serverId: "server-1",
+				items: ["ufw; rm -rf /" as never],
+			}),
+		).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+		expect(mocks.hardenServer).not.toHaveBeenCalled();
 	});
 
 	it("requires SSH key read permission before creating a server bound to an SSH key", async () => {

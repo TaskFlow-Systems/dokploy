@@ -15,8 +15,6 @@ import {
 	buildTraefikTlsMigrationStep,
 	getDefaultMiddlewares,
 	getDefaultServerTraefikConfig,
-	TRAEFIK_HTTP3_PORT,
-	TRAEFIK_SSL_PORT,
 	TRAEFIK_VERSION,
 } from "@dokploy/server/setup/traefik-setup";
 import slug from "slugify";
@@ -33,6 +31,7 @@ import {
 	RAILPACK_VERSION,
 } from "./component-versions";
 import { setupMonitoring } from "./monitoring-setup";
+import { getServerHardening, serverHardeningStep } from "./server-hardening";
 
 const generateToken = () => {
 	const array = new Uint8Array(64);
@@ -134,99 +133,6 @@ else
 	DOCKER_VERSION_REPORT="$DOCKER_VERSION (will be installed)"
 fi
 `;
-
-type ServerHardening = {
-	ssh: boolean;
-	ufw: boolean;
-	fail2ban: boolean;
-};
-
-const getServerHardening = (): ServerHardening => {
-	const requested = (process.env.DOKPLOY_SERVER_HARDENING ?? "")
-		.split(",")
-		.map((item) => item.trim().toLowerCase());
-	const all = requested.includes("all");
-
-	return {
-		ssh: all || requested.includes("ssh"),
-		ufw: all || requested.includes("ufw"),
-		fail2ban: all || requested.includes("fail2ban"),
-	};
-};
-
-// The Security tab reads the main sshd_config, not drop-ins, so the options are
-// written there. They go on the first line because sshd keeps the first value it reads.
-const hardenSshCommand = () => `
-	if [ -f /etc/ssh/sshd_config ]; then
-		if [ ! -f /etc/ssh/sshd_config.dokploy-backup ]; then
-			$SUDO_CMD cp -p /etc/ssh/sshd_config /etc/ssh/sshd_config.dokploy-backup
-		fi
-		for option in "PubkeyAuthentication yes" "PasswordAuthentication no" "KbdInteractiveAuthentication no" "PermitRootLogin prohibit-password" "UsePAM no"; do
-			key=$(echo "$option" | awk '{print $1}')
-			$SUDO_CMD sed -i -E "/^[#[:space:]]*$key[[:space:]]/Id" /etc/ssh/sshd_config
-			$SUDO_CMD sed -i "1i $option" /etc/ssh/sshd_config
-		done
-		if ! $SUDO_CMD sshd -t; then
-			$SUDO_CMD cp -p /etc/ssh/sshd_config.dokploy-backup /etc/ssh/sshd_config
-			echo "sshd rejected the hardened config, the original was restored ❌" >&2
-			exit 1
-		fi
-		$SUDO_CMD systemctl reload ssh 2>/dev/null || $SUDO_CMD systemctl reload sshd
-		echo "SSH allows keys only ✅"
-	fi
-`;
-
-// ufw drops forwarded traffic by default, which breaks container networking,
-// so forwarding is accepted while incoming traffic to the host stays denied.
-const hardenUfwCommand = () => `
-	if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ] || [ "$OS_TYPE" = "raspbian" ]; then
-		$SUDO_CMD apt-get install -y ufw >/dev/null
-		SSH_PORT=$($SUDO_CMD sshd -T 2>/dev/null | awk '$1 == "port" { print $2; exit }') || true
-		if [ -z "$SSH_PORT" ]; then
-			SSH_PORT=22
-		fi
-		$SUDO_CMD ufw default deny incoming >/dev/null
-		$SUDO_CMD ufw default allow outgoing >/dev/null
-		$SUDO_CMD sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-		$SUDO_CMD ufw allow "$SSH_PORT/tcp" comment 'SSH' >/dev/null
-		$SUDO_CMD ufw allow ${TRAEFIK_SSL_PORT}/tcp comment 'HTTPS' >/dev/null
-		$SUDO_CMD ufw allow ${TRAEFIK_HTTP3_PORT}/udp comment 'HTTP/3' >/dev/null
-		$SUDO_CMD ufw --force enable >/dev/null
-		echo "UFW is active ✅"
-	else
-		echo "UFW hardening supports Debian and Ubuntu only, skipped."
-	fi
-`;
-
-// The Security tab only reads /etc/fail2ban/jail.local, so the sshd jail goes there.
-const hardenFail2banCommand = () => `
-	if [ "$OS_TYPE" = "ubuntu" ] || [ "$OS_TYPE" = "debian" ] || [ "$OS_TYPE" = "raspbian" ]; then
-		$SUDO_CMD apt-get install -y fail2ban >/dev/null
-		if [ -f /etc/fail2ban/jail.local ]; then
-			echo "Fail2Ban: /etc/fail2ban/jail.local already exists, left unchanged."
-		else
-			printf '[sshd]\\nenabled = true\\nmode = aggressive\\n' | $SUDO_CMD tee /etc/fail2ban/jail.local >/dev/null
-		fi
-		$SUDO_CMD systemctl enable --now fail2ban >/dev/null 2>&1
-		$SUDO_CMD systemctl restart fail2ban
-		echo "Fail2Ban is active ✅"
-	else
-		echo "Fail2Ban hardening supports Debian and Ubuntu only, skipped."
-	fi
-`;
-
-const serverHardeningStep = (hardening: ServerHardening, step: number) => {
-	if (!hardening.ssh && !hardening.ufw && !hardening.fail2ban) {
-		return "";
-	}
-
-	return `
-echo -e "${step}. Applying security hardening"
-${hardening.ssh ? hardenSshCommand() : ""}
-${hardening.ufw ? hardenUfwCommand() : ""}
-${hardening.fail2ban ? hardenFail2banCommand() : ""}
-`;
-};
 
 export const defaultCommand = (isBuildServer = false) => {
 	const hardening = getServerHardening();

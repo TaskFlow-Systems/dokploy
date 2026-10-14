@@ -57,6 +57,17 @@ orb -m dokploy -u root docker service update --env-add DOKPLOY_SERVER_HARDENING=
 
 Чтобы панель использовала новый код, в образ сервиса должна попасть сборка с этими изменениями (после пуша и сборки образа).
 
+### Уже подключённый сервер: кнопка в панели
+
+Settings → Servers → сервер → Setup Server → Security → **Apply hardening**. Переменная `DOKPLOY_SERVER_HARDENING` для этого не нужна.
+
+- В окне три галочки: UFW, SSH только по ключу, Fail2Ban. Заранее отмечены пункты, которые проверка показала красными.
+- Скрипт выполняется на сервере по SSH. Лог идёт в окне в реальном времени и сохраняется как деплой «Security hardening» сервера (Settings → Deployments).
+- После завершения проверка Security обновляется сама.
+- Нужно право `server.execute`. Пользователь SSH должен быть root или иметь sudo без пароля, иначе скрипт останавливается с ошибкой.
+- Перед обновлением пакетов apt ждёт до 5 минут, если его занял unattended-upgrades.
+- Если в `/etc/fail2ban/jail.local` нет секции `[sshd]`, она дописывается в конец файла. Существующая секция `[sshd]` не меняется, тогда пункт SSH Mode может остаться красным.
+
 ## Как проверить
 
 Во вкладке Security панели: Settings → Servers → сервер → Setup Server → Security → Refresh. Все пункты должны быть зелёными.
@@ -84,6 +95,8 @@ rm -f /etc/fail2ban/jail.local /etc/ssh/sshd_config.d/00-hardening.conf
 cp -p /etc/ssh/sshd_config.dokploy-backup /etc/ssh/sshd_config
 sshd -t && systemctl reload ssh
 ```
+
+Если `jail.local` был на сервере до усиления, не удаляй его целиком: убери только секцию `[sshd]`, которую дописала панель.
 
 Удалить пакеты (по желанию):
 
