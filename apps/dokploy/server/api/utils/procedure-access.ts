@@ -178,6 +178,7 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"compose.import": "write",
 	"compose.isolatedDeployment": "write",
 	"compose.killBuild": "write",
+	"compose.loadComposeVariables": "write",
 	"compose.loadMountsByService": "read",
 	"compose.loadServices": "read",
 	"compose.move": "write",
