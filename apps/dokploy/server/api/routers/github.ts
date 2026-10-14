@@ -4,6 +4,7 @@ import {
 	findGithubGitProviderId,
 	getAccessibleGitProviderIds,
 	getGithubBranches,
+	getGithubComposeFiles,
 	getGithubRepositories,
 	haveGithubRequirements,
 	redactGithubProvider,
@@ -28,6 +29,7 @@ import {
 import { audit } from "@/server/api/utils/audit";
 import {
 	apiFindGithubBranches,
+	apiFindGithubComposeFiles,
 	apiFindOneGithub,
 	apiUpdateGithub,
 } from "@/server/db/schema";
@@ -150,6 +152,14 @@ export const githubRouter = createTRPCRouter({
 			}
 
 			return await getGithubBranches(input);
+		}),
+	getGithubComposeFiles: protectedProcedure
+		.input(apiFindGithubComposeFiles)
+		.query(async ({ input, ctx }) => {
+			const gitProviderId = await findGithubGitProviderId(input.githubId);
+			await assertGitProviderAccess(gitProviderId, ctx.session);
+
+			return await getGithubComposeFiles(input);
 		}),
 	githubProviders: protectedProcedure.query(async ({ ctx }) => {
 		const accessibleIds = await getAccessibleGitProviderIds(ctx.session);

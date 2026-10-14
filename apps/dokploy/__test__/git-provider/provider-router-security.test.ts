@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
 	getGiteaBranches: vi.fn(),
 	getGiteaRepositories: vi.fn(),
 	getGithubBranches: vi.fn(),
+	getGithubComposeFiles: vi.fn(),
 	getGithubRepositories: vi.fn(),
 	getGitlabBranches: vi.fn(),
 	getGitlabRepositories: vi.fn(),
@@ -68,6 +69,7 @@ vi.mock("@dokploy/server", () => ({
 	getGiteaBranches: mocks.getGiteaBranches,
 	getGiteaRepositories: mocks.getGiteaRepositories,
 	getGithubBranches: mocks.getGithubBranches,
+	getGithubComposeFiles: mocks.getGithubComposeFiles,
 	getGithubRepositories: mocks.getGithubRepositories,
 	getGitlabBranches: mocks.getGitlabBranches,
 	getGitlabRepositories: mocks.getGitlabRepositories,
@@ -255,6 +257,28 @@ describe("github provider router security boundary", () => {
 		});
 
 		expect(mocks.getGithubRepositories).not.toHaveBeenCalled();
+	});
+
+	it("rejects compose file listing before the repository tree is read", async () => {
+		mocks.assertGitProviderAccess.mockRejectedValue(
+			new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "denied",
+			}),
+		);
+
+		await expect(
+			createGithubCaller().getGithubComposeFiles({
+				githubId: "gh-1",
+				owner: "acme",
+				repo: "web",
+				branch: "main",
+			}),
+		).rejects.toMatchObject({
+			code: "UNAUTHORIZED",
+		});
+
+		expect(mocks.getGithubComposeFiles).not.toHaveBeenCalled();
 	});
 
 	it("does not mask test connection authorization failures as provider errors", async () => {

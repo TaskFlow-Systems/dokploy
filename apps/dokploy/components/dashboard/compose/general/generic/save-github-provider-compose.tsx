@@ -49,6 +49,7 @@ import {
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { DEFAULT_GITHUB_URL } from "@/utils/github-utils";
+import { ComposePathInput } from "./compose-path-input";
 
 const GithubProviderSchema = z.object({
 	composePath: z.string().min(1),
@@ -100,6 +101,7 @@ export const SaveGithubProviderCompose = ({ composeId }: Props) => {
 	const repository = form.watch("repository");
 	const githubId = form.watch("githubId");
 	const triggerType = form.watch("triggerType");
+	const branch = form.watch("branch");
 
 	// Enterprise repositories do not live on github.com.
 	const providerUrl =
@@ -129,6 +131,22 @@ export const SaveGithubProviderCompose = ({ composeId }: Props) => {
 			enabled: !!repository?.owner && !!repository?.repo && !!githubId,
 		},
 	);
+
+	const canListComposeFiles =
+		!!repository?.owner && !!repository?.repo && !!githubId && !!branch;
+	const { data: composeFiles, isFetching: isLoadingComposeFiles } =
+		api.github.getGithubComposeFiles.useQuery(
+			{
+				owner: repository?.owner,
+				repo: repository?.repo,
+				branch,
+				githubId,
+			},
+			{
+				enabled: canListComposeFiles,
+				retry: false,
+			},
+		);
 
 	useEffect(() => {
 		if (data) {
@@ -417,7 +435,19 @@ export const SaveGithubProviderCompose = ({ composeId }: Props) => {
 								<FormItem>
 									<FormLabel>Compose Path</FormLabel>
 									<FormControl>
-										<Input placeholder="docker-compose.yml" {...field} />
+										<ComposePathInput
+											name={field.name}
+											value={field.value}
+											onChange={field.onChange}
+											onBlur={field.onBlur}
+											files={composeFiles}
+											isLoading={isLoadingComposeFiles}
+											hint={
+												canListComposeFiles
+													? undefined
+													: "Select a repository and branch to see its compose files"
+											}
+										/>
 									</FormControl>
 
 									<FormMessage />

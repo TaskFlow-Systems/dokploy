@@ -1,3 +1,4 @@
+import { VALID_BRANCH_REGEX } from "@dokploy/server/utils/git-branch-validation";
 import { relations } from "drizzle-orm";
 import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { nanoid } from "nanoid";
@@ -49,6 +50,13 @@ export const apiFindGithubBranches = z.object({
 	repo: z.string().min(1),
 	owner: z.string().min(1),
 	githubId: z.string().optional(),
+});
+
+export const apiFindGithubComposeFiles = z.object({
+	repo: z.string().min(1),
+	owner: z.string().min(1),
+	branch: z.string().min(1).regex(VALID_BRANCH_REGEX, "Invalid branch name"),
+	githubId: z.string().min(1),
 });
 
 export const apiFindOneGithub = z.object({
