@@ -134,6 +134,7 @@ const STATUS = "DOKPLOY_LOCK";
 const LAUNCH = "prune_logs";
 const ACME_READ = "jq -c";
 const LOGS = "__DOKPLOY_LOG_RC";
+const RENEWAL = "DOKPLOY_RENEWAL_CHALLENGE";
 
 type Machine = {
 	routes?: string;
@@ -167,6 +168,13 @@ const commandHandler = (machine: Machine) => async (command: string) => {
 	if (command.includes("invalid_marker")) {
 		return {
 			stdout: machine.recover ?? "DOKPLOY_RESULT recovered\n",
+			stderr: "",
+		};
+	}
+	if (command.includes(RENEWAL)) {
+		return {
+			stdout:
+				"DOKPLOY_RENEWAL_CHALLENGE tls\nDOKPLOY_RENEWAL_PORTS 443/443/tcp 443/443/udp\n",
 			stderr: "",
 		};
 	}
@@ -411,6 +419,18 @@ describe("defect 1: the Traefik log", () => {
 
 		expect(overview.rows.every((row) => row.logAvailable)).toBe(true);
 		expect(overview.serverErrors).toEqual([]);
+	});
+
+	it("reports how each server renews certificates", async () => {
+		useLocal({ routes: routeLine("web", "live.example.com") });
+
+		const overview = await overviewFor();
+
+		expect(overview.servers[0]?.certificateRenewal).toMatchObject({
+			status: "ok",
+			challenge: "tls",
+			publishedPorts: ["443/tcp", "443/udp"],
+		});
 	});
 
 	it("takes the last error from the log", async () => {

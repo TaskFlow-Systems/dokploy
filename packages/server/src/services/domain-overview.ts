@@ -58,6 +58,11 @@ import {
 	type RecoveryStatus,
 } from "@dokploy/server/utils/domain-overview/acme-delete";
 import {
+	buildCertificateRenewalCommand,
+	type CertificateRenewalView,
+	parseCertificateRenewal,
+} from "@dokploy/server/utils/domain-overview/certificate-renewal";
+import {
 	type DnsRecords,
 	type DnsStatus,
 	mapDnsStatus,
@@ -139,6 +144,7 @@ export type DomainOverviewServer = {
 	lastDeletion: DeletionStatusView | null;
 	staleLock: boolean;
 	traefikLeftStopped: { kind: string; phase: string } | null;
+	certificateRenewal: CertificateRenewalView | null;
 };
 
 type ServerTarget = {
@@ -267,6 +273,7 @@ type ServerReads = {
 	usageVerified: boolean;
 	deletion: DeletionStatusFile | null;
 	deletionRunning: boolean;
+	renewal: CertificateRenewalView | null;
 	errors: string[];
 };
 
@@ -581,6 +588,15 @@ const readDynamicUses = async (target: ServerTarget, timeoutMs?: number) => {
 	}
 };
 
+const readRenewal = async (target: ServerTarget, timeoutMs?: number) => {
+	const { stdout } = await runOnServer(
+		target,
+		buildCertificateRenewalCommand(staticConfigFor(target)),
+		timeoutMs,
+	);
+	return parseCertificateRenewal(stdout);
+};
+
 const readCertificates = async (target: ServerTarget, timeoutMs?: number) => {
 	try {
 		const { stdout } = await runOnServer(
@@ -732,6 +748,7 @@ const readServer = async (
 		certificates: [] as AcmeCertificate[],
 		logLines: [] as string[],
 		logAvailable: false,
+		renewal: null,
 	};
 
 	const inMemory =
@@ -794,6 +811,12 @@ const readServer = async (
 	if (logs.status === "failed" && !connectionLost) {
 		errors.push(`Traefik logs: ${buildFailureReason({ text: logs.reason })}`);
 	}
+	const renewal = await stage<CertificateRenewalView | null>(
+		"Certificate renewal",
+		null,
+		(timeoutMs) => readRenewal(target, timeoutMs),
+		false,
+	);
 
 	return {
 		target,
@@ -807,6 +830,7 @@ const readServer = async (
 		usageVerified,
 		deletion,
 		deletionRunning: false,
+		renewal,
 		errors,
 	};
 };
@@ -1183,6 +1207,7 @@ const buildOverview = async (
 				!snapshot.deletionRunning
 					? snapshot.deletion.marker
 					: null,
+			certificateRenewal: snapshot.renewal,
 		})),
 		serverErrors: analysis.servers.flatMap(({ snapshot }) =>
 			snapshot.errors.map((message) => ({

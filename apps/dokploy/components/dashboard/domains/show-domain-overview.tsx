@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
+import { CertificateRenewal } from "./certificate-renewal";
 import { InterruptedDeletion } from "./interrupted-deletion";
 import {
 	CountBadge,
@@ -313,6 +314,9 @@ export const ShowDomainOverview = () => {
 							certificate store, which only an owner or admin with an open super
 							session can read.
 						</AlertBlock>
+					)}
+					{data && data.servers.length > 0 && (
+						<CertificateRenewal servers={data.servers} />
 					)}
 					{data && (
 						<DomainsTable
