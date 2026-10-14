@@ -308,6 +308,7 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"gitea.update": "write",
 	"github.appSetupState": "read",
 	"github.getGithubBranches": "read",
+	"github.getGithubComposeFiles": "read",
 	"github.getGithubRepositories": "read",
 	"github.githubProviders": "read",
 	"github.one": "read",

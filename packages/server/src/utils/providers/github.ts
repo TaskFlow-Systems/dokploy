@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { paths } from "@dokploy/server/constants";
-import type { apiFindGithubBranches } from "@dokploy/server/db/schema";
+import type {
+	apiFindGithubBranches,
+	apiFindGithubComposeFiles,
+} from "@dokploy/server/db/schema";
 import { findGithubById, type Github } from "@dokploy/server/services/github";
 import type { InferResultType } from "@dokploy/server/types/with";
 import { createAppAuth } from "@octokit/auth-app";
@@ -309,4 +312,53 @@ export const getGithubBranches = async (
 	>["data"];
 
 	return branches;
+};
+
+const COMPOSE_FILE_REGEX = /(^|\/)[^/]*compose[^/]*\.ya?ml$/i;
+
+export const isComposeFilePath = (path: string) =>
+	COMPOSE_FILE_REGEX.test(path);
+
+// Paths are returned in the "./dir/file.yml" form the Compose Path field
+// already uses, compose files closest to the repository root first.
+export const getGithubComposeFiles = async (
+	input: z.infer<typeof apiFindGithubComposeFiles>,
+) => {
+	const githubProvider = await findGithubById(input.githubId);
+	const octokit = authGithub(githubProvider);
+
+	try {
+		const { data: branch } = await octokit.rest.repos.getBranch({
+			owner: input.owner,
+			repo: input.repo,
+			branch: input.branch,
+		});
+		const { data: tree } = await octokit.rest.git.getTree({
+			owner: input.owner,
+			repo: input.repo,
+			tree_sha: branch.commit.commit.tree.sha,
+			recursive: "true",
+		});
+
+		return tree.tree
+			.filter(
+				(entry) =>
+					entry.type === "blob" &&
+					!!entry.path &&
+					isComposeFilePath(entry.path),
+			)
+			.map((entry) => entry.path as string)
+			.sort(
+				(a, b) =>
+					a.split("/").length - b.split("/").length || a.localeCompare(b),
+			)
+			.map((path) => `./${path}`);
+	} catch (error) {
+		// An empty repository or a branch that was just deleted has no tree;
+		// the field still accepts a typed path.
+		if ((error as { status?: number }).status === 404) {
+			return [];
+		}
+		throw error;
+	}
 };
