@@ -24,6 +24,7 @@ import { isApiKeySession } from "@/server/api/utils/super-session";
 // make safe (a container file may be nothing but one token), so an API key
 // cannot call them at all.
 const API_KEY_DENIED_PROCEDURES = new Set([
+	"compose.loadComposeVariables",
 	"docker.getConfig",
 	"docker.readContainerFile",
 	"dockerVolume.readVolumeFile",

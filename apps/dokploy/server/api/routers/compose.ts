@@ -23,6 +23,7 @@ import {
 	getContainersByAppNameMatch,
 	getWebServerSettings,
 	IS_CLOUD,
+	loadComposeVariables,
 	loadServices,
 	markDeploymentOperationDispatched,
 	randomizeComposeFile,
@@ -548,6 +549,18 @@ export const composeRouter = createTRPCRouter({
 				service: ["read"],
 			});
 			return await loadServices(input.composeId, input.type);
+		}),
+	loadComposeVariables: protectedProcedure
+		.input(apiFindCompose)
+		.mutation(async ({ input, ctx }) => {
+			// Defaults in a compose file are often secrets, so this needs the
+			// same access as reading the environment; fetching the source also
+			// needs what fetchSourceType needs.
+			await checkServicePermissionAndAccess(ctx, input.composeId, {
+				service: ["create"],
+				envVars: ["read"],
+			});
+			return await loadComposeVariables(input.composeId);
 		}),
 	loadMountsByService: protectedProcedure
 		.input(

@@ -36,6 +36,7 @@ const serverMocks = vi.hoisted(() => ({
 	getContainerLogs: vi.fn(),
 	getContainersByAppNameMatch: vi.fn(),
 	getWebServerSettings: vi.fn(),
+	loadComposeVariables: vi.fn(),
 	loadServices: vi.fn(),
 	mechanizeDockerContainer: vi.fn(),
 	randomizeComposeFile: vi.fn(),
@@ -114,6 +115,7 @@ vi.mock("@dokploy/server", () => ({
 	getContainerLogs: serverMocks.getContainerLogs,
 	getContainersByAppNameMatch: serverMocks.getContainersByAppNameMatch,
 	getWebServerSettings: serverMocks.getWebServerSettings,
+	loadComposeVariables: serverMocks.loadComposeVariables,
 	loadServices: serverMocks.loadServices,
 	mechanizeDockerContainer: serverMocks.mechanizeDockerContainer,
 	randomizeComposeFile: serverMocks.randomizeComposeFile,
@@ -335,6 +337,26 @@ describe("service environment reveal boundary", () => {
 		expect(revealed).toEqual({
 			env: "COMPOSE_SECRET=secret",
 		});
+	});
+
+	it("reads compose variables only for callers that can read env vars", async () => {
+		permissionMocks.checkServicePermissionAndAccess.mockRejectedValueOnce(
+			new TRPCError({ code: "UNAUTHORIZED", message: "denied" }),
+		);
+
+		await expect(
+			composeRouter
+				.createCaller(createContext())
+				.loadComposeVariables({ composeId: "compose-1" }),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+		expect(
+			permissionMocks.checkServicePermissionAndAccess,
+		).toHaveBeenCalledWith(expect.anything(), "compose-1", {
+			service: ["create"],
+			envVars: ["read"],
+		});
+		expect(serverMocks.loadComposeVariables).not.toHaveBeenCalled();
 	});
 
 	it("keeps the compose file for callers that can read env vars", async () => {

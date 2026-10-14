@@ -69,6 +69,7 @@ const { restoreApiKeyText } = await import(
 
 const testRouter = createTRPCRouter({
 	compose: createTRPCRouter({
+		loadComposeVariables: secretReader,
 		one: protectedProcedure.query(() => ({
 			composeId: "compose-1",
 			composeFile: storedCompose,
@@ -263,6 +264,10 @@ describe("procedures that return raw secrets", () => {
 			() => apiKey().application.revealEnvironment(),
 		],
 		["postgres.revealEnvironment", () => apiKey().postgres.revealEnvironment()],
+		[
+			"compose.loadComposeVariables",
+			() => apiKey().compose.loadComposeVariables(),
+		],
 		["docker.getConfig", () => apiKey().docker.getConfig()],
 		["docker.readContainerFile", () => apiKey().docker.readContainerFile()],
 		[

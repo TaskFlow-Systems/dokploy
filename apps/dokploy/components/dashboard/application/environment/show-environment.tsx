@@ -4,6 +4,10 @@ import { type CSSProperties, useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
+import {
+	type ComposeEnvImport,
+	ComposeVariablesDialog,
+} from "@/components/dashboard/compose/environment/compose-variables-dialog";
 import { CodeEditor } from "@/components/shared/code-editor";
 import { useEnvCompletionSource } from "@/components/shared/env-autocomplete";
 import { VaultImportDialog } from "@/components/shared/vault-import-dialog";
@@ -26,6 +30,7 @@ import {
 } from "@/components/ui/form";
 import { Switch } from "@/components/ui/switch";
 import { Toggle } from "@/components/ui/toggle";
+import { mergeComposeEnv } from "@/lib/compose-env";
 import { api } from "@/utils/api";
 import type { ServiceType } from "../advanced/show-resources";
 
@@ -44,6 +49,11 @@ interface Props {
 export const ShowEnvironment = ({ id, type }: Props) => {
 	const { data: permissions } = api.user.getPermissions.useQuery();
 	const canWrite = permissions?.envVars.write ?? false;
+	const canImportComposeVariables =
+		type === "compose" &&
+		canWrite &&
+		(permissions?.envVars.read ?? false) &&
+		(permissions?.service.create ?? false);
 	const queryMap = {
 		compose: () =>
 			api.compose.one.useQuery({ composeId: id }, { enabled: !!id }),
@@ -192,6 +202,38 @@ export const ShowEnvironment = ({ id, type }: Props) => {
 		}
 	};
 
+	// Imported lines go into the revealed text: a masked editor cannot be
+	// revealed again while it holds unsaved changes.
+	const revealForEditing = async () => {
+		if (isEnvVisible) {
+			try {
+				await handleReveal();
+			} catch {
+				return false;
+			}
+			setIsEnvVisible(false);
+		}
+		return true;
+	};
+
+	const handleComposeImport = ({
+		entries,
+		active,
+		header,
+	}: ComposeEnvImport) => {
+		form.setValue(
+			"environment",
+			mergeComposeEnv(form.getValues("environment"), entries, {
+				active,
+				header,
+			}),
+			{ shouldDirty: true },
+		);
+		toast.success(
+			`Added ${entries.length} variable${entries.length === 1 ? "" : "s"}. Review them and click Save.`,
+		);
+	};
+
 	// Add keyboard shortcut for Ctrl+S/Cmd+S
 	useEffect(() => {
 		const handleKeyDown = (e: KeyboardEvent) => {
@@ -257,7 +299,16 @@ export const ShowEnvironment = ({ id, type }: Props) => {
 								name="environment"
 								render={({ field }) => (
 									<FormItem>
-										<div className="flex justify-end">
+										<div className="flex justify-end gap-2">
+											{canImportComposeVariables && (
+												<ComposeVariablesDialog
+													composeId={id}
+													currentEnv={field.value ?? ""}
+													createEnvFile={currentCreateEnvFile}
+													beforeOpen={revealForEditing}
+													onImport={handleComposeImport}
+												/>
+											)}
 											<VaultImportDialog
 												projectId={data?.environment?.projectId}
 												environmentId={data?.environment?.environmentId}

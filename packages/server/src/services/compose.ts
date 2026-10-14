@@ -10,6 +10,7 @@ import {
 } from "@dokploy/server/db/schema";
 import { getBuildComposeCommand } from "@dokploy/server/utils/builders/compose";
 import { randomizeSpecificationFile } from "@dokploy/server/utils/docker/compose";
+import { extractComposeVariables } from "@dokploy/server/utils/docker/compose-variables";
 import {
 	cloneCompose,
 	loadDockerCompose,
@@ -233,6 +234,77 @@ export const loadServices = async (
 	const services = Object.keys(composeData.services);
 
 	return [...services];
+};
+
+const getComposeBranch = (compose: Compose) => {
+	switch (compose.sourceType) {
+		case "github":
+			return compose.branch;
+		case "gitlab":
+			return compose.gitlabBranch;
+		case "bitbucket":
+			return compose.bitbucketBranch;
+		case "gitea":
+			return compose.giteaBranch;
+		case "git":
+			return compose.customGitBranch;
+		default:
+			return null;
+	}
+};
+
+export const loadComposeVariables = async (composeId: string) => {
+	const compose = await findComposeById(composeId);
+
+	// Fetching replaces the code directory that a running build reads from.
+	if (compose.composeStatus === "running") {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: "A deployment is running. Try again when it finishes.",
+		});
+	}
+
+	try {
+		const command = await cloneCompose(compose);
+		if (compose.serverId) {
+			await execAsyncRemote(compose.serverId, command);
+		} else {
+			await execAsync(command);
+		}
+	} catch (error) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Could not fetch the source of this compose service",
+			cause: error,
+		});
+	}
+
+	let composeData: ComposeSpecification | null;
+	try {
+		composeData = compose.serverId
+			? await loadDockerComposeRemote(compose)
+			: await loadDockerCompose(compose);
+	} catch (error) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "The compose file is not valid YAML",
+			cause: error,
+		});
+	}
+
+	if (!composeData) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: "Compose file not found",
+		});
+	}
+
+	return {
+		composePath:
+			compose.sourceType === "raw" ? "docker-compose.yml" : compose.composePath,
+		branch: getComposeBranch(compose),
+		variables: extractComposeVariables(composeData),
+	};
 };
 
 export const updateCompose = async (
