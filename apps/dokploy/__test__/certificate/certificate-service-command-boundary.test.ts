@@ -95,13 +95,21 @@ describe("certificate service command boundary", () => {
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 	});
 
-	it("rejects dot-segment certificate paths before persistence", async () => {
+	it("rejects dot-segment stored certificate paths before remote file commands", async () => {
+		mocks.dbInsert.mockReturnValue(
+			createReturningChain([
+				{
+					...certificate,
+					certificatePath: "..",
+				},
+			]),
+		);
+
 		await expect(
 			createCertificate(
 				{
 					autoRenew: false,
 					certificateData: certificate.certificateData,
-					certificatePath: "..",
 					organizationId: "org-1",
 					privateKey: certificate.privateKey,
 					name: "certificate",
@@ -111,7 +119,6 @@ describe("certificate service command boundary", () => {
 			),
 		).rejects.toMatchObject({ code: "BAD_REQUEST" });
 
-		expect(mocks.dbInsert).not.toHaveBeenCalled();
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 	});
 

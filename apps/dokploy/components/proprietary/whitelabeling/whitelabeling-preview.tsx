@@ -1,5 +1,6 @@
 "use client";
 
+import { useTheme } from "next-themes";
 import {
 	Card,
 	CardContent,
@@ -12,12 +13,19 @@ interface WhitelabelingPreviewProps {
 	config: {
 		appName?: string;
 		logoUrl?: string;
+		logoLightUrl?: string;
+		dualModeBranding?: boolean;
 		footerText?: string;
 	};
 }
 
 export function WhitelabelingPreview({ config }: WhitelabelingPreviewProps) {
 	const appName = config.appName || "Dokploy";
+	const { resolvedTheme } = useTheme();
+	const effectiveLogoUrl =
+		config.dualModeBranding && resolvedTheme === "light" && config.logoLightUrl
+			? config.logoLightUrl
+			: config.logoUrl;
 
 	return (
 		<Card className="bg-transparent">
@@ -31,10 +39,10 @@ export function WhitelabelingPreview({ config }: WhitelabelingPreviewProps) {
 				<div className="rounded-lg border overflow-hidden">
 					{/* Simulated sidebar header */}
 					<div className="flex items-center gap-3 p-4 border-b bg-sidebar">
-						{config.logoUrl ? (
+						{effectiveLogoUrl ? (
 							// biome-ignore lint/performance/noImgElement: Logo previews use arbitrary configured URLs that may not be known to Next Image.
 							<img
-								src={config.logoUrl}
+								src={effectiveLogoUrl}
 								alt="Preview Logo"
 								className="size-8 rounded-sm object-contain"
 							/>

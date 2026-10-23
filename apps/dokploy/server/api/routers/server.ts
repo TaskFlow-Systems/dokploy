@@ -19,6 +19,7 @@ import {
 	redactServer,
 	redactServers,
 	removeDeploymentsByServerId,
+	removeServerVectorAgent,
 	resolveServerMetricsConfigUpdate,
 	SERVER_HARDENING_FAILED,
 	SERVER_HARDENING_ITEMS,
@@ -35,6 +36,7 @@ import { db } from "@dokploy/server/db";
 import {
 	checkPermission,
 	findMemberByUserId,
+	hasPermission,
 } from "@dokploy/server/services/permission";
 import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
 import { assertSshKeyAccess } from "@dokploy/server/services/ssh-key";
@@ -205,6 +207,22 @@ const metricsFetchOptions = {
 	fieldName: "Monitoring metrics URL",
 } as const;
 
+// Users without server.read only get what the server pickers render
+const toServerOptions = async (
+	ctx: Parameters<typeof hasPermission>[0],
+	servers: (typeof server.$inferSelect)[],
+) => {
+	await findMemberByUserId(ctx.user.id, ctx.session.activeOrganizationId);
+	if (await hasPermission(ctx, { server: ["read"] })) {
+		return servers;
+	}
+	return servers.map(({ serverId, name, ipAddress }) => ({
+		serverId,
+		name,
+		ipAddress,
+	}));
+};
+
 export const serverRouter = createTRPCRouter({
 	create: withPermission("server", "create")
 		.input(apiCreateServer)
@@ -366,7 +384,7 @@ export const serverRouter = createTRPCRouter({
 
 		return servers.length ?? 0;
 	}),
-	withSSHKey: withPermission("server", "read").query(async ({ ctx }) => {
+	withSSHKey: protectedProcedure.query(async ({ ctx }) => {
 		const accessibleIds = await getAccessibleServerIds(ctx.session);
 
 		const result = await db.query.server.findMany({
@@ -384,9 +402,12 @@ export const serverRouter = createTRPCRouter({
 						eq(server.serverType, "deploy"),
 					),
 		});
-		return redactServers(result.filter((s) => accessibleIds.has(s.serverId)));
+		return toServerOptions(
+			ctx,
+			redactServers(result.filter((s) => accessibleIds.has(s.serverId))),
+		);
 	}),
-	buildServers: withPermission("server", "read").query(async ({ ctx }) => {
+	buildServers: protectedProcedure.query(async ({ ctx }) => {
 		const accessibleIds = await getAccessibleServerIds(ctx.session);
 
 		const result = await db.query.server.findMany({
@@ -404,7 +425,10 @@ export const serverRouter = createTRPCRouter({
 						eq(server.serverType, "build"),
 					),
 		});
-		return redactServers(result.filter((s) => accessibleIds.has(s.serverId)));
+		return toServerOptions(
+			ctx,
+			redactServers(result.filter((s) => accessibleIds.has(s.serverId))),
+		);
 	}),
 	setup: withPermission("server", "execute")
 		.input(apiFindOneServer)
@@ -736,11 +760,16 @@ export const serverRouter = createTRPCRouter({
 						message: "Server has active services, please delete them first",
 					});
 				}
+				const vectorAgentRemovalWarning =
+					await removeServerVectorAgent(currentServer);
 				await audit(ctx, {
 					action: "delete",
 					resourceType: "server",
 					resourceId: currentServer.serverId,
 					resourceName: currentServer.name,
+					...(vectorAgentRemovalWarning
+						? { metadata: { vectorAgentRemovalWarning } }
+						: {}),
 				});
 				await removeDeploymentsByServerId(currentServer);
 				await deleteServer(input.serverId);
@@ -751,7 +780,10 @@ export const serverRouter = createTRPCRouter({
 					await updateServersBasedOnQuantity(admin.id, admin.serversQuantity);
 				}
 
-				return redactServer(currentServer);
+				return {
+					...redactServer(currentServer),
+					vectorAgentRemovalWarning,
+				};
 			} catch (error) {
 				throw error;
 			}

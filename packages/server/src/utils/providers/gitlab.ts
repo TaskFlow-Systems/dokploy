@@ -76,7 +76,7 @@ export const assertGitlabProjectScope = (
 	}
 };
 
-export const refreshGitlabToken = async (gitlabProviderId: string) => {
+const refreshGitlabTokenIfExpired = async (gitlabProviderId: string) => {
 	const gitlabProvider = await findGitlabById(gitlabProviderId);
 	const currentTime = Math.floor(Date.now() / 1000);
 
@@ -123,6 +123,23 @@ export const refreshGitlabToken = async (gitlabProviderId: string) => {
 		expiresAt,
 	});
 	return data;
+};
+
+// GitLab invalidates a refresh token when it is used, so concurrent callers must share one refresh
+const pendingRefreshes = new Map<
+	string,
+	ReturnType<typeof refreshGitlabTokenIfExpired>
+>();
+
+export const refreshGitlabToken = (gitlabProviderId: string) => {
+	let refresh = pendingRefreshes.get(gitlabProviderId);
+	if (!refresh) {
+		refresh = refreshGitlabTokenIfExpired(gitlabProviderId).finally(() => {
+			pendingRefreshes.delete(gitlabProviderId);
+		});
+		pendingRefreshes.set(gitlabProviderId, refresh);
+	}
+	return refresh;
 };
 
 export const haveGitlabRequirements = (gitlabProvider: Gitlab) => {

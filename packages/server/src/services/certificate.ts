@@ -51,18 +51,12 @@ export const createCertificate = async (
 	certificateData: z.infer<typeof apiCreateCertificate>,
 	organizationId: string,
 ) => {
-	const normalizedCertificateData = {
-		...certificateData,
-		...(certificateData.certificatePath && {
-			certificatePath: normalizeCertificatePath(
-				certificateData.certificatePath,
-			),
-		}),
-		organizationId,
-	};
 	const certificate = await db
 		.insert(certificates)
-		.values(normalizedCertificateData)
+		.values({
+			...certificateData,
+			organizationId,
+		})
 		.returning();
 
 	if (!certificate || certificate[0] === undefined) {
@@ -79,13 +73,26 @@ export const createCertificate = async (
 	return cer;
 };
 
-export const removeCertificateById = async (certificateId: string) => {
-	const certificate = await findCertificateById(certificateId);
+// certificatePath feeds rm -rf and mkdir -p; a tampered row must not escape the certificates dir
+const resolveCertificateDir = (certificate: Certificate) => {
 	const { CERTIFICATES_PATH } = paths(!!certificate.serverId);
-	const certDir = path.join(
-		CERTIFICATES_PATH,
+	const base = path.resolve(CERTIFICATES_PATH);
+	const certDir = path.resolve(
+		base,
 		normalizeCertificatePath(certificate.certificatePath),
 	);
+	if (!certDir.startsWith(`${base}${path.sep}`)) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: "Invalid certificate path",
+		});
+	}
+	return certDir;
+};
+
+export const removeCertificateById = async (certificateId: string) => {
+	const certificate = await findCertificateById(certificateId);
+	const certDir = resolveCertificateDir(certificate);
 
 	if (certificate.serverId) {
 		await execAsyncRemote(
@@ -112,11 +119,7 @@ export const removeCertificateById = async (certificateId: string) => {
 };
 
 const createCertificateFiles = async (certificate: Certificate) => {
-	const { CERTIFICATES_PATH } = paths(!!certificate.serverId);
-	const certDir = path.join(
-		CERTIFICATES_PATH,
-		normalizeCertificatePath(certificate.certificatePath),
-	);
+	const certDir = resolveCertificateDir(certificate);
 	const crtPath = path.join(certDir, "chain.crt");
 	const keyPath = path.join(certDir, "privkey.key");
 

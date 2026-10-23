@@ -6,6 +6,7 @@ import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
+import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
 import { rejectTerminalWithoutSuperSession } from "./super-session";
@@ -89,6 +90,13 @@ export const setupDockerContainerTerminalWebSocketServer = (
 		}
 
 		if (!(await canAccessDockerOverWss(user, session, serverId, serviceId))) {
+			ws.close(4003, "Not authorized");
+			return;
+		}
+		if (
+			serviceId &&
+			!(await containerBelongsToService(serviceId, containerId, serverId))
+		) {
 			ws.close(4003, "Not authorized");
 			return;
 		}

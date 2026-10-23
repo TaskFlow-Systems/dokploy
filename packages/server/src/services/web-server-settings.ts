@@ -4,7 +4,7 @@ import {
 	isRedactedSecretValue,
 	redactSecretValue,
 } from "@dokploy/server/utils/security/redaction";
-import { eq } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 
 type WebServerSettings = typeof webServerSettings.$inferSelect;
 type WebServerMetricsConfig = WebServerSettings["metricsConfig"];
@@ -98,4 +98,45 @@ export const updateWebServerSettings = async (
 		.returning();
 
 	return updated;
+};
+
+export const setWebServerProviderIds = async (
+	organizationId: string,
+	ids: string[],
+) => {
+	const current = await getWebServerSettings();
+	if (!current) {
+		return null;
+	}
+
+	const [updated] = await db
+		.update(webServerSettings)
+		.set({
+			telemetryProviderIds: ids,
+			vectorAgentOrganizationId: ids.length > 0 ? organizationId : null,
+			updatedAt: new Date(),
+		})
+		.where(
+			and(
+				eq(webServerSettings.id, current.id),
+				or(
+					isNull(webServerSettings.vectorAgentOrganizationId),
+					eq(webServerSettings.vectorAgentOrganizationId, organizationId),
+				),
+			),
+		)
+		.returning();
+
+	return updated ?? null;
+};
+
+export const releaseWebServerAgent = async (organizationId: string) => {
+	await db
+		.update(webServerSettings)
+		.set({
+			telemetryProviderIds: [],
+			vectorAgentOrganizationId: null,
+			updatedAt: new Date(),
+		})
+		.where(eq(webServerSettings.vectorAgentOrganizationId, organizationId));
 };

@@ -1,4 +1,5 @@
 import { REDACTED_SECRET_VALUE } from "@dokploy/server/utils/security/redaction";
+import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const serverMocks = vi.hoisted(() => ({
@@ -271,6 +272,22 @@ const environment = (
 	project: project(projectId, organizationId),
 });
 
+// Members hold no AI permission unless an enterprise custom role grants it.
+const denyAiPermissionToMembers = () =>
+	permissionMocks.checkPermission.mockImplementationOnce(
+		async (
+			ctx: { user: { role: string } },
+			permissions: Record<string, unknown>,
+		) => {
+			if (ctx.user.role === "member" && "ai" in permissions) {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "Permission denied",
+				});
+			}
+		},
+	);
+
 const createContext = (role = "owner") =>
 	({
 		db: {},
@@ -494,7 +511,9 @@ describe("deploy target placement ownership boundary", () => {
 		expect(permissionMocks.addNewService).not.toHaveBeenCalled();
 	});
 
-	it("requires admin boundary before AI suggestions can spend provider credentials", async () => {
+	it("requires the ai.read permission before AI suggestions can spend provider credentials", async () => {
+		denyAiPermissionToMembers();
+
 		await expect(
 			aiRouter.createCaller(createContext("member")).suggest({
 				aiId: "ai-1",
@@ -503,10 +522,16 @@ describe("deploy target placement ownership boundary", () => {
 			}),
 		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
+		expect(permissionMocks.checkPermission).toHaveBeenCalledWith(
+			expect.anything(),
+			{ ai: ["read"] },
+		);
 		expect(aiServiceMocks.suggestVariants).not.toHaveBeenCalled();
 	});
 
-	it("requires admin boundary before log analysis can spend provider credentials", async () => {
+	it("requires the ai.read permission before log analysis can spend provider credentials", async () => {
+		denyAiPermissionToMembers();
+
 		await expect(
 			aiRouter.createCaller(createContext("member")).analyzeLogs({
 				aiId: "ai-1",
@@ -515,6 +540,10 @@ describe("deploy target placement ownership boundary", () => {
 			}),
 		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
+		expect(permissionMocks.checkPermission).toHaveBeenCalledWith(
+			expect.anything(),
+			{ ai: ["read"] },
+		);
 		expect(aiServiceMocks.getAiSettingById).not.toHaveBeenCalled();
 	});
 

@@ -4,7 +4,10 @@ import {
 	createDeploymentVolumeBackup,
 	updateDeploymentStatus,
 } from "@dokploy/server/services/deployment";
-import { findDestinationById } from "@dokploy/server/services/destination";
+import {
+	findDestinationById,
+	findDestinationByIdForOrganization,
+} from "@dokploy/server/services/destination";
 import { findVolumeBackupById } from "@dokploy/server/services/volume-backups";
 import {
 	execAsync,
@@ -129,13 +132,17 @@ const cleanupOldVolumeBackups = async (
 export const runVolumeBackup = async (volumeBackupId: string) => {
 	const volumeBackup = await findVolumeBackupById(volumeBackupId);
 	const serverId = resolveVolumeBackupServerId(volumeBackup);
+	const projectName = getProjectName(volumeBackup);
+	const organizationId = getOrganizationId(volumeBackup);
+	await findDestinationByIdForOrganization(
+		volumeBackup.destinationId,
+		organizationId,
+	);
 	const deployment = await createDeploymentVolumeBackup({
 		volumeBackupId: volumeBackup.volumeBackupId,
 		title: "Volume Backup",
 		description: "Volume Backup",
 	});
-	const projectName = getProjectName(volumeBackup);
-	const organizationId = getOrganizationId(volumeBackup);
 	try {
 		const command = await backupVolume(volumeBackup);
 

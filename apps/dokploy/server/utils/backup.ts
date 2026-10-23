@@ -50,75 +50,51 @@ const normalizeQueueJob = (job: QueueJob): ScheduledQueueJob => {
 	};
 };
 
-export const schedule = async (job: QueueJob) => {
-	try {
-		const signedJob = await signScheduledQueueJob(normalizeQueueJob(job), {
-			operation: "create",
-		});
-		const result = await fetch(`${process.env.JOBS_URL}/create-backup`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"X-API-Key": process.env.API_KEY || "NO-DEFINED",
-			},
-			body: JSON.stringify(signedJob),
-		});
-		const data = await result.json();
-		return data;
-	} catch (error) {
-		throw error;
+const postJob = async (path: string, signedJob: SignedScheduledQueueJob) => {
+	const result = await fetch(`${process.env.JOBS_URL}${path}`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			"X-API-Key": process.env.API_KEY || "NO-DEFINED",
+		},
+		body: JSON.stringify(signedJob),
+	});
+	const data = await result.json();
+	if (!result.ok) {
+		throw new Error(
+			`Jobs service ${path} failed (${result.status}): ${JSON.stringify(data)}`,
+		);
 	}
+	return data;
 };
 
-export const removeJob = async (job: QueueJob) => {
-	try {
-		const signedJob = await signScheduledQueueJob(normalizeQueueJob(job), {
+export const schedule = async (job: QueueJob) =>
+	postJob(
+		"/create-backup",
+		await signScheduledQueueJob(normalizeQueueJob(job), {
+			operation: "create",
+		}),
+	);
+
+export const removeJob = async (job: QueueJob) =>
+	removeSignedJob(
+		await signScheduledQueueJob(normalizeQueueJob(job), {
 			operation: "remove",
 			requireEnabled: false,
 			requireActiveServer: false,
-		});
-		return await removeSignedJob(signedJob);
-	} catch (error) {
-		throw error;
-	}
-};
+		}),
+	);
 
-export const removeSignedJob = async (signedJob: SignedScheduledQueueJob) => {
-	try {
-		const result = await fetch(`${process.env.JOBS_URL}/remove-job`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"X-API-Key": process.env.API_KEY || "NO-DEFINED",
-			},
-			body: JSON.stringify(signedJob),
-		});
-		const data = await result.json();
-		return data;
-	} catch (error) {
-		throw error;
-	}
-};
+export const removeSignedJob = (signedJob: SignedScheduledQueueJob) =>
+	postJob("/remove-job", signedJob);
 
-export const updateJob = async (job: QueueJob) => {
-	try {
-		const signedJob = await signScheduledQueueJob(normalizeQueueJob(job), {
+export const updateJob = async (job: QueueJob) =>
+	postJob(
+		"/update-backup",
+		await signScheduledQueueJob(normalizeQueueJob(job), {
 			operation: "update",
-		});
-		const result = await fetch(`${process.env.JOBS_URL}/update-backup`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				"X-API-Key": process.env.API_KEY || "NO-DEFINED",
-			},
-			body: JSON.stringify(signedJob),
-		});
-		const data = await result.json();
-		return data;
-	} catch (error) {
-		throw error;
-	}
-};
+		}),
+	);
 
 export const cancelJobs = async (backups: BackupScheduleList) => {
 	for (const backup of backups) {

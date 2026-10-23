@@ -61,6 +61,7 @@ vi.mock("@dokploy/server/services/deployment", () => ({
 
 vi.mock("@dokploy/server/services/destination", () => ({
 	findDestinationById: mocks.findDestinationById,
+	findDestinationByIdForOrganization: mocks.findDestinationById,
 }));
 
 vi.mock("@dokploy/server/services/environment", () => ({

@@ -154,7 +154,7 @@ describe("Node.js image and CI version", () => {
 	];
 
 	it.each(dockerfiles)("%s builds on the pinned Node image", (file) => {
-		expect(pinIn(read(file), /FROM node:(\S+)-slim AS base/)).toBe(
+		expect(pinIn(read(file), /FROM node:([\d.]+)-bookworm-slim AS base/)).toBe(
 			PINNED_VERSIONS.node,
 		);
 	});

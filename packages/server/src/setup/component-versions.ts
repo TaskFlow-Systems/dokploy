@@ -3,7 +3,7 @@
 // values; apps/dokploy/__test__/server/component-versions-sync.test.ts fails
 // when they drift from this object.
 export const PINNED_VERSIONS = {
-	node: "24.21.0",
+	node: "24.22.1",
 	docker: "29.8.2",
 	traefik: "3.7.14",
 	postgres: "18.6",

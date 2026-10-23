@@ -106,6 +106,7 @@ export const pipeBetweenServers = async ({
 		bytes += chunk.length;
 		onProgress?.(bytes);
 	});
+	from.stdout.on("error", () => {});
 	from.stdout.pipe(to.stdin);
 	// pipe() pauses the source when the target's stdin closes early; a paused
 	// stdout never reaches EOF, so the source would never report its exit.

@@ -5,10 +5,13 @@ import {
 	findAllDeploymentsByComposeId,
 	findAllDeploymentsByServerId,
 	findAllDeploymentsCentralized,
+	findBackupById,
 	findComposeById,
 	findComposeDeploymentOperation,
 	findDeploymentById,
+	findPreviewDeploymentById,
 	findScheduleById,
+	findVolumeBackupById,
 	getAccessibleServerIds,
 	IS_CLOUD,
 	markDeploymentOperationDispatched,
@@ -400,10 +403,48 @@ export const deploymentRouter = createTRPCRouter({
 			if (input.type === "schedule") {
 				const schedule = await findScheduleById(input.id);
 				await assertScheduleDeploymentReadAccess(ctx, schedule);
+			} else if (input.type === "server") {
+				const accessibleServerIds = await getAccessibleServerIds(ctx.session);
+				if (!accessibleServerIds.has(input.id)) {
+					throw new TRPCError({
+						code: "UNAUTHORIZED",
+						message: "You don't have access to this server.",
+					});
+				}
+				await checkPermission(ctx, { deployment: ["read"] });
 			} else {
-				await checkServicePermissionAndAccess(ctx, input.id, {
-					deployment: ["read"],
-				});
+				let serviceId: string | null | undefined = input.id;
+				if (input.type === "backup") {
+					const backup = await findBackupById(input.id);
+					serviceId =
+						backup.postgresId ||
+						backup.mysqlId ||
+						backup.mariadbId ||
+						backup.mongoId ||
+						backup.libsqlId ||
+						backup.composeId;
+				} else if (input.type === "volumeBackup") {
+					const volumeBackup = await findVolumeBackupById(input.id);
+					serviceId =
+						volumeBackup.applicationId ||
+						volumeBackup.composeId ||
+						volumeBackup.postgresId ||
+						volumeBackup.mysqlId ||
+						volumeBackup.mariadbId ||
+						volumeBackup.mongoId ||
+						volumeBackup.redisId ||
+						volumeBackup.libsqlId;
+				} else if (input.type === "previewDeployment") {
+					const preview = await findPreviewDeploymentById(input.id);
+					serviceId = preview.applicationId;
+				}
+				if (serviceId) {
+					await checkServicePermissionAndAccess(ctx, serviceId, {
+						deployment: ["read"],
+					});
+				} else {
+					await checkPermission(ctx, { deployment: ["read"] });
+				}
 			}
 			return await db.query.deployments.findMany({
 				where: eq(deployments[`${input.type}Id`], input.id),

@@ -123,6 +123,7 @@ import {
 	enterpriseOwnerProcedure,
 	protectedProcedure,
 	publicProcedure,
+	withPermission,
 } from "../trpc";
 
 const beginTraefikOperation = async (
@@ -428,7 +429,7 @@ export const settingsRouter = createTRPCRouter({
 		});
 		return true;
 	}),
-	getDockerDiskUsage: adminProcedure
+	getDockerDiskUsage: withPermission("docker", "read")
 		.input(
 			z
 				.object({
