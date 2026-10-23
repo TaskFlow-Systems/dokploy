@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
 	boolean,
 	integer,
@@ -11,6 +11,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { domainHostSchema } from "../validations/domain";
+import { organization } from "./account";
 import { certificateType } from "./shared";
 
 export const webServerSettings = pgTable("webServerSettings", {
@@ -27,6 +28,14 @@ export const webServerSettings = pgTable("webServerSettings", {
 	sshPrivateKey: text("sshPrivateKey"),
 	enableDockerCleanup: boolean("enableDockerCleanup").notNull().default(true),
 	logCleanupCron: text("logCleanupCron").default("0 0 * * *"),
+	telemetryProviderIds: text("telemetryProviderIds")
+		.array()
+		.notNull()
+		.default(sql`ARRAY[]::text[]`),
+	vectorAgentOrganizationId: text("vectorAgentOrganizationId").references(
+		() => organization.id,
+		{ onDelete: "set null" },
+	),
 	// Metrics Configuration
 	metricsConfig: jsonb("metricsConfig")
 		.$type<{
@@ -89,6 +98,10 @@ export const webServerSettings = pgTable("webServerSettings", {
 			errorPageDescription: string | null;
 			footerText: string | null;
 			ogImageUrl: string | null;
+			logoLightUrl: string | null;
+			loginLogoLightUrl: string | null;
+			faviconLightUrl: string | null;
+			dualModeBranding: boolean;
 		}>()
 		.default({
 			appName: null,
@@ -103,6 +116,10 @@ export const webServerSettings = pgTable("webServerSettings", {
 			errorPageDescription: null,
 			footerText: null,
 			ogImageUrl: null,
+			logoLightUrl: null,
+			loginLogoLightUrl: null,
+			faviconLightUrl: null,
+			dualModeBranding: false,
 		}),
 	// Deployment Configuration (self-hosted only)
 	remoteServersOnly: boolean("remoteServersOnly").notNull().default(false),
@@ -133,46 +150,52 @@ const createSchema = createInsertSchema(webServerSettings, {
 	id: z.string().min(1).optional(),
 });
 
-export const apiUpdateWebServerSettings = createSchema.partial().extend({
-	serverIp: z.string().optional(),
-	certificateType: z.enum(["letsencrypt", "none", "custom"]).optional(),
-	https: z.boolean().optional(),
-	host: z.string().optional(),
-	letsEncryptEmail: z.string().email().optional().nullable(),
-	sshPrivateKey: z.string().optional(),
-	enableDockerCleanup: z.boolean().optional(),
-	logCleanupCron: z.string().optional().nullable(),
-	metricsConfig: z
-		.object({
-			server: z.object({
-				type: z.enum(["Dokploy", "Remote"]),
-				refreshRate: z.number(),
-				port: z.number(),
-				token: z.string(),
-				urlCallback: z.string(),
-				retentionDays: z.number(),
-				cronJob: z.string(),
-				thresholds: z.object({
-					cpu: z.number(),
-					memory: z.number(),
+export const apiUpdateWebServerSettings = createSchema
+	.partial()
+	.extend({
+		serverIp: z.string().optional(),
+		certificateType: z.enum(["letsencrypt", "none", "custom"]).optional(),
+		https: z.boolean().optional(),
+		host: z.string().optional(),
+		letsEncryptEmail: z.string().email().optional().nullable(),
+		sshPrivateKey: z.string().optional(),
+		enableDockerCleanup: z.boolean().optional(),
+		logCleanupCron: z.string().optional().nullable(),
+		metricsConfig: z
+			.object({
+				server: z.object({
+					type: z.enum(["Dokploy", "Remote"]),
+					refreshRate: z.number(),
+					port: z.number(),
+					token: z.string(),
+					urlCallback: z.string(),
+					retentionDays: z.number(),
+					cronJob: z.string(),
+					thresholds: z.object({
+						cpu: z.number(),
+						memory: z.number(),
+					}),
 				}),
-			}),
-			containers: z.object({
-				refreshRate: z.number(),
-				services: z.object({
-					include: z.array(z.string()),
-					exclude: z.array(z.string()),
+				containers: z.object({
+					refreshRate: z.number(),
+					services: z.object({
+						include: z.array(z.string()),
+						exclude: z.array(z.string()),
+					}),
 				}),
-			}),
-		})
-		.optional(),
-	cleanupCacheApplications: z.boolean().optional(),
-	cleanupCacheOnPreviews: z.boolean().optional(),
-	cleanupCacheOnCompose: z.boolean().optional(),
-	remoteServersOnly: z.boolean().optional(),
-	enforceSSO: z.boolean().optional(),
-	buildsConcurrency: z.number().int().min(1).max(100).optional(),
-});
+			})
+			.optional(),
+		cleanupCacheApplications: z.boolean().optional(),
+		cleanupCacheOnPreviews: z.boolean().optional(),
+		cleanupCacheOnCompose: z.boolean().optional(),
+		remoteServersOnly: z.boolean().optional(),
+		enforceSSO: z.boolean().optional(),
+		buildsConcurrency: z.number().int().min(1).max(100).optional(),
+	})
+	.omit({
+		telemetryProviderIds: true,
+		vectorAgentOrganizationId: true,
+	});
 
 export const apiUpdateWebServerBuildsConcurrency = z.object({
 	buildsConcurrency: z.number().int().min(1).max(100),
@@ -226,6 +249,10 @@ export const whitelabelingConfigSchema = z.object({
 	errorPageDescription: z.string().nullable(),
 	footerText: z.string().nullable(),
 	ogImageUrl: safeUrl,
+	logoLightUrl: safeUrl,
+	loginLogoLightUrl: safeUrl,
+	faviconLightUrl: safeUrl,
+	dualModeBranding: z.boolean(),
 });
 
 export const apiUpdateWhitelabeling = z.object({

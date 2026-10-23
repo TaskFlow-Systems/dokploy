@@ -200,17 +200,18 @@ describe("certificate router assigned-server boundary", () => {
 		expect(mocks.createCertificate).not.toHaveBeenCalled();
 	});
 
-	it("rejects unsafe certificate paths before file writes", async () => {
+	it("drops client-supplied certificate paths before file writes", async () => {
 		for (const certificatePath of ["cert;id", ".", ".."]) {
-			await expect(
-				createCaller().create({
-					...certificateInput,
-					certificatePath,
-				}),
-			).rejects.toThrow();
+			await createCaller().create({
+				...certificateInput,
+				certificatePath,
+			} as typeof certificateInput);
 		}
 
-		expect(mocks.createCertificate).not.toHaveBeenCalled();
+		expect(mocks.createCertificate).toHaveBeenCalledTimes(3);
+		for (const [input] of mocks.createCertificate.mock.calls) {
+			expect(input).not.toHaveProperty("certificatePath");
+		}
 	});
 
 	it("allows cloud certificate creation on accessible servers", async () => {

@@ -15,6 +15,7 @@ import {
 	getAiSettingById,
 	getAiSettingsByOrganizationId,
 	getCustomAiProviders,
+	resolveAiApiKey,
 	saveAiSettings,
 	saveCustomAiProviders,
 	suggestVariants,
@@ -25,6 +26,7 @@ import {
 	addNewService,
 	checkPermission,
 	checkServiceAccess,
+	hasPermission,
 } from "@dokploy/server/services/permission";
 import {
 	assertAIProviderApiUrlAllowed,
@@ -33,10 +35,7 @@ import {
 	type Model,
 	selectAIProvider,
 } from "@dokploy/server/utils/ai/select-ai-provider";
-import {
-	redactAiSettingsSecrets,
-	redactAiSettingsSecretsList,
-} from "@dokploy/server/utils/security/redaction";
+import { redactAiSettingsSecrets } from "@dokploy/server/utils/security/redaction";
 import { scrubSecretText } from "@dokploy/server/utils/security/secret-scrub";
 import { fetchWithPublicEgress } from "@dokploy/server/utils/url/network";
 import { TRPCError } from "@trpc/server";
@@ -46,8 +45,10 @@ import { slugify } from "@/lib/slug";
 import {
 	adminProcedure,
 	createTRPCRouter,
-	protectedProcedure,
+	withAnyPermission,
+	withPermission,
 } from "@/server/api/trpc";
+import { audit } from "@/server/api/utils/audit";
 import {
 	assertTargetEnvironmentAccess,
 	assertTargetServerAccess,
@@ -57,8 +58,20 @@ import { generatePassword } from "@/templates/utils";
 const appendAIProviderPath = (apiUrl: string, pathname: string) =>
 	`${apiUrl.replace(/\/+$/, "")}/${pathname.replace(/^\/+/, "")}`;
 
+const resolveInputApiKey = (
+	input: { apiKey: string; apiUrl: string; aiId?: string },
+	ctx: { user: { id: string }; session: { activeOrganizationId: string } },
+) =>
+	resolveAiApiKey({
+		apiKey: input.apiKey,
+		apiUrl: input.apiUrl,
+		aiId: input.aiId,
+		organizationId: ctx.session.activeOrganizationId,
+		authorize: () => hasPermission(ctx, { ai: ["update"] }),
+	});
+
 export const aiRouter = createTRPCRouter({
-	one: adminProcedure
+	one: withAnyPermission("ai", ["read", "update"])
 		.input(z.object({ aiId: z.string() }))
 		.query(async ({ ctx, input }) => {
 			return redactAiSettingsSecrets(
@@ -66,13 +79,20 @@ export const aiRouter = createTRPCRouter({
 			);
 		}),
 
-	getModels: adminProcedure
-		.input(z.object({ apiUrl: z.string().min(1), apiKey: z.string() }))
-		.query(async ({ input }) => {
+	getModels: withAnyPermission("ai", ["read", "create", "update"])
+		.input(
+			z.object({
+				apiUrl: z.string().min(1),
+				apiKey: z.string(),
+				aiId: z.string().optional(),
+			}),
+		)
+		.query(async ({ input, ctx }) => {
 			try {
 				const apiUrl = await assertAIProviderApiUrlAllowed(input.apiUrl);
+				const apiKey = await resolveInputApiKey(input, ctx);
 				const providerName = getProviderName(apiUrl);
-				const headers = getProviderHeaders(apiUrl, input.apiKey);
+				const headers = getProviderHeaders(apiUrl, apiKey);
 				let response = null;
 				switch (providerName) {
 					case "ollama":
@@ -87,7 +107,7 @@ export const aiRouter = createTRPCRouter({
 						break;
 					case "gemini": {
 						const modelsUrl = new URL(appendAIProviderPath(apiUrl, "models"));
-						modelsUrl.searchParams.set("key", input.apiKey);
+						modelsUrl.searchParams.set("key", apiKey);
 						response = await fetchWithPublicEgress(
 							modelsUrl,
 							{
@@ -157,7 +177,7 @@ export const aiRouter = createTRPCRouter({
 							},
 						] as Model[];
 					default:
-						if (!input.apiKey) {
+						if (!apiKey) {
 							throw new TRPCError({
 								code: "BAD_REQUEST",
 								message: "API key must contain at least 1 character(s)",
@@ -220,25 +240,47 @@ export const aiRouter = createTRPCRouter({
 				});
 			}
 		}),
-	create: adminProcedure.input(apiCreateAi).mutation(async ({ ctx, input }) => {
-		return redactAiSettingsSecrets(
-			await saveAiSettings(ctx.session.activeOrganizationId, input),
-		);
-	}),
+	create: withPermission("ai", "create")
+		.input(apiCreateAi)
+		.mutation(async ({ ctx, input }) => {
+			const result = await saveAiSettings(
+				ctx.session.activeOrganizationId,
+				input,
+			);
+			await audit(ctx, {
+				action: "create",
+				resourceType: "ai",
+				resourceName: input.name,
+			});
+			return redactAiSettingsSecrets(result);
+		}),
 
-	update: adminProcedure.input(apiUpdateAi).mutation(async ({ ctx, input }) => {
-		return redactAiSettingsSecrets(
-			await saveAiSettings(ctx.session.activeOrganizationId, input),
-		);
-	}),
+	update: withPermission("ai", "update")
+		.input(apiUpdateAi)
+		.mutation(async ({ ctx, input }) => {
+			const result = await saveAiSettings(
+				ctx.session.activeOrganizationId,
+				input,
+			);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "ai",
+				resourceId: input.aiId,
+				resourceName: input.name,
+			});
+			return redactAiSettingsSecrets(result);
+		}),
 
-	getAll: adminProcedure.query(async ({ ctx }) => {
-		return redactAiSettingsSecretsList(
-			await getAiSettingsByOrganizationId(ctx.session.activeOrganizationId),
-		);
-	}),
+	getAll: withAnyPermission("ai", ["read", "create", "update", "delete"]).query(
+		async ({ ctx }) => {
+			const settings = await getAiSettingsByOrganizationId(
+				ctx.session.activeOrganizationId,
+			);
+			return settings.map(({ apiKey, ...rest }) => rest);
+		},
+	),
 
-	get: adminProcedure
+	get: withAnyPermission("ai", ["read", "update"])
 		.input(z.object({ aiId: z.string() }))
 		.query(async ({ ctx, input }) => {
 			return redactAiSettingsSecrets(
@@ -246,16 +288,28 @@ export const aiRouter = createTRPCRouter({
 			);
 		}),
 
-	delete: adminProcedure
+	delete: withPermission("ai", "delete")
 		.input(z.object({ aiId: z.string() }))
-		.mutation(async ({ ctx, input }) => {
-			return await deleteAiSettings(
+		.mutation(async ({ input, ctx }) => {
+			const setting = await getAiSettingById(
 				input.aiId,
 				ctx.session.activeOrganizationId,
 			);
+			await deleteAiSettings(input.aiId, ctx.session.activeOrganizationId);
+			await audit(ctx, {
+				action: "delete",
+				resourceType: "ai",
+				resourceId: input.aiId,
+				resourceName: setting.name,
+			});
+			return true;
 		}),
 
-	getCustomProviders: protectedProcedure.query(async ({ ctx }) => {
+	getCustomProviders: withAnyPermission("ai", [
+		"read",
+		"create",
+		"update",
+	]).query(async ({ ctx }) => {
 		return await getCustomAiProviders(ctx.session.activeOrganizationId);
 	}),
 
@@ -268,7 +322,7 @@ export const aiRouter = createTRPCRouter({
 			);
 		}),
 
-	getEnabledProviders: protectedProcedure.query(async ({ ctx }) => {
+	getEnabledProviders: withPermission("ai", "read").query(async ({ ctx }) => {
 		const settings = await getAiSettingsByOrganizationId(
 			ctx.session.activeOrganizationId,
 		);
@@ -277,7 +331,7 @@ export const aiRouter = createTRPCRouter({
 			.map((s) => ({ aiId: s.aiId, name: s.name, model: s.model }));
 	}),
 
-	analyzeLogs: adminProcedure
+	analyzeLogs: withPermission("ai", "read")
 		.input(
 			z.object({
 				aiId: z.string().min(1),
@@ -334,20 +388,22 @@ ${logs}`,
 			}
 		}),
 
-	testConnection: adminProcedure
+	testConnection: withAnyPermission("ai", ["create", "update"])
 		.input(
 			z.object({
 				apiUrl: z.string().min(1),
 				apiKey: z.string(),
 				model: z.string().min(1),
+				aiId: z.string().optional(),
 			}),
 		)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input, ctx }) => {
 			try {
 				const apiUrl = await assertAIProviderApiUrlAllowed(input.apiUrl);
+				const apiKey = await resolveInputApiKey(input, ctx);
 				const provider = selectAIProvider({
 					apiUrl,
-					apiKey: input.apiKey,
+					apiKey,
 				});
 				const model = provider(input.model);
 				const result = await generateText({
@@ -369,7 +425,7 @@ ${logs}`,
 			}
 		}),
 
-	suggest: adminProcedure
+	suggest: withPermission("ai", "read")
 		.input(
 			z.object({
 				aiId: z.string(),
@@ -396,7 +452,7 @@ ${logs}`,
 				});
 			}
 		}),
-	deploy: protectedProcedure
+	deploy: withPermission("ai", "read")
 		.input(deploySuggestionSchema)
 		.mutation(async ({ ctx, input }) => {
 			const environment = await assertTargetEnvironmentAccess(

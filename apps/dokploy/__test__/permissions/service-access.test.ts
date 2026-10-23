@@ -30,55 +30,38 @@ let memberToReturn: ReturnType<typeof mockMemberData> =
 	mockMemberData("member");
 let serviceOrganizationToReturn: string | null = "org-1";
 
-const serviceRecord = () =>
-	serviceOrganizationToReturn
-		? {
-				environment: {
-					project: {
-						organizationId: serviceOrganizationToReturn,
-					},
+// Every project id used below belongs to the caller's org-1; services belong
+// to serviceOrganizationToReturn.
+vi.mock("@dokploy/server/db", () => {
+	const selectChain = {
+		from: () => selectChain,
+		innerJoin: () => selectChain,
+		where: () =>
+			Promise.resolve(
+				serviceOrganizationToReturn
+					? [{ organizationId: serviceOrganizationToReturn }]
+					: [],
+			),
+	};
+	return {
+		db: {
+			select: vi.fn(() => selectChain),
+			query: {
+				member: {
+					findFirst: vi.fn(() => Promise.resolve(memberToReturn)),
+					findMany: vi.fn(() => Promise.resolve([])),
 				},
-			}
-		: null;
-
-vi.mock("@dokploy/server/db", () => ({
-	db: {
-		query: {
-			applications: {
-				findFirst: vi.fn(() => Promise.resolve(serviceRecord())),
-			},
-			compose: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			postgres: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			mysql: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			mariadb: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			mongo: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			redis: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			libsql: {
-				findFirst: vi.fn(() => Promise.resolve(null)),
-			},
-			member: {
-				findFirst: vi.fn(() => Promise.resolve(memberToReturn)),
-				findMany: vi.fn(() => Promise.resolve([])),
-			},
-			organizationRole: {
-				findFirst: vi.fn(),
-				findMany: vi.fn(() => Promise.resolve([])),
+				organizationRole: {
+					findFirst: vi.fn(),
+					findMany: vi.fn(() => Promise.resolve([])),
+				},
+				projects: {
+					findFirst: vi.fn(() => Promise.resolve({ organizationId: "org-1" })),
+				},
 			},
 		},
-	},
-}));
+	};
+});
 
 vi.mock("@dokploy/server/services/proprietary/license-key", () => ({
 	hasValidLicense: vi.fn(() => Promise.resolve(false)),

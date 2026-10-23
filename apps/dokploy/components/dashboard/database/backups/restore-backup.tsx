@@ -560,7 +560,10 @@ export const RestoreBackup = ({
 												value={field.value}
 												onValueChange={(value: DatabaseType) => {
 													field.onChange(value);
-													form.setValue("metadata", {});
+													form.setValue("metadata", {
+														serviceName:
+															form.getValues("metadata.serviceName") ?? "",
+													});
 												}}
 											>
 												<SelectTrigger>
@@ -587,7 +590,7 @@ export const RestoreBackup = ({
 											<div className="flex gap-2">
 												<Select
 													onValueChange={field.onChange}
-													value={field.value || undefined}
+													value={field.value ?? ""}
 												>
 													<FormControl>
 														<SelectTrigger>

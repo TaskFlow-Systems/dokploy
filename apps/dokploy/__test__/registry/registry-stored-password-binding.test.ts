@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
 	execAsync: vi.fn(),
 	execAsyncRemote: vi.fn(),
+	execFileAsync: vi.fn(),
 	findFirst: vi.fn(),
 	returning: vi.fn(),
 	set: vi.fn(),
@@ -25,6 +26,7 @@ vi.mock("@dokploy/server/db", () => ({
 vi.mock("@dokploy/server/utils/process/execAsync", () => ({
 	execAsync: mocks.execAsync,
 	execAsyncRemote: mocks.execAsyncRemote,
+	execFileAsync: mocks.execFileAsync,
 }));
 
 const { updateRegistry } = await import("@dokploy/server/services/registry");
@@ -52,6 +54,7 @@ describe("registry update stored password binding", () => {
 			{ ...storedRegistry, password: "stored-password" },
 		]);
 		mocks.execAsync.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.execFileAsync.mockResolvedValue({ stdout: "", stderr: "" });
 	});
 
 	it.each([
@@ -75,6 +78,7 @@ describe("registry update stored password binding", () => {
 			expect(mocks.update).not.toHaveBeenCalled();
 			expect(mocks.execAsync).not.toHaveBeenCalled();
 			expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+			expect(mocks.execFileAsync).not.toHaveBeenCalled();
 
 			await updateRegistry("registry-1", {
 				...change,

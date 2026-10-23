@@ -3,6 +3,7 @@ import { type apiCreateRegistry, registry } from "@dokploy/server/db/schema";
 import {
 	execAsync,
 	execAsyncRemote,
+	execFileAsync,
 } from "@dokploy/server/utils/process/execAsync";
 import {
 	assertStoredSecretTargetUnchanged,
@@ -30,6 +31,34 @@ export function safeDockerLoginCommand(
 	const escapedUser = shEscape(user);
 	const escapedPassword = shEscape(pass);
 	return `printf %s ${escapedPassword} | docker login ${escapedRegistry} -u ${escapedUser} --password-stdin`;
+}
+
+export async function dockerLogin(
+	registryUrl: string | undefined,
+	username: string | undefined,
+	password: string | undefined,
+	serverId?: string | null,
+): Promise<void> {
+	const args = [
+		"login",
+		registryUrl ?? "",
+		"--username",
+		username ?? "",
+		"--password-stdin",
+	];
+	try {
+		if (serverId && serverId !== "none") {
+			const command = `docker login ${shEscape(registryUrl)} --username ${shEscape(username)} --password-stdin`;
+			await execAsyncRemote(serverId, command, undefined, {
+				input: password ?? "",
+			});
+		} else {
+			await execFileAsync("docker", args, { input: password ?? "" });
+		}
+	} catch (error) {
+		// Do not retain an execution error that may contain echoed credentials.
+		throw new Error(sanitizeRegistryError(error, password));
+	}
 }
 
 export function sanitizeRegistryError(
@@ -78,16 +107,17 @@ export const createRegistry = async (
 			});
 		}
 
-		const loginCommand = safeDockerLoginCommand(
-			input.registryUrl,
-			input.username,
-			input.password,
-		);
 		try {
-			if (input.serverId && input.serverId !== "none") {
-				await execAsyncRemote(input.serverId, loginCommand);
-			} else if (newRegistry.registryType === "cloud") {
-				await execAsync(loginCommand);
+			if (
+				(input.serverId && input.serverId !== "none") ||
+				newRegistry.registryType === "cloud"
+			) {
+				await dockerLogin(
+					input.registryUrl,
+					input.username,
+					input.password,
+					input.serverId,
+				);
 			}
 		} catch (error) {
 			const sanitized = sanitizeRegistryError(error, input.password);
@@ -154,17 +184,17 @@ export const updateRegistry = async (
 			.returning();
 		const response = rows[0];
 
-		const loginCommand = safeDockerLoginCommand(
-			response?.registryUrl,
-			response?.username,
-			response?.password,
-		);
-
 		try {
-			if (registryData?.serverId && registryData?.serverId !== "none") {
-				await execAsyncRemote(registryData.serverId, loginCommand);
-			} else if (response?.registryType === "cloud") {
-				await execAsync(loginCommand);
+			if (
+				(registryData.serverId && registryData.serverId !== "none") ||
+				response?.registryType === "cloud"
+			) {
+				await dockerLogin(
+					response?.registryUrl,
+					response?.username,
+					response?.password,
+					registryData.serverId,
+				);
 			}
 		} catch (execError) {
 			throw new Error(sanitizeRegistryError(execError, response?.password));

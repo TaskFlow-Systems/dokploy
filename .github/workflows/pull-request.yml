@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-node@v7
         if: ${{ !cancelled() }}
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
       - run: bun install --frozen-lockfile
         if: ${{ !cancelled() }}
       - run: bun run server:build
@@ -54,7 +54,7 @@ jobs:
           bun-version: 1.4.2
       - uses: actions/setup-node@v7
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
       
       - name: Install Nixpacks
         if: matrix.job == 'test' && runner.environment == 'github-hosted'

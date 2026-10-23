@@ -1,12 +1,10 @@
 import {
 	createRegistry,
-	execAsyncRemote,
-	execFileAsync,
+	dockerLogin,
 	findRegistryById,
 	getAccessibleServerIds,
 	IS_CLOUD,
 	removeRegistry,
-	safeDockerLoginCommand,
 	updateRegistry,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
@@ -187,31 +185,15 @@ export const registryRouter = createTRPCRouter({
 		.input(apiTestRegistry)
 		.mutation(async ({ input, ctx }) => {
 			try {
-				const args = [
-					"login",
-					input.registryUrl,
-					"--username",
-					input.username,
-					"--password-stdin",
-				];
-
 				assertCloudRegistryTestServer(input.serverId);
 				await assertRegistryServerAccess(ctx, input.serverId);
 
-				if (input.serverId && input.serverId !== "none") {
-					await execAsyncRemote(
-						input.serverId,
-						safeDockerLoginCommand(
-							input.registryUrl,
-							input.username,
-							input.password,
-						),
-					);
-				} else {
-					await execFileAsync("docker", args, {
-						input: Buffer.from(input.password).toString(),
-					});
-				}
+				await dockerLogin(
+					input.registryUrl,
+					input.username,
+					input.password,
+					input.serverId,
+				);
 
 				return true;
 			} catch (error) {
@@ -251,28 +233,12 @@ export const registryRouter = createTRPCRouter({
 				}
 				registryPassword = registryData.password;
 
-				const args = [
-					"login",
+				await dockerLogin(
 					registryData.registryUrl,
-					"--username",
 					registryData.username,
-					"--password-stdin",
-				];
-
-				if (isRemoteRegistryTestServer(input.serverId)) {
-					await execAsyncRemote(
-						input.serverId ?? null,
-						safeDockerLoginCommand(
-							registryData.registryUrl,
-							registryData.username,
-							registryData.password,
-						),
-					);
-				} else {
-					await execFileAsync("docker", args, {
-						input: Buffer.from(registryData.password).toString(),
-					});
-				}
+					registryData.password,
+					input.serverId,
+				);
 
 				return true;
 			} catch (error) {

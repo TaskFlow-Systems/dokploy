@@ -22,6 +22,7 @@ import {
 	quoteShellArg,
 } from "@dokploy/server/utils/filesystem/safe-path";
 import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications/build-error";
+import { getBuildErrorMessage } from "@dokploy/server/utils/notifications/build-error-message";
 import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
 import {
 	ExecError,
@@ -603,6 +604,10 @@ export const deployCompose = async ({
 		if (error instanceof ExactDeploymentFinalizationError) {
 			throw error;
 		}
+		// Without a deployment there is no build log to tail.
+		const errorMessage = deployment
+			? await getBuildErrorMessage(error, deployment.logPath, compose.serverId)
+			: (error instanceof Error && error.message) || "Error building";
 		let command = "";
 
 		// Only log details for non-ExecError errors when a deployment log exists.
@@ -631,8 +636,7 @@ export const deployCompose = async ({
 			projectName: compose.environment.project.name,
 			applicationName: compose.name,
 			applicationType: "compose",
-			// @ts-expect-error
-			errorMessage: error?.message || "Error building",
+			errorMessage,
 			buildLink,
 			organizationId: compose.environment.project.organizationId,
 		});

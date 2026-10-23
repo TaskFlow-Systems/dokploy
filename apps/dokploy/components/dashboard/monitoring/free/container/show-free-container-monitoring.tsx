@@ -48,6 +48,7 @@ const defaultData = {
 interface Props {
 	appName: string;
 	appType?: "application" | "stack" | "docker-compose";
+	serviceId?: string;
 }
 
 type MemorySize = number | string;
@@ -147,6 +148,7 @@ const getMemoryUsagePercentage = (
 export const ContainerFreeMonitoring = ({
 	appName,
 	appType = "application",
+	serviceId,
 }: Props) => {
 	const { data } = api.application.readAppMonitoring.useQuery(
 		{ appName },
@@ -200,7 +202,11 @@ export const ContainerFreeMonitoring = ({
 		if (!appName) return;
 
 		const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-		const wsUrl = `${protocol}//${window.location.host}/listen-docker-stats-monitoring?appName=${appName}&appType=${appType}`;
+		const params = new URLSearchParams({ appName, appType });
+		if (serviceId) {
+			params.append("serviceId", serviceId);
+		}
+		const wsUrl = `${protocol}//${window.location.host}/listen-docker-stats-monitoring?${params.toString()}`;
 		const ws = new WebSocket(wsUrl);
 
 		ws.onmessage = (e) => {
@@ -234,7 +240,7 @@ export const ContainerFreeMonitoring = ({
 		};
 
 		return () => ws.close();
-	}, [appName]);
+	}, [appName, serviceId]);
 
 	const memoryValue = currentData.memory.value;
 	const swapValue = memoryValue.swap;

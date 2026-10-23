@@ -56,6 +56,7 @@ import { stripeRouter } from "./routers/stripe";
 import { superPasswordRouter } from "./routers/super-password";
 import { swarmRouter } from "./routers/swarm";
 import { tagRouter } from "./routers/tag";
+import { telemetryProviderRouter } from "./routers/telemetry-provider";
 import { transferRouter } from "./routers/transfer";
 import { userRouter } from "./routers/user";
 import { vaultProviderRouter } from "./routers/vault-provider";
@@ -90,6 +91,7 @@ export const appRouter = createTRPCRouter({
 	github: githubRouter,
 	gitlab: gitlabRouter,
 	libsql: libsqlRouter,
+	telemetryProvider: telemetryProviderRouter,
 	mariadb: mariadbRouter,
 	mongo: mongoRouter,
 	mounts: mountRouter,

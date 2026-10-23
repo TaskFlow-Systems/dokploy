@@ -164,6 +164,11 @@ const Invitation = ({
 									whitelabeling?.logoUrl ||
 									undefined
 								}
+								logoLightUrl={
+									whitelabeling?.loginLogoLightUrl ||
+									whitelabeling?.logoLightUrl ||
+									undefined
+								}
 							/>
 						</Link>
 						Invitation

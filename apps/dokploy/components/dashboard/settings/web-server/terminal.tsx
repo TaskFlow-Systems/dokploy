@@ -88,9 +88,9 @@ export const Terminal: React.FC<Props> = ({ id, serverId }) => {
 	}, [id, serverId]);
 
 	return (
-		<div className="flex flex-col gap-4">
+		<div className="flex flex-col gap-4 h-full w-full">
 			<div className="w-full h-full bg-transparent border rounded-lg p-2">
-				<div id={id} ref={termRef} className="rounded-xl" />
+				<div id={id} ref={termRef} className="rounded-xl h-full w-full" />
 			</div>
 		</div>
 	);

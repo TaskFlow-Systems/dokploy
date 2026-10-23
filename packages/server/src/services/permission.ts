@@ -2,6 +2,7 @@ import { db } from "@dokploy/server/db";
 import {
 	applications,
 	compose,
+	environments,
 	libsql,
 	mariadb,
 	member,
@@ -9,6 +10,7 @@ import {
 	mysql,
 	organizationRole,
 	postgres,
+	projects,
 	redis,
 } from "@dokploy/server/db/schema";
 import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
@@ -39,14 +41,6 @@ export type ResolvedPermissions = {
 	[R in Resource]: {
 		[A in Statements[R][number]]: boolean;
 	};
-};
-
-type ServiceWithOrganization = {
-	environment?: {
-		project?: {
-			organizationId?: string | null;
-		} | null;
-	} | null;
 };
 
 const staticRoles: Record<string, ReturnType<typeof ac.newRole>> = {
@@ -290,138 +284,6 @@ export const assertRoleAssignmentAllowed = async (
 	}
 };
 
-const serviceOrganizationId = (service: ServiceWithOrganization | null) =>
-	service?.environment?.project?.organizationId ?? null;
-
-export const findServiceOrganizationId = async (serviceId: string) => {
-	const applicationService = await db.query.applications.findFirst({
-		where: eq(applications.applicationId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (applicationService) {
-		return serviceOrganizationId(applicationService);
-	}
-
-	const composeService = await db.query.compose.findFirst({
-		where: eq(compose.composeId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (composeService) {
-		return serviceOrganizationId(composeService);
-	}
-
-	const postgresService = await db.query.postgres.findFirst({
-		where: eq(postgres.postgresId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (postgresService) {
-		return serviceOrganizationId(postgresService);
-	}
-
-	const mysqlService = await db.query.mysql.findFirst({
-		where: eq(mysql.mysqlId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (mysqlService) {
-		return serviceOrganizationId(mysqlService);
-	}
-
-	const mariadbService = await db.query.mariadb.findFirst({
-		where: eq(mariadb.mariadbId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (mariadbService) {
-		return serviceOrganizationId(mariadbService);
-	}
-
-	const mongoService = await db.query.mongo.findFirst({
-		where: eq(mongo.mongoId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (mongoService) {
-		return serviceOrganizationId(mongoService);
-	}
-
-	const redisService = await db.query.redis.findFirst({
-		where: eq(redis.redisId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (redisService) {
-		return serviceOrganizationId(redisService);
-	}
-
-	const libsqlService = await db.query.libsql.findFirst({
-		where: eq(libsql.libsqlId, serviceId),
-		with: {
-			environment: {
-				with: {
-					project: true,
-				},
-			},
-		},
-	});
-	if (libsqlService) {
-		return serviceOrganizationId(libsqlService);
-	}
-
-	return null;
-};
-
-export const assertServiceBelongsToActiveOrganization = async (
-	ctx: PermissionCtx,
-	serviceId: string,
-) => {
-	const organizationId = await findServiceOrganizationId(serviceId);
-	if (!organizationId || organizationId !== ctx.session.activeOrganizationId) {
-		throw new TRPCError({
-			code: "UNAUTHORIZED",
-			message: "You don't have access to this service",
-		});
-	}
-};
-
 export const resolvePermissions = async (
 	ctx: PermissionCtx,
 ): Promise<ResolvedPermissions> => {
@@ -461,6 +323,88 @@ export const resolvePermissions = async (
 	return result;
 };
 
+const serviceTables = [
+	[applications, applications.applicationId],
+	[compose, compose.composeId],
+	[postgres, postgres.postgresId],
+	[mysql, mysql.mysqlId],
+	[mariadb, mariadb.mariadbId],
+	[mongo, mongo.mongoId],
+	[redis, redis.redisId],
+	[libsql, libsql.libsqlId],
+] as const;
+
+// Callers pass the id of any service type, so the owning table is unknown.
+const findServiceOrganizationId = async (serviceId: string) => {
+	for (const [table, idColumn] of serviceTables) {
+		const [row] = await db
+			.select({ organizationId: projects.organizationId })
+			.from(table)
+			.innerJoin(
+				environments,
+				eq(table.environmentId, environments.environmentId),
+			)
+			.innerJoin(projects, eq(environments.projectId, projects.projectId))
+			.where(eq(idColumn, serviceId));
+		if (row) {
+			return row.organizationId;
+		}
+	}
+	return undefined;
+};
+
+const findProjectOrganizationId = async (projectId: string) => {
+	const project = await db.query.projects.findFirst({
+		where: eq(projects.projectId, projectId),
+		columns: { organizationId: true },
+	});
+	return project?.organizationId;
+};
+
+const notFoundMessages = {
+	service: "Service not found",
+	project: "Project not found",
+};
+
+const assertOrganizationOwns = (
+	ctx: PermissionCtx,
+	resource: keyof typeof notFoundMessages,
+	ownerOrganizationId: string | undefined,
+) => {
+	if (!ownerOrganizationId) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: notFoundMessages[resource],
+		});
+	}
+	if (ownerOrganizationId !== ctx.session.activeOrganizationId) {
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: `You don't have access to this ${resource}`,
+		});
+	}
+};
+
+const assertServiceInOrganization = async (
+	ctx: PermissionCtx,
+	serviceId: string,
+) =>
+	assertOrganizationOwns(
+		ctx,
+		"service",
+		await findServiceOrganizationId(serviceId),
+	);
+
+const assertProjectInOrganization = async (
+	ctx: PermissionCtx,
+	projectId: string,
+) =>
+	assertOrganizationOwns(
+		ctx,
+		"project",
+		await findProjectOrganizationId(projectId),
+	);
+
 export const checkProjectAccess = async (
 	ctx: PermissionCtx,
 	action: "create" | "update" | "delete",
@@ -495,8 +439,8 @@ export const checkServicePermissionAndAccess = async (
 	const userId = ctx.user.id;
 	const organizationId = ctx.session.activeOrganizationId;
 	const memberRecord = await findMemberByUserId(userId, organizationId);
+	await assertServiceInOrganization(ctx, serviceId);
 	await checkPermission(ctx, permissions);
-	await assertServiceBelongsToActiveOrganization(ctx, serviceId);
 	if (memberRecord.role !== "owner" && memberRecord.role !== "admin") {
 		if (!memberRecord.accessedServices.includes(serviceId)) {
 			throw new TRPCError({
@@ -516,11 +460,14 @@ export const checkServiceAccess = async (
 	const organizationId = ctx.session.activeOrganizationId;
 	const memberRecord = await findMemberByUserId(userId, organizationId);
 
-	await checkPermission(ctx, { service: [action] });
-
-	if (action !== "create") {
-		await assertServiceBelongsToActiveOrganization(ctx, serviceId);
+	// For "create" the id is the target project, not an existing service.
+	if (action === "create") {
+		await assertProjectInOrganization(ctx, serviceId);
+	} else {
+		await assertServiceInOrganization(ctx, serviceId);
 	}
+
+	await checkPermission(ctx, { service: [action] });
 
 	if (memberRecord.role !== "owner" && memberRecord.role !== "admin") {
 		if (action === "create") {
@@ -573,6 +520,8 @@ export const checkEnvironmentCreationPermission = async (
 	const userId = ctx.user.id;
 	const organizationId = ctx.session.activeOrganizationId;
 	const memberRecord = await findMemberByUserId(userId, organizationId);
+
+	await assertProjectInOrganization(ctx, projectId);
 
 	await checkPermission(ctx, { environment: ["create"] });
 

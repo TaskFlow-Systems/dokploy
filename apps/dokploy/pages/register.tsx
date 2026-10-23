@@ -138,6 +138,11 @@ const Register = ({ isCloud }: Props) => {
 									whitelabeling?.logoUrl ||
 									undefined
 								}
+								logoLightUrl={
+									whitelabeling?.loginLogoLightUrl ||
+									whitelabeling?.logoLightUrl ||
+									undefined
+								}
 							/>
 						</Link>
 						{isCloud ? "Sign Up" : "Setup the server"}

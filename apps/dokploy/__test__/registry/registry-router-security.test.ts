@@ -2,39 +2,25 @@ import { REDACTED_SECRET_VALUE } from "@dokploy/server/utils/security/redaction"
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const escapeShell = (value: string | undefined) =>
-	value ? `'${value.replace(/'/g, `'\\''`)}'` : "''";
-
 const mocks = vi.hoisted(() => ({
 	checkPermission: vi.fn(),
 	createRegistry: vi.fn(),
-	execAsyncRemote: vi.fn(),
-	execFileAsync: vi.fn(),
+	dockerLogin: vi.fn(),
 	findRegistryById: vi.fn(),
 	findRegistryMany: vi.fn(),
 	findRegistryRecord: vi.fn(),
 	getAccessibleServerIds: vi.fn(),
 	removeRegistry: vi.fn(),
 	updateRegistry: vi.fn(),
-	safeDockerLoginCommand: vi.fn(
-		(
-			registry: string | undefined,
-			username: string | undefined,
-			password: string | undefined,
-		) =>
-			`printf %s ${escapeShell(password)} | docker login ${escapeShell(registry)} -u ${escapeShell(username)} --password-stdin`,
-	),
 }));
 
 vi.mock("@dokploy/server", () => ({
 	IS_CLOUD: false,
 	createRegistry: mocks.createRegistry,
-	execAsyncRemote: mocks.execAsyncRemote,
-	execFileAsync: mocks.execFileAsync,
+	dockerLogin: mocks.dockerLogin,
 	findRegistryById: mocks.findRegistryById,
 	getAccessibleServerIds: mocks.getAccessibleServerIds,
 	removeRegistry: mocks.removeRegistry,
-	safeDockerLoginCommand: mocks.safeDockerLoginCommand,
 	updateRegistry: mocks.updateRegistry,
 }));
 
@@ -84,8 +70,7 @@ describe("registry router remote test login boundary", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mocks.checkPermission.mockResolvedValue(undefined);
-		mocks.execAsyncRemote.mockResolvedValue("");
-		mocks.execFileAsync.mockResolvedValue("");
+		mocks.dockerLogin.mockResolvedValue(undefined);
 		mocks.findRegistryMany.mockResolvedValue([]);
 		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
 	});
@@ -202,7 +187,7 @@ describe("registry router remote test login boundary", () => {
 		);
 	});
 
-	it("tests ad-hoc remote registry credentials with a shell-escaped docker login command", async () => {
+	it("tests ad-hoc remote registry credentials through the stdin docker login", async () => {
 		await expect(
 			createCaller().testRegistry({
 				registryName: "registry",
@@ -214,23 +199,15 @@ describe("registry router remote test login boundary", () => {
 			}),
 		).resolves.toBe(true);
 
-		const expectedCommand = mocks.safeDockerLoginCommand(
-			"registry.example.com",
-			normalizedDangerousUsername,
-			dangerousPassword,
-		);
-
 		expect(mocks.getAccessibleServerIds).toHaveBeenCalledWith({
 			userId: "user-1",
 			activeOrganizationId: "org-1",
 		});
-		expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+		expect(mocks.dockerLogin).toHaveBeenCalledWith(
+			"registry.example.com",
+			normalizedDangerousUsername,
+			dangerousPassword,
 			"server-1",
-			expectedCommand,
-		);
-		expect(mocks.execAsyncRemote.mock.calls[0]?.[1]).toContain("printf %s");
-		expect(mocks.execAsyncRemote.mock.calls[0]?.[1]).not.toContain(
-			`echo ${dangerousPassword}`,
 		);
 	});
 
@@ -248,11 +225,10 @@ describe("registry router remote test login boundary", () => {
 			}),
 		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
-		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
-		expect(mocks.execFileAsync).not.toHaveBeenCalled();
+		expect(mocks.dockerLogin).not.toHaveBeenCalled();
 	});
 
-	it("keeps local ad-hoc registry tests on docker argv with password stdin", async () => {
+	it("keeps local ad-hoc registry tests on the local docker login", async () => {
 		await expect(
 			createCaller().testRegistry({
 				registryName: "registry",
@@ -265,24 +241,16 @@ describe("registry router remote test login boundary", () => {
 		).resolves.toBe(true);
 
 		expect(mocks.getAccessibleServerIds).not.toHaveBeenCalled();
-		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
-		expect(mocks.execFileAsync).toHaveBeenCalledWith(
-			"docker",
-			[
-				"login",
-				"registry.example.com",
-				"--username",
-				normalizedDangerousUsername,
-				"--password-stdin",
-			],
-			{
-				input: dangerousPassword,
-			},
+		expect(mocks.dockerLogin).toHaveBeenCalledWith(
+			"registry.example.com",
+			normalizedDangerousUsername,
+			dangerousPassword,
+			"none",
 		);
 	});
 
 	it("redacts registry test passwords from wrapped login errors", async () => {
-		mocks.execAsyncRemote.mockRejectedValue(
+		mocks.dockerLogin.mockRejectedValue(
 			new Error(`docker login failed for ${dangerousPassword}`),
 		);
 
@@ -301,7 +269,7 @@ describe("registry router remote test login boundary", () => {
 		});
 	});
 
-	it("tests stored remote registry credentials with the same safe command builder", async () => {
+	it("tests stored remote registry credentials through the same stdin docker login", async () => {
 		mocks.findRegistryRecord.mockResolvedValue({
 			registryId: "registry-1",
 			registryName: "registry",
@@ -319,20 +287,15 @@ describe("registry router remote test login boundary", () => {
 			}),
 		).resolves.toBe(true);
 
-		expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+		expect(mocks.dockerLogin).toHaveBeenCalledWith(
+			"registry.example.com",
+			dangerousUsername,
+			dangerousPassword,
 			"server-1",
-			mocks.safeDockerLoginCommand(
-				"registry.example.com",
-				dangerousUsername,
-				dangerousPassword,
-			),
 		);
 		expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
 			server: ["execute"],
 		});
-		expect(mocks.execAsyncRemote.mock.calls[0]?.[1]).not.toContain(
-			`echo ${dangerousPassword}`,
-		);
 	});
 
 	it("requires server execute before loading stored credentials for remote registry tests", async () => {
@@ -358,8 +321,7 @@ describe("registry router remote test login boundary", () => {
 			server: ["execute"],
 		});
 		expect(mocks.findRegistryRecord).not.toHaveBeenCalled();
-		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
-		expect(mocks.execFileAsync).not.toHaveBeenCalled();
+		expect(mocks.dockerLogin).not.toHaveBeenCalled();
 	});
 
 	it("does not require server execute for local stored registry tests", async () => {
@@ -384,19 +346,11 @@ describe("registry router remote test login boundary", () => {
 			server: ["execute"],
 		});
 		expect(mocks.getAccessibleServerIds).not.toHaveBeenCalled();
-		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
-		expect(mocks.execFileAsync).toHaveBeenCalledWith(
-			"docker",
-			[
-				"login",
-				"registry.example.com",
-				"--username",
-				dangerousUsername,
-				"--password-stdin",
-			],
-			{
-				input: dangerousPassword,
-			},
+		expect(mocks.dockerLogin).toHaveBeenCalledWith(
+			"registry.example.com",
+			dangerousUsername,
+			dangerousPassword,
+			"none",
 		);
 	});
 
@@ -420,8 +374,7 @@ describe("registry router remote test login boundary", () => {
 			registry: ["create"],
 		});
 		expect(mocks.findRegistryRecord).not.toHaveBeenCalled();
-		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
-		expect(mocks.execFileAsync).not.toHaveBeenCalled();
+		expect(mocks.dockerLogin).not.toHaveBeenCalled();
 	});
 
 	it("rejects inaccessible stored remote registry tests before remote execution", async () => {
@@ -443,7 +396,6 @@ describe("registry router remote test login boundary", () => {
 			}),
 		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
-		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
-		expect(mocks.execFileAsync).not.toHaveBeenCalled();
+		expect(mocks.dockerLogin).not.toHaveBeenCalled();
 	});
 });

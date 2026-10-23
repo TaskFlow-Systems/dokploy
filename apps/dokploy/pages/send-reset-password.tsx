@@ -92,6 +92,11 @@ export default function Home() {
 						logoUrl={
 							whitelabeling?.loginLogoUrl || whitelabeling?.logoUrl || undefined
 						}
+						logoLightUrl={
+							whitelabeling?.loginLogoLightUrl ||
+							whitelabeling?.logoLightUrl ||
+							undefined
+						}
 					/>
 					<span className="font-medium text-sm">
 						{whitelabeling?.appName || "Dokploy"}

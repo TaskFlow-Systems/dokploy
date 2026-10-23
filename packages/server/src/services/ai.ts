@@ -7,11 +7,12 @@ import {
 } from "@dokploy/server/utils/ai/select-ai-provider";
 import {
 	assertStoredSecretTargetUnchanged,
+	isSecretPlaceholderValue,
 	secretUpdateValue,
 } from "@dokploy/server/utils/security/redaction";
 import { TRPCError } from "@trpc/server";
 import { generateText, Output } from "ai";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { IS_CLOUD } from "../constants";
 import { findServerById } from "./server";
@@ -55,7 +56,7 @@ export const getAiSettingById = async (
 	organizationId: string,
 ) => {
 	const aiSetting = await db.query.ai.findFirst({
-		where: eq(ai.aiId, aiId),
+		where: and(eq(ai.aiId, aiId), eq(ai.organizationId, organizationId)),
 	});
 	if (!aiSetting) {
 		throw new TRPCError({
@@ -115,7 +116,28 @@ export const saveCustomAiProviders = async (
 	return providers;
 };
 
-const normalizeApiUrl = (url: string) => url.trim().replace(/\/+$/, "");
+export const normalizeApiUrl = (url: string) => url.trim().replace(/\/+$/, "");
+
+export const resolveAiApiKey = async (opts: {
+	apiKey: string;
+	apiUrl: string;
+	aiId: string | undefined;
+	organizationId: string;
+	authorize: () => Promise<boolean>;
+}): Promise<string> => {
+	if (!isSecretPlaceholderValue(opts.apiKey) || !opts.aiId) return opts.apiKey;
+	if (!(await opts.authorize())) {
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: "Permission denied",
+		});
+	}
+	const stored = await getAiSettingById(opts.aiId, opts.organizationId);
+	assertStoredSecretTargetUnchanged("API key", {
+		apiUrl: [normalizeApiUrl(opts.apiUrl), normalizeApiUrl(stored.apiUrl)],
+	});
+	return stored.apiKey;
+};
 
 export const saveAiSettings = async (organizationId: string, settings: any) => {
 	const aiId = settings.aiId;
@@ -124,10 +146,9 @@ export const saveAiSettings = async (organizationId: string, settings: any) => {
 				where: eq(ai.aiId, aiId),
 			})
 		: undefined;
-	if (
-		existingAiSetting &&
-		existingAiSetting.organizationId !== organizationId
-	) {
+	// An update must target an existing setting of this organization; it must
+	// not create a row under a caller-chosen id.
+	if (aiId && existingAiSetting?.organizationId !== organizationId) {
 		throwAiSettingsNotFound();
 	}
 
@@ -203,7 +224,9 @@ export const deleteAiSettings = async (
 	organizationId: string,
 ) => {
 	await getAiSettingById(aiId, organizationId);
-	return db.delete(ai).where(eq(ai.aiId, aiId));
+	return db
+		.delete(ai)
+		.where(and(eq(ai.aiId, aiId), eq(ai.organizationId, organizationId)));
 };
 
 interface Props {

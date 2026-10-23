@@ -22,7 +22,7 @@ export type ScheduledQueueJob =
 			cronSchedule: string;
 			type: "schedule";
 			scheduleId: string;
-			timezone?: string;
+			timezone?: string | null;
 	  }
 	| {
 			cronSchedule: string;

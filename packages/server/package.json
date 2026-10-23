@@ -45,6 +45,8 @@
     "@ai-sdk/mistral": "^4.0.62",
     "@ai-sdk/openai": "^4.0.83",
     "@ai-sdk/openai-compatible": "^3.0.62",
+    "@aws-sdk/client-cloudwatch": "^3.1148.0",
+    "@aws-sdk/client-cloudwatch-logs": "^3.1148.0",
     "@aws-sdk/client-route-53": "^3.1148.0",
     "@aws-sdk/client-secrets-manager": "^3.1148.0",
     "@aws-sdk/client-ssm": "3.1148.0",
@@ -93,7 +95,7 @@
     "shell-quote": "^1.12.0",
     "slugify": "^1.6.9",
     "ssh2": "~1.16.0",
-    "toml": "5.0.0",
+    "toml": "5.0.1",
     "undici": "8.11.2",
     "ws": "8.22.0",
     "yaml": "2.9.1",
@@ -124,7 +126,7 @@
   },
   "packageManager": "bun@1.4.2",
   "engines": {
-    "node": "^24.4.0",
+    "node": "^24.22.1",
     "bun": ">=1.4.2"
   }
 }
