@@ -1070,8 +1070,10 @@ export const readPorts = async (
 			const protocol = key.split("/")[1];
 			const targetPort = Number.parseInt(key.split("/")[0] ?? "0", 10);
 
+			// A port the image exposes but the container does not publish comes
+			// back as null (Traefik exposes 80, which is never published here).
 			// Take only the first mapping to avoid duplicates (IPv4 and IPv6)
-			const firstMapping = containerPortMappings[0];
+			const firstMapping = containerPortMappings?.[0];
 			if (firstMapping) {
 				const publishedPort = Number.parseInt(firstMapping.HostPort, 10);
 				const portKey = `${targetPort}-${publishedPort}-${protocol}`;
