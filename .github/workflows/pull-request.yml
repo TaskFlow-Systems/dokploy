@@ -24,9 +24,8 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
-      # GHSA-vfj7-8cjw-p6xm: braces 3.0.3 (via micromatch) has no patched release yet.
-      - run: bun audit --audit-level=moderate --ignore GHSA-vfj7-8cjw-p6xm
+          bun-version: 1.4.4
+      - run: bun audit --audit-level=moderate
       - uses: actions/setup-node@v7
         if: ${{ !cancelled() }}
         with:
@@ -51,7 +50,7 @@ jobs:
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: 1.4.2
+          bun-version: 1.4.4
       - uses: actions/setup-node@v7
         with:
           node-version: 24.22.1
