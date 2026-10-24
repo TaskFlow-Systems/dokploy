@@ -5,7 +5,7 @@ ENV PATH="$BUN_INSTALL/bin:$PATH"
 RUN apt-get update \
     && apt-get install -y --no-install-recommends bash ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.2 \
+    && curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.4 \
     && ln -sf "$BUN_INSTALL/bin/bun" "$BUN_INSTALL/bin/bunx" \
     && npm install -g node-gyp@13.0.1
 
