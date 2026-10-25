@@ -36,6 +36,39 @@ const envVariableName = z
 		"Environment variable names must start with a letter or underscore and contain only letters, numbers, and underscores",
 	);
 
+// dotenv also reads names with dots and dashes, so a layout has to be able to
+// place them even though env-apply cannot create them.
+const envLayoutName = z.string().regex(/^[\w.-]+$/);
+const envLayoutCommentRef = z.string().regex(/^c[1-9][0-9]*$/);
+const envLayoutHiddenRef = z.string().regex(/^h[1-9][0-9]*$/);
+const envLayoutCommentText = z
+	.string()
+	.max(500)
+	.regex(/^[^\n\r\u2028\u2029]*$/, "A comment has to fit on one line");
+
+export const envLayoutItem = z.discriminatedUnion("type", [
+	z.object({ type: z.literal("variable"), name: z.string() }),
+	z.object({ type: z.literal("comment"), ref: z.string(), text: z.string() }),
+	z.object({
+		type: z.literal("hidden"),
+		ref: z.string(),
+		kind: z.enum(["comment", "overridden", "unreadable"]),
+		variable: z.string().optional(),
+	}),
+	z.object({ type: z.literal("blank") }),
+]);
+
+export const envLayoutInputItem = z.discriminatedUnion("type", [
+	z.object({ type: z.literal("variable"), name: envLayoutName }),
+	z.object({
+		type: z.literal("comment"),
+		ref: envLayoutCommentRef.optional(),
+		text: envLayoutCommentText.optional(),
+	}),
+	z.object({ type: z.literal("hidden"), ref: envLayoutHiddenRef }),
+	z.object({ type: z.literal("blank") }),
+]);
+
 export const isEnvFieldSupported = (scope: EnvScope, field: EnvField) =>
 	field === "env" || scope === "application";
 
@@ -72,6 +105,10 @@ export const apiEnvKeysResponse = z.object({
 	),
 });
 
+export const apiEnvLayoutResponse = apiEnvKeysResponse.extend({
+	layout: z.array(envLayoutItem),
+});
+
 export const apiEnvApply = z
 	.object({
 		scope: envScope,
@@ -99,6 +136,7 @@ export const apiEnvApply = z
 				}),
 			)
 			.optional(),
+		layout: z.array(envLayoutInputItem).optional(),
 		dryRun: z.boolean().optional(),
 		expectedRevision: z.string().optional(),
 	})
@@ -134,11 +172,42 @@ export const apiEnvApply = z
 			}
 		}
 
-		if (listsByName.size === 0) {
+		if (input.layout) {
+			// Refs and names of a layout describe one exact text, so it is applied
+			// alone and only to the revision it was read from.
+			if (listsByName.size > 0) {
+				ctx.addIssue({
+					code: "custom",
+					path: ["layout"],
+					message:
+						"layout cannot be combined with set, remove, generate or copy",
+				});
+			}
+			if (!input.expectedRevision) {
+				ctx.addIssue({
+					code: "custom",
+					path: ["expectedRevision"],
+					message: "layout needs the expectedRevision it was read with",
+				});
+			}
+			input.layout.forEach((item, index) => {
+				if (
+					item.type === "comment" &&
+					item.ref === undefined &&
+					item.text === undefined
+				) {
+					ctx.addIssue({
+						code: "custom",
+						path: ["layout", index],
+						message: "A comment needs a ref, a text or both",
+					});
+				}
+			});
+		} else if (listsByName.size === 0) {
 			ctx.addIssue({
 				code: "custom",
 				message:
-					"At least one of set, remove, generate or copy must name a variable",
+					"At least one of set, remove, generate, copy or layout must be given",
 			});
 		}
 
@@ -168,4 +237,5 @@ export const apiEnvApplyResponse = z.object({
 			secret: z.boolean(),
 		}),
 	),
+	layout: z.array(envLayoutItem).optional(),
 });

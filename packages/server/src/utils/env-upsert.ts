@@ -220,7 +220,7 @@ export type EnvChangeResult = {
 const ENV_ENTRY_REGEX =
 	/^(\s*)((?:export\s+)?)([\w.-]+)(\s*=\s*?|:\s+?)(\s*'(?:\\'|[^'])*'|\s*"(?:\\"|[^"])*"|\s*`(?:\\`|[^`])*`|[^#\r\n]+)?\s*(?:#.*)?$/gm;
 
-type EnvEntry = {
+export type EnvEntry = {
 	name: string;
 	lineStart: number;
 	valueStart: number;
@@ -228,12 +228,13 @@ type EnvEntry = {
 	lineEnd: number;
 };
 
-const normalizeEnvText = (env: string | null | undefined) =>
+export const normalizeEnvText = (env: string | null | undefined) =>
 	(env ?? "").replace(/\r\n?/g, "\n");
 
-const parseEnvValues = (text: string) => new Map(Object.entries(parse(text)));
+export const parseEnvValues = (text: string) =>
+	new Map(Object.entries(parse(text)));
 
-const scanEnvEntries = (text: string): EnvEntry[] => {
+export const scanEnvEntries = (text: string): EnvEntry[] => {
 	const lineBreak = /[\n\u2028\u2029]/g;
 
 	return Array.from(text.matchAll(ENV_ENTRY_REGEX), (match) => {
@@ -292,7 +293,7 @@ const serializeExactEnvValue = (name: string, value: string) => {
 // A key block pasted without quotes makes dotenv read its base64 lines that
 // end in `=` as assignments. Such a "name" is a piece of the secret, so a name
 // that looks like encoded data is left out of the listing.
-const isEncodedDataFragment = (name: string) =>
+export const isEncodedDataFragment = (name: string) =>
 	name.length >= 20 &&
 	!name.includes("_") &&
 	/[a-z]/.test(name) &&

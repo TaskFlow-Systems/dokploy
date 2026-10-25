@@ -22,6 +22,7 @@ import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import type { AnyPgColumn, PgTable } from "drizzle-orm/pg-core";
 import type { z } from "zod";
+import { applyEnvLayout, readEnvLayout } from "../utils/env-layout";
 import {
 	applyEnvChanges,
 	assertNoRedactedSecretPlaceholders,
@@ -264,6 +265,18 @@ const readEnvText = async (
 	return text;
 };
 
+const writeEnvText = async (
+	writer: Pick<typeof db, "update">,
+	target: EnvTarget,
+	env: string,
+) => {
+	const { table, idColumn } = ENV_TABLES[target.scope];
+	await writer
+		.update(table)
+		.set({ [target.field]: env })
+		.where(eq(idColumn, target.id));
+};
+
 const generateEnvValue = (length: number, format: EnvGenerateFormat) => {
 	if (format === "alphanumeric") {
 		return Array.from(
@@ -285,6 +298,49 @@ export const listEnvVariableKeys = async (
 		revision: getEnvTargetRevision(target, env),
 		variables: listEnvVariables(env),
 	};
+};
+
+export const listEnvVariableLayout = async (
+	input: z.infer<typeof apiEnvKeys>,
+) => {
+	const target = { scope: input.scope, id: input.id, field: input.field };
+	const env = await readEnvText(db, target, false);
+
+	let layout: ReturnType<typeof readEnvLayout>;
+	try {
+		layout = readEnvLayout(env);
+	} catch (error) {
+		throw new TRPCError({
+			code: "PRECONDITION_FAILED",
+			message: error instanceof Error ? error.message : "Invalid env layout",
+		});
+	}
+
+	return {
+		...target,
+		revision: getEnvTargetRevision(target, env),
+		variables: listEnvVariables(env),
+		layout,
+	};
+};
+
+const applyLayoutChange = (
+	currentEnv: string,
+	layout: NonNullable<z.infer<typeof apiEnvApply>["layout"]>,
+) => {
+	const texts = Object.fromEntries(
+		layout.flatMap((item, index) =>
+			item.type === "comment" && item.text !== undefined
+				? [[`layout[${index}]`, item.text]]
+				: [],
+		),
+	);
+	try {
+		assertNoRedactedSecretPlaceholders(texts);
+		return applyEnvLayout(currentEnv, layout);
+	} catch (error) {
+		throw badRequest(error);
+	}
 };
 
 export const applyEnvVariableChanges = async (
@@ -310,6 +366,22 @@ export const applyEnvVariableChanges = async (
 				code: "CONFLICT",
 				message: "Environment revision does not match",
 			});
+		}
+
+		if (input.layout) {
+			const result = applyLayoutChange(currentEnv, input.layout);
+			const summary = {
+				...target,
+				changed: result.changed,
+				dryRun,
+				variables: [],
+				layout: result.layout,
+			};
+			if (dryRun || !result.changed) {
+				return { ...summary, revision: currentRevision };
+			}
+			await writeEnvText(tx, target, result.env);
+			return { ...summary, revision: getEnvTargetRevision(target, result.env) };
 		}
 
 		const sourceKey = (source: EnvTarget) =>
@@ -369,11 +441,7 @@ export const applyEnvVariableChanges = async (
 			return { ...summary, revision: currentRevision };
 		}
 
-		const { table, idColumn } = ENV_TABLES[target.scope];
-		await tx
-			.update(table)
-			.set({ [target.field]: result.env })
-			.where(eq(idColumn, target.id));
+		await writeEnvText(tx, target, result.env);
 
 		return { ...summary, revision: getEnvTargetRevision(target, result.env) };
 	});
