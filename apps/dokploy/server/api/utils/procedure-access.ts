@@ -278,6 +278,7 @@ export const PROCEDURE_ACCESS: Record<string, ProcedureAccess> = {
 	"domainOverview.traefikLogs": "read",
 	"env.applyChanges": "write",
 	"env.keys": "read",
+	"env.layout": "read",
 	"environment.byProjectId": "read",
 	"environment.create": "write",
 	"environment.duplicate": "write",

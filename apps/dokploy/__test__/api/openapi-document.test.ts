@@ -24,9 +24,12 @@ describe("OpenAPI document", () => {
 		);
 	});
 
-	it("serves blind env management at GET /env.keys and POST /env.apply", () => {
+	it("serves blind env management at GET /env.keys, GET /env.layout and POST /env.apply", () => {
 		const paths = generate().paths ?? {};
 		const keys = paths["/env.keys"]?.get as
+			| { operationId?: string; parameters?: { name: string; in: string }[] }
+			| undefined;
+		const layout = paths["/env.layout"]?.get as
 			| { operationId?: string; parameters?: { name: string; in: string }[] }
 			| undefined;
 		const apply = paths["/env.apply"]?.post as
@@ -35,14 +38,21 @@ describe("OpenAPI document", () => {
 
 		expect(
 			Object.keys(paths).filter((path) => path.startsWith("/env.")),
-		).toEqual(["/env.keys", "/env.apply"]);
+		).toEqual(["/env.keys", "/env.layout", "/env.apply"]);
 		expect(Object.keys(paths["/env.keys"] ?? {})).toEqual(["get"]);
+		expect(Object.keys(paths["/env.layout"] ?? {})).toEqual(["get"]);
 		expect(Object.keys(paths["/env.apply"] ?? {})).toEqual(["post"]);
 		expect(keys?.operationId).toBe("env-keys");
 		expect(keys?.parameters).toEqual([
 			expect.objectContaining({ name: "scope", in: "query", required: true }),
 			expect.objectContaining({ name: "id", in: "query", required: true }),
 			expect.objectContaining({ name: "field", in: "query" }),
+		]);
+		expect(layout?.operationId).toBe("env-layout");
+		expect(layout?.parameters?.map(({ name }) => name)).toEqual([
+			"scope",
+			"id",
+			"field",
 		]);
 		expect(apply?.operationId).toBe("env-apply");
 		expect(
@@ -63,6 +73,7 @@ describe("OpenAPI document", () => {
 			"remove",
 			"generate",
 			"copy",
+			"layout",
 			"dryRun",
 			"expectedRevision",
 		]);
@@ -95,7 +106,23 @@ describe("OpenAPI document", () => {
 				}
 			).responses[200].content["application/json"].schema;
 		const keys = responseSchema(paths["/env.keys"]?.get);
+		const layout = responseSchema(paths["/env.layout"]?.get);
 		const apply = responseSchema(paths["/env.apply"]?.post);
+		const layoutItems = (schema: unknown) =>
+			(
+				schema as {
+					properties: {
+						layout: {
+							items: {
+								oneOf: {
+									properties: object;
+									additionalProperties: boolean;
+								}[];
+							};
+						};
+					};
+				}
+			).properties.layout.items.oneOf;
 
 		expect(Object.keys(keys.properties)).toEqual([
 			"scope",
@@ -117,14 +144,34 @@ describe("OpenAPI document", () => {
 			"revision",
 			"dryRun",
 			"variables",
+			"layout",
 		]);
+		expect(Object.keys(layout.properties)).toEqual([
+			"scope",
+			"id",
+			"field",
+			"revision",
+			"variables",
+			"layout",
+		]);
+		for (const items of [layoutItems(layout), layoutItems(apply)]) {
+			expect(items.map(({ properties }) => Object.keys(properties))).toEqual([
+				["type", "name"],
+				["type", "ref", "text"],
+				["type", "ref", "kind", "variable"],
+				["type"],
+			]);
+			for (const item of items) {
+				expect(item.additionalProperties).toBe(false);
+			}
+		}
 		expect(Object.keys(apply.properties.variables.items.properties)).toEqual([
 			"name",
 			"action",
 			"source",
 			"secret",
 		]);
-		for (const schema of [keys, apply]) {
+		for (const schema of [keys, layout, apply]) {
 			expect(schema.additionalProperties).toBe(false);
 			expect(schema.properties.variables.items.additionalProperties).toBe(
 				false,

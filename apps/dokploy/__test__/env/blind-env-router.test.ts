@@ -1179,6 +1179,293 @@ describe("env.applyChanges", () => {
 	});
 });
 
+describe("env layout", () => {
+	const appLayout = [
+		{ type: "comment", ref: "c1", text: "App settings" },
+		{ type: "hidden", ref: "h1", kind: "overridden", variable: "SERVICE_URL" },
+		{ type: "variable", name: "SERVICE_TOKEN" },
+		{ type: "variable", name: "EMPTY_FLAG" },
+		{ type: "variable", name: "SERVICE_URL" },
+	];
+	const sectioned = [
+		{ type: "comment", text: "=== Web ===" },
+		{ type: "hidden", ref: "h1" },
+		{ type: "variable", name: "SERVICE_URL" },
+		{ type: "variable", name: "EMPTY_FLAG" },
+		{ type: "blank" },
+		{ type: "comment", text: "=== Auth ===" },
+		{ type: "comment", ref: "c1", text: "Signs sessions" },
+		{ type: "variable", name: "SERVICE_TOKEN" },
+	] as const;
+	const sectionedEnv = `# === Web ===\nSERVICE_URL=https://app.example.test\nSERVICE_URL=https://override.example.test\nEMPTY_FLAG=\n\n# === Auth ===\n# Signs sessions\nSERVICE_TOKEN=${SENTINEL}\n`;
+
+	it("reads the layout with names, comments and a revision but never a value", async () => {
+		const result = await createCaller().layout({
+			scope: "application",
+			id: "app-1",
+		});
+
+		expect(result).toEqual({
+			scope: "application",
+			id: "app-1",
+			field: "env",
+			revision: getApplicationEnvRevision("app-1", storedEnv(applications)),
+			variables: [
+				{ name: "SERVICE_URL", secret: false, empty: false },
+				{ name: "SERVICE_TOKEN", secret: true, empty: false },
+				{ name: "EMPTY_FLAG", secret: false, empty: true },
+			],
+			layout: appLayout,
+		});
+		expect(JSON.stringify(result)).not.toContain(SENTINEL);
+		expect(JSON.stringify(result)).not.toContain("example.test");
+		expect(
+			mocks.checkServicePermissionAndAccess,
+		).toHaveBeenCalledExactlyOnceWith(ctxMatcher, "app-1", {
+			envVars: ["read"],
+		});
+		expect(fake.locks).toEqual([]);
+	});
+
+	it("checks the project variable permission before showing a layout", async () => {
+		mocks.checkPermission.mockRejectedValueOnce(
+			new TRPCError({ code: "UNAUTHORIZED", message: "denied" }),
+		);
+
+		await expectTrpcError(
+			createCaller().layout({ scope: "project", id: "project-1" }),
+			"UNAUTHORIZED",
+		);
+		expect(mocks.checkPermission).toHaveBeenCalledExactlyOnceWith(ctxMatcher, {
+			projectEnvVars: ["read"],
+		});
+	});
+
+	it("rearranges variables into sections under the row lock and audits once", async () => {
+		const before = storedEnv(applications);
+		const result = await createCaller().applyChanges({
+			scope: "application",
+			id: "app-1",
+			layout: [...sectioned],
+			expectedRevision: getApplicationEnvRevision("app-1", before),
+		});
+
+		const after = storedEnv(applications);
+		expect(after).toBe(sectionedEnv);
+		expect(parse(after ?? "")).toEqual(parse(before ?? ""));
+		expect(result).toEqual({
+			scope: "application",
+			id: "app-1",
+			field: "env",
+			changed: true,
+			revision: getApplicationEnvRevision("app-1", after),
+			dryRun: false,
+			variables: [],
+			layout: [
+				{ type: "comment", ref: "c1", text: "=== Web ===" },
+				{
+					type: "hidden",
+					ref: "h1",
+					kind: "overridden",
+					variable: "SERVICE_URL",
+				},
+				{ type: "variable", name: "SERVICE_URL" },
+				{ type: "variable", name: "EMPTY_FLAG" },
+				{ type: "blank" },
+				{ type: "comment", ref: "c2", text: "=== Auth ===" },
+				{ type: "comment", ref: "c3", text: "Signs sessions" },
+				{ type: "variable", name: "SERVICE_TOKEN" },
+			],
+		});
+		expect(JSON.stringify(result)).not.toContain(SENTINEL);
+		expect(fake.locks).toEqual([{ table: "application", strength: "update" }]);
+		expect(mocks.audit).toHaveBeenCalledExactlyOnceWith(ctxMatcher, {
+			action: "update",
+			resourceType: "application",
+			resourceId: "app-1",
+			resourceName: "app-one",
+		});
+		expect(
+			mocks.checkServicePermissionAndAccess,
+		).toHaveBeenCalledExactlyOnceWith(ctxMatcher, "app-1", {
+			envVars: ["write"],
+		});
+	});
+
+	it("previews a layout on a dry run without writing or auditing", async () => {
+		const before = storedEnv(applications);
+		const result = await createCaller().applyChanges({
+			scope: "application",
+			id: "app-1",
+			layout: [...sectioned],
+			dryRun: true,
+			expectedRevision: getApplicationEnvRevision("app-1", before),
+		});
+
+		expect(result.changed).toBe(true);
+		expect(result.dryRun).toBe(true);
+		expect(result.revision).toBe(getApplicationEnvRevision("app-1", before));
+		expect(result.layout?.map(({ type }) => type)).toEqual([
+			"comment",
+			"hidden",
+			"variable",
+			"variable",
+			"blank",
+			"comment",
+			"comment",
+			"variable",
+		]);
+		expect(storedEnv(applications)).toBe(before);
+		expect(mocks.audit).not.toHaveBeenCalled();
+	});
+
+	it("does not write or audit a layout that is sent back unchanged", async () => {
+		const before = storedEnv(applications);
+		const result = await createCaller().applyChanges({
+			scope: "application",
+			id: "app-1",
+			layout: appLayout as never,
+			expectedRevision: getApplicationEnvRevision("app-1", before),
+		});
+
+		expect(result).toMatchObject({ changed: false, layout: appLayout });
+		expect(storedEnv(applications)).toBe(before);
+		expect(mocks.audit).not.toHaveBeenCalled();
+	});
+
+	it("rearranges build args of an application and variables of a project", async () => {
+		await createCaller().applyChanges({
+			scope: "application",
+			id: "app-1",
+			field: "buildArgs",
+			layout: [
+				{ type: "comment", text: "Build" },
+				{ type: "variable", name: "BUILD_MODE" },
+			],
+			expectedRevision: getEnvFieldRevision(
+				"application",
+				"app-1",
+				"buildArgs",
+				"BUILD_MODE=release\n",
+			),
+		});
+		await createCaller().applyChanges({
+			scope: "project",
+			id: "project-1",
+			layout: [
+				{ type: "variable", name: "SHARED_TOKEN" },
+				{ type: "variable", name: "SHARED_URL" },
+			],
+			expectedRevision: getEnvFieldRevision(
+				"project",
+				"project-1",
+				"env",
+				storedEnv(projects),
+			),
+		});
+
+		expect(storedEnv(applications, "buildArgs")).toBe(
+			"# Build\nBUILD_MODE=release\n",
+		);
+		expect(storedEnv(projects)).toBe(
+			`SHARED_TOKEN=${SENTINEL}\nSHARED_URL=https://shared.example.test\n`,
+		);
+	});
+
+	it("rejects a layout combined with value changes or without a revision", async () => {
+		const before = storedEnv(applications);
+
+		const combined = await expectTrpcError(
+			createCaller().applyChanges({
+				scope: "application",
+				id: "app-1",
+				set: { NEW_NAME: "1" },
+				layout: [...sectioned],
+				expectedRevision: getApplicationEnvRevision("app-1", before),
+			}),
+			"BAD_REQUEST",
+		);
+		const unpinned = await expectTrpcError(
+			createCaller().applyChanges({
+				scope: "application",
+				id: "app-1",
+				layout: [...sectioned],
+			}),
+			"BAD_REQUEST",
+		);
+		const empty = await expectTrpcError(
+			createCaller().applyChanges({
+				scope: "application",
+				id: "app-1",
+				layout: [{ type: "comment" }, ...sectioned],
+				expectedRevision: getApplicationEnvRevision("app-1", before),
+			}),
+			"BAD_REQUEST",
+		);
+
+		expect(combined.message).toContain("layout cannot be combined");
+		expect(unpinned.message).toContain("expectedRevision");
+		expect(empty.message).toContain("A comment needs a ref, a text or both");
+		expect(storedEnv(applications)).toBe(before);
+		expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+	});
+
+	it("rejects a stale revision without writing", async () => {
+		const before = storedEnv(applications);
+
+		await expectTrpcError(
+			createCaller().applyChanges({
+				scope: "application",
+				id: "app-1",
+				layout: [...sectioned],
+				expectedRevision: "stale",
+			}),
+			"CONFLICT",
+		);
+		expect(storedEnv(applications)).toBe(before);
+	});
+
+	it("rejects a layout that drops a variable, naming only names", async () => {
+		const before = storedEnv(applications);
+
+		const error = await expectTrpcError(
+			createCaller().applyChanges({
+				scope: "application",
+				id: "app-1",
+				layout: sectioned.filter(
+					(item) => item.type !== "variable" || item.name !== "SERVICE_TOKEN",
+				),
+				expectedRevision: getApplicationEnvRevision("app-1", before),
+			}),
+			"BAD_REQUEST",
+		);
+
+		expect(error.message).toContain(
+			"The layout leaves out variables: SERVICE_TOKEN.",
+		);
+		expect(error.message).not.toContain(SENTINEL);
+		expect(storedEnv(applications)).toBe(before);
+		expect(mocks.audit).not.toHaveBeenCalled();
+	});
+
+	it("rejects comment text that carries a redacted placeholder", async () => {
+		const before = storedEnv(applications);
+
+		const error = await expectTrpcError(
+			createCaller().applyChanges({
+				scope: "application",
+				id: "app-1",
+				layout: [{ type: "comment", text: "old [REDACTED]" }, ...sectioned],
+				expectedRevision: getApplicationEnvRevision("app-1", before),
+			}),
+			"BAD_REQUEST",
+		);
+
+		expect(error.message).toContain("layout[0]");
+		expect(storedEnv(applications)).toBe(before);
+	});
+});
+
 describe("REST routes", () => {
 	it("serves GET /env.keys from query parameters", async () => {
 		const response = await callRest("GET", "env.keys", {
@@ -1266,6 +1553,32 @@ describe("REST routes", () => {
 		});
 		expect(JSON.stringify(response)).not.toContain(SENTINEL);
 		expect(JSON.stringify(response)).not.toContain(values.NEW_TOKEN);
+	});
+
+	it("serves GET /env.layout and a layout through POST /env.apply", async () => {
+		const read = await callRest("GET", "env.layout", {
+			scope: "postgres",
+			id: "postgres-1",
+		});
+		const layout = (read.body as { layout: unknown[]; revision: string })
+			.layout;
+		const applied = await callRest("POST", "env.apply", {
+			scope: "postgres",
+			id: "postgres-1",
+			layout: [{ type: "comment", text: "Replication" }, ...layout.reverse()],
+			expectedRevision: (read.body as { revision: string }).revision,
+		});
+
+		expect(read.status).toBe(200);
+		expect(layout).toEqual([
+			{ type: "variable", name: "REPLICATION_PASSWORD" },
+			{ type: "variable", name: "POSTGRES_INITDB_ARGS" },
+		]);
+		expect(applied.status).toBe(200);
+		expect(storedEnv(postgres)).toBe(
+			`# Replication\nREPLICATION_PASSWORD=${OTHER_SENTINEL}\nPOSTGRES_INITDB_ARGS=--data-checksums\n`,
+		);
+		expect(JSON.stringify([read, applied])).not.toContain(OTHER_SENTINEL);
 	});
 
 	it("maps errors to HTTP statuses without echoing values", async () => {

@@ -4,11 +4,13 @@ import {
 	apiEnvApplyResponse,
 	apiEnvKeys,
 	apiEnvKeysResponse,
+	apiEnvLayoutResponse,
 } from "@dokploy/server/db/schema";
 import {
 	applyEnvVariableChanges,
 	findEnvVariablesOwner,
 	listEnvVariableKeys,
+	listEnvVariableLayout,
 } from "@dokploy/server/services/env-variables";
 import {
 	checkEnvironmentAccess,
@@ -87,6 +89,13 @@ export const envRouter = createTRPCRouter({
 		.query(async ({ input, ctx }) => {
 			await assertEnvAccess(ctx, input.scope, input.id, "read");
 			return await listEnvVariableKeys(input);
+		}),
+	layout: protectedProcedure
+		.input(apiEnvKeys)
+		.output(apiEnvLayoutResponse)
+		.query(async ({ input, ctx }) => {
+			await assertEnvAccess(ctx, input.scope, input.id, "read");
+			return await listEnvVariableLayout(input);
 		}),
 	applyChanges: protectedProcedure
 		// tRPC reserves `apply` as a procedure name, so the REST route and its
