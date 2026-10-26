@@ -1,13 +1,24 @@
-import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import {
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { shellQuote } from "@dokploy/server/utils/domain-overview/acme";
 import { buildAcmeDeleteScript } from "@dokploy/server/utils/domain-overview/acme-delete";
+import { LOCK_FUNCTIONS } from "@dokploy/server/utils/domain-overview/acme-delete-shell";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
 	acmeDir,
 	acmeFile,
 	backupDir,
 	baseEnv,
+	binDir,
 	callsOf,
 	lockFile,
 	mains,
@@ -21,6 +32,8 @@ import {
 	setupBin,
 	spawnScript,
 	targets,
+	waitFor,
+	which,
 	workDir,
 	writeExecutable,
 } from "./acme-delete-harness";
@@ -109,6 +122,136 @@ describe.skipIf(!REAL_JQ).each(PRIMARY)(
 				expect(["ok", "busy", "count_mismatch"]).toContain(outcome);
 			}
 			expect(existsSync(lockFile)).toBe(false);
+		});
+	},
+);
+
+// Every command the lock functions use to create, move or remove a file.
+const FILE_COMMANDS = ["mkdir", "rmdir", "mv", "rm", "ln"];
+
+describe.skipIf(!REAL_JQ).each(PRIMARY)(
+	"taking over a stale lock, under $label",
+	{ timeout: 60_000 },
+	({ path: shell }) => {
+		let pausedBin: string;
+		let pause: string;
+		let done: string;
+
+		beforeEach(() => {
+			setupBin({ jq: true, shell });
+			pausedBin = path.join(workDir, "paused-bin");
+			pause = path.join(workDir, "pause");
+			done = path.join(workDir, "done");
+			mkdirSync(pausedBin);
+			for (const command of FILE_COMMANDS) {
+				writeExecutable(
+					path.join(pausedBin, command),
+					`#!/bin/sh\n: > "$PAUSE"\nwhile [ -e "$PAUSE" ]; do sleep 0.02; done\nexec ${which(command)} "$@"\n`,
+				);
+			}
+		});
+
+		const lockScript = (body: string) =>
+			`LOCK=${shellQuote(lockFile)}\nHAVE_LOCK=0\n${LOCK_FUNCTIONS}\n${body}\n`;
+
+		const newcomer = async () => {
+			const child = spawn(
+				shell,
+				[
+					"-c",
+					lockScript(
+						[
+							"take_lock",
+							'echo "HELD $HAVE_LOCK $MYOWNER"',
+							'[ "$HAVE_LOCK" = 1 ] || exit 0',
+							'while [ ! -e "$DONE" ]; do sleep 0.05; done',
+							"release_lock",
+						].join("\n"),
+					),
+				],
+				{ env: baseEnv({ DONE: done }), stdio: ["ignore", "pipe", "ignore"] },
+			);
+			let output = "";
+			child.stdout?.on("data", (chunk) => {
+				output += chunk.toString();
+			});
+			const exited = new Promise<void>((resolve) =>
+				child.on("close", () => resolve()),
+			);
+			await waitFor(() => output.includes("\n"));
+			const [, held, owner] = output.match(/^HELD ([01]) (.*)$/m) ?? [];
+			return { held: held === "1", owner, exited };
+		};
+
+		it("never lets two scripts hold it while one that found it stale is slow", async () => {
+			writeFileSync(lockFile, "999999 none other-boot\n");
+			const slow = spawn(
+				shell,
+				[
+					"-c",
+					lockScript(
+						'lock_state\n[ "$LOCK_STATE" != stale ] || release_stale_lock',
+					),
+				],
+				{
+					env: baseEnv({ PATH: `${pausedBin}:${binDir}`, PAUSE: pause }),
+					stdio: "ignore",
+				},
+			);
+			let finished = false;
+			slow.on("close", () => {
+				finished = true;
+			});
+
+			const newcomers = [];
+			let pauses = 0;
+			for (;;) {
+				await waitFor(() => finished || existsSync(pause));
+				if (finished) {
+					break;
+				}
+				pauses++;
+				newcomers.push(await newcomer());
+				rmSync(pause);
+			}
+			newcomers.push(await newcomer());
+
+			const holders = newcomers.filter((one) => one.held);
+			expect(pauses).toBeGreaterThan(0);
+			expect(holders).toHaveLength(1);
+			expect(readFileSync(lockFile, "utf8").trim()).toBe(holders[0]?.owner);
+			writeFileSync(done, "");
+			await Promise.all(newcomers.map((one) => one.exited));
+		});
+
+		it("drops a guard left by a killed script once it is a minute old", () => {
+			writeFileSync(lockFile, "999999 none other-boot\n");
+			const guard = `${lockFile}.takeover`;
+			mkdirSync(guard);
+			const old = new Date(Date.now() - 5 * 60_000);
+			utimesSync(guard, old, old);
+
+			expect(resultOf(run(shell, targets("one.example.com")).stdout)).toBe(
+				"busy",
+			);
+			expect(existsSync(guard)).toBe(false);
+			expect(resultOf(run(shell, targets("one.example.com")).stdout)).toBe(
+				"ok",
+			);
+			expect(existsSync(lockFile)).toBe(false);
+		});
+
+		it("answers busy behind a fresh guard and leaves it in place", () => {
+			writeFileSync(lockFile, "999999 none other-boot\n");
+			const guard = `${lockFile}.takeover`;
+			mkdirSync(guard);
+
+			const result = run(shell, targets("one.example.com"));
+
+			expect(resultOf(result.stdout)).toBe("busy");
+			expect(callsOf()).toEqual([]);
+			expect(existsSync(guard)).toBe(true);
+			expect(readFileSync(lockFile, "utf8")).toBe("999999 none other-boot\n");
 		});
 	},
 );
