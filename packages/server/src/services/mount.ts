@@ -18,6 +18,7 @@ import {
 import {
 	createFile,
 	getCreateFileCommand,
+	isValidMountFilePath,
 } from "@dokploy/server/utils/docker/utils";
 import {
 	type BindMountServiceContext,
@@ -541,7 +542,7 @@ export const updateFileMount = async (mountId: string) => {
 
 export const deleteFileMount = async (mountId: string) => {
 	const mount = await findMountById(mountId);
-	if (!mount.filePath) return;
+	if (!mount.filePath || !isValidMountFilePath(mount.filePath)) return;
 	const basePath = await getBaseFilesPath(mountId);
 
 	const { fullPath } = assertNoSymlinkEscapeInsideDirectory(

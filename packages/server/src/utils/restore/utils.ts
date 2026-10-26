@@ -130,7 +130,7 @@ const getMongoSpecificCommand = (
 	const tempDir = quoteRestoreShellArg("/tmp/dokploy-restore");
 	const { fileName } = normalizeRestoreBackupFile(backupFile, [".bson.gz"]);
 	const quotedFileName = quoteRestoreShellArg(fileName);
-	const decompressedName = fileName.replace(".gz", "");
+	const decompressedName = fileName.replace(/\.gz$/, "");
 	const quotedDecompressedName = quoteRestoreShellArg(decompressedName);
 	return `
 rm -rf ${tempDir} && \

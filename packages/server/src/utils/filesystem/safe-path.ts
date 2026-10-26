@@ -83,6 +83,7 @@ export const normalizeRelativeFilePath = (filePath: string) => {
 	if (
 		!normalized ||
 		normalized === "." ||
+		normalized === "./" ||
 		normalized === ".." ||
 		normalized.startsWith("../") ||
 		hasReservedGitDirectorySegment(normalized) ||

@@ -39,15 +39,19 @@ const storedPorts: NonNullable<TraefikOptions["additionalPorts"]> = [
 const createStandaloneContainer = async (
 	additionalPorts: TraefikOptions["additionalPorts"],
 ) => {
-	const createContainer = vi.fn().mockResolvedValue(undefined);
-	const container = {
-		remove: vi.fn().mockResolvedValue(undefined),
+	const created = {
 		start: vi.fn().mockResolvedValue(undefined),
+		inspect: vi.fn().mockResolvedValue({
+			State: { Running: true, StartedAt: "2026-10-26T00:00:00Z" },
+		}),
 	};
+	const createContainer = vi.fn().mockResolvedValue(created);
 	mocks.getRemoteDocker.mockResolvedValue({
 		createContainer,
-		getContainer: () => container,
-		pull: vi.fn().mockResolvedValue(undefined),
+		getContainer: () => ({
+			inspect: vi.fn().mockRejectedValue(new Error("no such container")),
+		}),
+		getImage: () => ({ inspect: vi.fn().mockResolvedValue({}) }),
 	});
 
 	const started = initializeStandaloneTraefik({ additionalPorts });

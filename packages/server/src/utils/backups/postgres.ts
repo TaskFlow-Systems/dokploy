@@ -12,7 +12,7 @@ import {
 	assertRcloneS3DestinationAllowed,
 	buildRcloneS3Command,
 	getBackupCommand,
-	getBackupTimestamp,
+	getBackupFileName,
 	getRcloneS3Destination,
 	normalizeS3Path,
 	runBackupCommand,
@@ -36,7 +36,7 @@ export const runPostgresBackup = async (
 		description: "Initializing Backup",
 	});
 	const { prefix } = backup;
-	const backupFileName = `${getBackupTimestamp()}.sql.gz`;
+	const backupFileName = getBackupFileName(backup.customName, "sql.gz");
 	const bucketDestination = `${appName}/${normalizeS3Path(prefix)}${backupFileName}`;
 	try {
 		const safeDestination = await assertRcloneS3DestinationAllowed(destination);

@@ -6,6 +6,10 @@ const DEVELOPMENT_AUTH_SECRET =
 const BUILD_AUTH_SECRET = "dokploy-build-auth-secret-build-only-0000000000";
 const TEST_AUTH_SECRET = "dokploy-test-auth-secret-00000000000000000000";
 
+// The public default older installs ran on. Never used as the auth secret;
+// encryption keeps it only to decrypt values written back then.
+export const HARDCODED_LEGACY_SECRET = "better-auth-secret-123456789";
+
 const { BETTER_AUTH_SECRET, BETTER_AUTH_SECRET_FILE } = process.env;
 
 function readAuthSecret(path: string): string {

@@ -13,6 +13,7 @@ import {
 	initializeNetwork,
 	initSchedules,
 	initVolumeBackupsCronJobs,
+	restoreInterruptedTraefik,
 	sendDokployRestartNotifications,
 	setupDirectories,
 	startDiskHistorySampler,
@@ -155,6 +156,9 @@ void app.prepare().then(async () => {
 			createDefaultMiddlewares();
 			createDefaultProbeShield();
 			await initializeNetwork();
+			await restoreInterruptedTraefik().catch((error) => {
+				console.error("Failed to restore Traefik:", error);
+			});
 			await initCronJobs();
 			await initSchedules();
 			await initCancelDeployments();

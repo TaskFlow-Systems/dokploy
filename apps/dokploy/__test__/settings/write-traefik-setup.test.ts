@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 	findMany: vi.fn(),
 	initializeStandaloneTraefik: vi.fn(),
 	initializeTraefikService: vi.fn(),
+	restoreInterruptedTraefik: vi.fn(async () => undefined),
 }));
 
 vi.mock("@dokploy/server/db", () => ({
@@ -32,6 +33,7 @@ vi.mock("@dokploy/server/setup/traefik-setup", async (importOriginal) => ({
 	>()),
 	initializeStandaloneTraefik: mocks.initializeStandaloneTraefik,
 	initializeTraefikService: mocks.initializeTraefikService,
+	restoreInterruptedTraefik: mocks.restoreInterruptedTraefik,
 }));
 
 const CONVERSION = "traefik_convert_acme_to_tls";

@@ -87,6 +87,7 @@ export const backups = pgTable("backup", {
 	enabled: boolean("enabled"),
 	database: text("database").notNull(),
 	prefix: text("prefix").notNull(),
+	customName: text("customName"),
 	serviceName: text("serviceName"),
 	destinationId: text("destinationId")
 		.notNull()
@@ -181,11 +182,23 @@ export const backupsRelations = relations(backups, ({ one, many }) => ({
 	deployments: many(deployments),
 }));
 
+const customNameSchema = z
+	.string()
+	.trim()
+	.max(100, "Custom name must be 100 characters or less")
+	.regex(
+		/^([a-zA-Z0-9][a-zA-Z0-9._-]*)?$/,
+		"Must start with a letter or number; only letters, numbers, dots, hyphens and underscores are allowed",
+	)
+	.optional();
+
 const createSchema = createInsertSchema(backups, {
 	backupId: z.string().optional(),
 	destinationId: z.string(),
 	enabled: z.boolean().nullable().optional(),
 	prefix: z.string().min(1),
+	// Nullable so a saved backup row can be copied as is (project duplication).
+	customName: customNameSchema.nullable(),
 	database: safeBackupShellName("Database name"),
 	serviceName: safeBackupShellName("Service name").nullable().optional(),
 	schedule: z.string(),
@@ -213,6 +226,7 @@ export const apiCreateBackup = createSchema
 		schedule: true,
 		enabled: true,
 		prefix: true,
+		customName: true,
 		destinationId: true,
 		keepLatestCount: true,
 		database: true,
@@ -264,6 +278,7 @@ export const apiUpdateBackup = createSchema
 		metadata: apiBackupMetadata,
 		serviceName: safeBackupShellName("Service name").nullable().optional(),
 		includeEncryptionKey: z.boolean().optional(),
+		customName: customNameSchema,
 	});
 
 export const apiRestoreBackup = z.object({
