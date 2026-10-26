@@ -5,6 +5,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { format } from "date-fns";
 import {
 	ArrowUpDown,
+	Download,
 	Eye,
 	FileJson,
 	LogIn,
@@ -83,6 +84,11 @@ const ACTION_CONFIG: Record<
 		icon: Eye,
 		className:
 			"bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20",
+	},
+	download: {
+		label: "Downloaded",
+		icon: Download,
+		className: "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/20",
 	},
 };
 

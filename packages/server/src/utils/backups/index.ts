@@ -17,25 +17,14 @@ import {
 	assertRcloneS3DestinationAllowed,
 	buildRcloneS3Command,
 	buildRcloneS3DeleteXargsCommand,
+	getBackupFolder,
 	getRcloneS3Destination,
-	normalizeS3Path,
 	scheduleBackup,
 	shouldRunBackupRetention,
 } from "./utils";
 
 export const initCronJobs = async () => {
 	console.log("Setting up cron jobs....");
-
-	const admin = await db.query.member.findFirst({
-		where: eq(member.role, "owner"),
-		with: {
-			user: true,
-		},
-	});
-
-	if (!admin) {
-		return;
-	}
 
 	const webServerSettings = await getWebServerSettings();
 
@@ -48,7 +37,12 @@ export const initCronJobs = async () => {
 
 				await cleanupAll();
 
-				await sendDockerCleanupNotifications(admin.user.id);
+				const owner = await db.query.member.findFirst({
+					where: eq(member.role, "owner"),
+				});
+				if (owner) {
+					await sendDockerCleanupNotifications(owner.organizationId);
+				}
 			});
 		} catch (error) {
 			console.error("[Backup] Docker Cleanup Error", error);
@@ -58,7 +52,7 @@ export const initCronJobs = async () => {
 	const servers = await getAllServers();
 
 	for (const server of servers) {
-		const { serverId, enableDockerCleanup, name } = server;
+		const { serverId, enableDockerCleanup, name, organizationId } = server;
 		if (enableDockerCleanup) {
 			try {
 				scheduleJob(serverId, CLEANUP_CRON_JOB, async () => {
@@ -69,7 +63,7 @@ export const initCronJobs = async () => {
 					await cleanupAll(serverId);
 
 					await sendDockerCleanupNotifications(
-						admin.user.id,
+						organizationId,
 						`Docker cleanup for Server ${name} (${serverId})`,
 					);
 				});
@@ -118,21 +112,6 @@ export const initCronJobs = async () => {
 	}
 };
 
-const getServiceAppName = (backup: BackupSchedule): string => {
-	if (backup.compose?.appName) {
-		return backup.serviceName
-			? `${backup.compose.appName}_${backup.serviceName}`
-			: backup.compose.appName;
-	}
-	const serviceAppName =
-		backup.postgres?.appName ||
-		backup.mysql?.appName ||
-		backup.mariadb?.appName ||
-		backup.mongo?.appName ||
-		backup.libsql?.appName;
-	return serviceAppName || backup.appName;
-};
-
 export const keepLatestNBackups = async (
 	backup: BackupSchedule,
 	serverId?: string | null,
@@ -147,23 +126,26 @@ export const keepLatestNBackups = async (
 		const destination = await assertRcloneS3DestinationAllowed(
 			await findDestinationById(backup.destinationId),
 		);
-		const appName = getServiceAppName(backup);
 		const backupFilesPath = getRcloneS3Destination(
 			destination,
-			`${appName}/${normalizeS3Path(backup.prefix)}`,
+			getBackupFolder(backup),
 		);
 		const includePattern = `*${
 			backup.databaseType === "web-server" ? ".zip" : ".{sql.gz,bson.gz}"
 		}`;
 
 		// --include "*.bson.gz" or "*.sql.gz" or "*.zip" ensures nothing else other than the dokploy backup files are touched by rclone
+		// sort by server mtime: custom names break lexical order
 		const rcloneList = buildRcloneS3Command("lsf", destination, [
 			"--include",
 			includePattern,
+			"--format",
+			"tp",
+			"--use-server-modtime",
 			backupFilesPath,
 		]);
 		// when we pipe the above command with this one, we only get the list of files we want to delete
-		const sortAndPickUnwantedBackups = `sort -r | tail -n +$((${backup.keepLatestCount}+1)) | xargs -I{}`;
+		const sortAndPickUnwantedBackups = `sort -r | tail -n +$((${backup.keepLatestCount}+1)) | cut -d';' -f2- | xargs -I{}`;
 		// this command deletes the files
 		// the object name from xargs is passed as $1, not interpolated into shell code
 		const rcloneDelete = buildRcloneS3DeleteXargsCommand(

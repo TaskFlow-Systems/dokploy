@@ -132,6 +132,7 @@ export const execAsync = async (
 		env?: NodeJS.ProcessEnv;
 		shell?: string;
 		timeoutMs?: number;
+		maxBuffer?: number;
 	},
 ): Promise<{ stdout: string; stderr: string }> => {
 	if (options?.timeoutMs !== undefined) {

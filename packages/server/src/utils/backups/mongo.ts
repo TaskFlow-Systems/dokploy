@@ -12,7 +12,7 @@ import {
 	assertRcloneS3DestinationAllowed,
 	buildRcloneS3Command,
 	getBackupCommand,
-	getBackupTimestamp,
+	getBackupFileName,
 	getRcloneS3Destination,
 	normalizeS3Path,
 	runBackupCommand,
@@ -27,7 +27,7 @@ export const runMongoBackup = async (mongo: Mongo, backup: BackupSchedule) => {
 		backup.destinationId,
 		project.organizationId,
 	);
-	const backupFileName = `${getBackupTimestamp()}.bson.gz`;
+	const backupFileName = getBackupFileName(backup.customName, "bson.gz");
 	const bucketDestination = `${appName}/${normalizeS3Path(prefix)}${backupFileName}`;
 	const deployment = await createDeploymentBackup({
 		backupId: backup.backupId,

@@ -93,6 +93,13 @@ export const removeScheduleBackup = (backupId: string) => {
 export const getBackupTimestamp = () =>
 	new Date().toISOString().replace(/[:.]/g, "-");
 
+export const getBackupFileName = (
+	customName: string | null | undefined,
+	extension: string,
+	fixedPrefix?: string,
+) =>
+	`${[fixedPrefix, customName, getBackupTimestamp()].filter(Boolean).join("-")}.${extension}`;
+
 export const normalizeS3Path = (prefix: string) => {
 	// Trim whitespace and remove leading/trailing slashes
 	const normalizedPrefix = prefix.trim().replace(/^\/+|\/+$/g, "");
@@ -542,3 +549,21 @@ export const runBackupCommand = async (
 		throw error;
 	}
 };
+const getServiceAppName = (backup: BackupSchedule) => {
+	if (backup.compose?.appName) {
+		return backup.serviceName
+			? `${backup.compose.appName}_${backup.serviceName}`
+			: backup.compose.appName;
+	}
+	return (
+		backup.postgres?.appName ||
+		backup.mysql?.appName ||
+		backup.mariadb?.appName ||
+		backup.mongo?.appName ||
+		backup.libsql?.appName ||
+		backup.appName
+	);
+};
+
+export const getBackupFolder = (backup: BackupSchedule) =>
+	`${getServiceAppName(backup)}/${normalizeS3Path(backup.prefix)}`;

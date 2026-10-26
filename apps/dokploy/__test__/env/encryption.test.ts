@@ -1,3 +1,4 @@
+import { HARDCODED_LEGACY_SECRET } from "@dokploy/server/lib/auth-secret";
 import {
 	decryptValue,
 	encryptValue,
@@ -89,5 +90,57 @@ describe("dedicated ENCRYPTION_KEY", () => {
 		// the write used the primary key, not the legacy one
 		expect(withKey.decryptValue(reEncrypted)).toBe("KEY=migrated");
 		expect(() => other.decryptValue(reEncrypted)).toThrow();
+	});
+});
+
+describe("migrating off the hardcoded legacy auth secret", () => {
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.resetModules();
+	});
+
+	const loadWithAuthSecret = async (secret: string) => {
+		vi.stubEnv("BETTER_AUTH_SECRET", secret);
+		vi.resetModules();
+		return await import("@dokploy/server/lib/encryption");
+	};
+
+	// The fork's tests run on a test-only secret, so the legacy one is set explicitly.
+	const loadWithLegacySecret = () =>
+		loadWithAuthSecret(HARDCODED_LEGACY_SECRET);
+
+	it("still decrypts values written under the legacy secret", async () => {
+		const legacy = await loadWithLegacySecret();
+		const legacyEncrypted = legacy.encryptValue("KEY=written-before-migration");
+
+		const migrated = await loadWithAuthSecret("a-real-random-secret");
+		expect(migrated.decryptValue(legacyEncrypted)).toBe(
+			"KEY=written-before-migration",
+		);
+	});
+
+	it("encrypts new writes with the new secret, not the legacy one", async () => {
+		const migrated = await loadWithAuthSecret("a-real-random-secret");
+		const encrypted = migrated.encryptValue("KEY=written-after-migration");
+
+		expect(() => decryptValue(encrypted)).toThrow(/BETTER_AUTH_SECRET/);
+		expect(migrated.decryptValue(encrypted)).toBe(
+			"KEY=written-after-migration",
+		);
+	});
+
+	it("does not export the legacy key in backups", async () => {
+		const legacyKeyHex = (await loadWithLegacySecret()).exportEncryptionKeys();
+		const migrated = await loadWithAuthSecret("a-real-random-secret");
+
+		expect(migrated.exportEncryptionKeys()).not.toContain(legacyKeyHex);
+	});
+
+	it("cannot decrypt values from an unrelated previous secret", async () => {
+		const other = await loadWithAuthSecret("some-other-secret");
+		const encrypted = other.encryptValue("KEY=value");
+
+		const migrated = await loadWithAuthSecret("a-real-random-secret");
+		expect(() => migrated.decryptValue(encrypted)).toThrow();
 	});
 });

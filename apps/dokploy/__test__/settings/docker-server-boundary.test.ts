@@ -112,6 +112,7 @@ vi.mock("@dokploy/server", async () => ({
 	getAgentHitsUpdateImage: mocks.getAgentHitsUpdateImage,
 	getOfficialUpdateImage: mocks.getOfficialUpdateImage,
 	getDockerDiskUsage: mocks.getDockerDiskUsage,
+	getDockerResourceType: vi.fn(async () => "service"),
 	getDokployImageTag: mocks.getDokployImageTag,
 	getDokployVersionData: mocks.getDokployVersionData,
 	getLogCleanupStatus: mocks.getLogCleanupStatus,

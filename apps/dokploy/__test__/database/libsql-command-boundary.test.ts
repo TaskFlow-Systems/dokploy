@@ -95,9 +95,8 @@ describe("LibSQL Docker command boundary", () => {
 			2,
 			"docker service ls -q --filter 'name=libsql-prod; touch /tmp/pwn' | head -1",
 		);
-		expect(mocks.execAsync.mock.calls[2]?.[0]).toContain(
-			"docker service logs --timestamps --raw --tail 10 --since 1m service-123",
+		expect(mocks.execAsync.mock.calls[2]?.[0]).toBe(
+			"docker service logs --timestamps --raw --since 1m service-123 2>&1 | grep -iF -- 'error'\\''s' | tail -n 10",
 		);
-		expect(mocks.execAsync.mock.calls[2]?.[0]).toContain('grep -iF "error\'s"');
 	});
 });

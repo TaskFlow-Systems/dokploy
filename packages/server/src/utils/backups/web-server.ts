@@ -20,7 +20,7 @@ import { redactRcloneCredentials } from "./redact";
 import {
 	assertRcloneS3DestinationAllowed,
 	buildRcloneS3Command,
-	getBackupTimestamp,
+	getBackupFileName,
 	getRcloneS3Destination,
 	normalizeS3Path,
 } from "./utils";
@@ -48,10 +48,13 @@ export const runWebServerBackup = async (backup: BackupSchedule) => {
 	let computedBackupSize: number | undefined;
 	try {
 		const destination = await findDestinationById(backup.destinationId);
-		const timestamp = getBackupTimestamp();
 		const { BASE_PATH } = paths();
 		const tempDir = await mkdtemp(join(tmpdir(), "dokploy-backup-"));
-		const backupFileName = `webserver-backup-${timestamp}.zip`;
+		const backupFileName = getBackupFileName(
+			backup.customName,
+			"zip",
+			"webserver-backup",
+		);
 		const s3Path = getRcloneS3Destination(
 			destination,
 			`${backup.appName}/${normalizeS3Path(backup.prefix)}${backupFileName}`,

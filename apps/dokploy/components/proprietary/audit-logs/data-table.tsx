@@ -54,6 +54,7 @@ const ACTION_OPTIONS = [
 	{ value: "login", label: "Login" },
 	{ value: "logout", label: "Logout" },
 	{ value: "reveal", label: "Revealed" },
+	{ value: "download", label: "Downloaded" },
 ];
 
 const RESOURCE_OPTIONS = [
@@ -85,7 +86,8 @@ type AuditAction =
 	| "redeploy"
 	| "login"
 	| "logout"
-	| "reveal";
+	| "reveal"
+	| "download";
 type AuditResourceType =
 	| "project"
 	| "service"
