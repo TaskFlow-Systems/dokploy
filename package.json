@@ -25,9 +25,9 @@
 		"generate:openapi": "bun run --filter './apps/dokploy' generate:openapi"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.15",
+		"@biomejs/biome": "2.6.2",
 		"@types/node": "^24.19.2",
-		"dotenv": "18.0.8",
+		"dotenv": "18.0.9",
 		"esbuild": "0.28.2",
 		"lint-staged": "^15.5.2",
 		"node-gyp": "13.1.0",
