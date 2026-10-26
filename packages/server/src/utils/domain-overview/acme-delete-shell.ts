@@ -56,17 +56,27 @@ lock_state() {
 	LOCK_STATE=held
 }
 
+# Only one script at a time may remove a stale lock, and it looks at the lock
+# again once it holds the guard: another script may have taken it over since
+# the first look. Moving the lock aside to inspect it would leave a moment
+# with no lock at all, in which a newcomer takes it while its owner carries
+# on. A guard left by a script killed inside this short step is dropped once
+# it is a minute old; that call still answers busy instead of going on, so
+# the script that drops it never ends up inside next to one that has just
+# recreated it.
 release_stale_lock() {
-	seen="$LOCK_OWNER"
-	STALE_COPY="$LOCK.stale.$$"
-	mv "$LOCK" "$STALE_COPY" 2>/dev/null || return 1
-	if [ "$(cat "$STALE_COPY" 2>/dev/null)" = "$seen" ]; then
-		rm -f "$STALE_COPY" 2>/dev/null
-		return 0
+	TAKEOVER="$LOCK.takeover"
+	if ! mkdir "$TAKEOVER" 2>/dev/null; then
+		[ -z "$(find "$TAKEOVER" -mmin +1 2>/dev/null)" ] || rmdir "$TAKEOVER" 2>/dev/null
+		return 1
 	fi
-	ln "$STALE_COPY" "$LOCK" 2>/dev/null
-	rm -f "$STALE_COPY" 2>/dev/null
-	return 1
+	lock_state
+	released=1
+	if [ "$LOCK_STATE" = stale ] && rm -f "$LOCK" 2>/dev/null; then
+		released=0
+	fi
+	rmdir "$TAKEOVER" 2>/dev/null
+	return "$released"
 }
 
 create_lock() {
