@@ -24,7 +24,7 @@ Dashboard показывает две версии:
 
 ```text
 Official: v0.29.8
-Fork: off_v0.29.8/Fork_<commits-since-official>+<short-sha>
+Fork: agenthits-vX.Y.Z
 ```
 
 `Official` - официальная база Dokploy, а `Fork` - сборка AgentHits поверх этой
@@ -79,7 +79,7 @@ docker service inspect dokploy --format '{{.Spec.TaskTemplate.ContainerSpec.Imag
 curl -fsSL https://raw.githubusercontent.com/agentHits/dokploy/AgentHits-Dev/install-agenthits.sh -o install-agenthits.sh
 chmod +x install-agenthits.sh
 
-DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-dev-7bc40dd7fad5 \
+DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-vX.Y.Z \
 DOKPLOY_RELEASE_TAG=agenthits-dev \
 bash install-agenthits.sh
 ```
@@ -108,7 +108,7 @@ bash install-agenthits.sh update
 curl -fsSL https://raw.githubusercontent.com/agentHits/dokploy/AgentHits-Dev/install-agenthits.sh -o install-agenthits.sh
 chmod +x install-agenthits.sh
 
-DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-dev-<short-sha> \
+DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-vX.Y.Z \
 DOKPLOY_RELEASE_TAG=agenthits-dev \
 bash install-agenthits.sh update
 ```
@@ -141,7 +141,7 @@ The dashboard shows two versions:
 
 ```text
 Official: v0.29.8
-Fork: off_v0.29.8/Fork_<commits-since-official>+<short-sha>
+Fork: agenthits-vX.Y.Z
 ```
 
 `Official` is the official Dokploy base, and `Fork` is the AgentHits build on
@@ -195,7 +195,7 @@ Install a specific tested build:
 curl -fsSL https://raw.githubusercontent.com/agentHits/dokploy/AgentHits-Dev/install-agenthits.sh -o install-agenthits.sh
 chmod +x install-agenthits.sh
 
-DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-dev-7bc40dd7fad5 \
+DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-vX.Y.Z \
 DOKPLOY_RELEASE_TAG=agenthits-dev \
 bash install-agenthits.sh
 ```
@@ -226,7 +226,7 @@ Update to a specific build:
 curl -fsSL https://raw.githubusercontent.com/agentHits/dokploy/AgentHits-Dev/install-agenthits.sh -o install-agenthits.sh
 chmod +x install-agenthits.sh
 
-DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-dev-<short-sha> \
+DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-vX.Y.Z \
 DOKPLOY_RELEASE_TAG=agenthits-dev \
 bash install-agenthits.sh update
 ```

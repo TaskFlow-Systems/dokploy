@@ -13,11 +13,12 @@ ghcr.io/agenthits/dokploy:agenthits-dev
 
 ```text
 Official: v0.29.8
-Fork: off_v0.29.8/Fork_<commits-since-official>+<short-sha>
+Fork: agenthits-vX.Y.Z
 ```
 
-Пример: если образ собран поверх `v0.29.8` и содержит 157 коммитов форка,
-версия будет выглядеть как `off_v0.29.8/Fork_157+abc123def456`.
+`agenthits-vX.Y.Z` — тег GitHub release, в который вошла сборка: каждый
+влитый в `AgentHits-Dev` PR выпускает новый релиз. Сборка, собранная вручную
+между релизами, показывается как `agenthits-vX.Y.Z-<коммитов после релиза>-g<short-sha>`.
 
 ### Что это дает
 
@@ -71,11 +72,12 @@ The official base version and fork version are shown separately:
 
 ```text
 Official: v0.29.8
-Fork: off_v0.29.8/Fork_<commits-since-official>+<short-sha>
+Fork: agenthits-vX.Y.Z
 ```
 
-Example: if the image is built on top of `v0.29.8` and includes 157 fork
-commits, the fork version looks like `off_v0.29.8/Fork_157+abc123def456`.
+`agenthits-vX.Y.Z` is the GitHub release the build belongs to: every PR merged
+into `AgentHits-Dev` publishes a new release. A manual build between releases
+shows as `agenthits-vX.Y.Z-<commits since the release>-g<short-sha>`.
 
 ### Why this helps
 

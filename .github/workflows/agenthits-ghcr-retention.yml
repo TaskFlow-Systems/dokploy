@@ -1,0 +1,50 @@
+name: AgentHits GHCR Retention
+
+# Scheduled runs delete; manual runs only list what would go unless dry-run is
+# switched off. Release tags, agenthits-dev and buildcache are never deleted.
+on:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: Only list the versions that would be deleted
+        type: boolean
+        default: true
+      keep-recent:
+        description: Newest versions to keep besides release, agenthits-dev and buildcache tags
+        type: number
+        default: 10
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agenthits-ghcr-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          # The package belongs to the agentHits account, so only its token can
+          # list and delete versions; the job token has no access to it.
+          username: agentHits
+          password: ${{ secrets.GHCR_PUSH_TOKEN }}
+
+      - name: Delete old image versions
+        env:
+          GH_TOKEN: ${{ secrets.GHCR_PUSH_TOKEN }}
+          PACKAGE_OWNER: agentHits
+          PACKAGE_NAME: dokploy
+          IMAGE: ghcr.io/agenthits/dokploy
+          KEEP_RECENT: ${{ inputs.keep-recent || 10 }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}
+        run: bash .github/scripts/agenthits-ghcr-retention.sh
