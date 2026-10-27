@@ -27,6 +27,10 @@ vi.mock("@/server/wss/authorize", () => ({
 vi.mock("@/server/wss/server-permission", () => ({
 	canAccessMonitoringWebSocket: vi.fn(async () => true),
 }));
+const mockAssertMetricsAccess = vi.hoisted(() => vi.fn());
+vi.mock("@/server/api/utils/monitoring-access", () => ({
+	assertContainerMetricsServiceAccess: mockAssertMetricsAccess,
+}));
 
 import { setupDockerStatsMonitoringSocketServer } from "@/server/wss/docker-stats";
 
@@ -109,6 +113,27 @@ describe("docker stats websocket (#5504)", () => {
 		lookup.resolve("dokploy");
 		await sleep(1500);
 
+		expect(mockListContainers).not.toHaveBeenCalled();
+	});
+
+	it("tells the client why it was refused instead of closing silently", async () => {
+		mockValidateRequest.mockResolvedValue(AUTH);
+		mockAssertMetricsAccess.mockRejectedValue(new Error("UNAUTHORIZED"));
+		const ws = new WebSocket(
+			url.replace(
+				"appName=dokploy",
+				"appName=shop-abc123-worker-1&appType=docker-compose",
+			),
+		);
+
+		const [code, reason] = await new Promise<[number, string]>((r) =>
+			ws.once("close", (closeCode, closeReason) =>
+				r([closeCode, closeReason.toString()]),
+			),
+		);
+
+		expect(code).toBe(4003);
+		expect(reason).toBe("Not authorized");
 		expect(mockListContainers).not.toHaveBeenCalled();
 	});
 });
