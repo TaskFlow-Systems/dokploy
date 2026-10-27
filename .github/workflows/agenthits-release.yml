@@ -14,6 +14,11 @@ on:
 permissions:
   contents: read
 
+# Every push builds the image; a push cuts a release only once this many PRs
+# have been merged since the previous one (see agenthits-next-release.sh).
+env:
+  RELEASE_EVERY: 20
+
 # The next version is counted from the newest tag, so runs must not overlap.
 # A queued run that GitHub replaces loses nothing: the next run collects every
 # PR merged since the newest tag.
@@ -44,6 +49,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           BUMP: ${{ inputs.bump || 'auto' }}
+          EVENT: ${{ github.event_name }}
         run: bash .github/scripts/agenthits-next-release.sh
 
   image:
