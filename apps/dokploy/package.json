@@ -95,8 +95,8 @@
 		"ai-sdk-ollama": "^4.5.1",
 		"bcrypt": "5.1.1",
 		"better-auth": "1.7.12",
-		"bl": "6.1.6",
-		"boxen": "^7.1.1",
+		"bl": "7.0.13",
+		"boxen": "^9.0.0",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
@@ -125,7 +125,7 @@
 		"pino": "10.4.0",
 		"pino-pretty": "13.2.0",
 		"postgres": "3.4.9",
-		"public-ip": "6.0.2",
+		"public-ip": "8.0.0",
 		"qrcode": "^1.5.4",
 		"radix-ui": "^1.8.1",
 		"react": "19.3.1",
@@ -176,14 +176,14 @@
 		"@types/ws": "8.18.2",
 		"drizzle-kit": "^0.31.11",
 		"esbuild": "0.28.2",
-		"lint-staged": "^15.5.2",
+		"lint-staged": "^17.6.0",
 		"memfs": "^4.80.0",
 		"simple-icons": "^16.36.0",
 		"tailwindcss": "^4.3.3",
 		"tsx": "^4.23.15",
 		"typescript": "^7.0.2",
-		"vite-tsconfig-paths": "4.3.2",
-		"vitest": "^4.1.12"
+		"vite-tsconfig-paths": "6.1.1",
+		"vitest": "^5.0.5"
 	},
 	"ct3aMetadata": {
 		"initVersion": "7.25.2"
