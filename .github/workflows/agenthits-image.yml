@@ -1,7 +1,8 @@
 name: AgentHits Dokploy Image
 
 # Pushes to AgentHits-Dev build through agenthits-release.yml, which calls this
-# workflow with the release tag. A manual run builds the selected branch, or,
+# workflow with a release tag when the push completes a batch and without one
+# otherwise. A manual run builds the selected branch, or,
 # with release-tag set to a published release, rebuilds that release's image.
 on:
   workflow_call:

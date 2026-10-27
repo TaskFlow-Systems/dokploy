@@ -4,12 +4,19 @@
 # not only the PR of this push, keeps a change in the next release when a run
 # was dropped from the concurrency queue or failed before publishing.
 #
+# The owner wants one version per batch of work, not one per merged PR: a push
+# releases only once RELEASE_EVERY changes (first-parent commits, one per merged
+# PR) have piled up since the previous tag, and earlier pushes get an image
+# without a release. A manual run releases whatever is pending.
+#
 # Outputs (GITHUB_OUTPUT): build, tag, previous, title, notes.
 set -euo pipefail
 
 : "${REPO:?REPO (owner/name) is required}"
 : "${GITHUB_OUTPUT:?}"
 bump="${BUMP:-auto}"
+event="${EVENT:-push}"
+release_every="${RELEASE_EVERY:-20}"
 base_branch="${BASE_BRANCH:-AgentHits-Dev}"
 image="${IMAGE:-ghcr.io/agenthits/dokploy}"
 work_dir="$(mktemp -d)"
@@ -23,9 +30,20 @@ if [ -z "$previous" ]; then
 	exit 0
 fi
 
-if [ "$(git rev-list --count "${previous}..HEAD")" = 0 ]; then
+pending="$(git rev-list --count --first-parent "${previous}..HEAD")"
+if [ "$pending" = 0 ]; then
 	echo "Nothing to release: HEAD has no commits after ${previous}."
 	echo "build=false" >>"$GITHUB_OUTPUT"
+	exit 0
+fi
+
+if [ "$event" = push ] && [ "$pending" -lt "$release_every" ]; then
+	waiting="${pending} of ${release_every} changes since ${previous}: image only, the release waits for a full batch or a manual run."
+	echo "$waiting"
+	if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+		echo "$waiting" >>"$GITHUB_STEP_SUMMARY"
+	fi
+	echo "build=true" >>"$GITHUB_OUTPUT"
 	exit 0
 fi
 
