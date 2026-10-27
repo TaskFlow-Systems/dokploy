@@ -68,7 +68,7 @@
     "bcrypt": "5.1.1",
     "better-auth": "1.7.12",
     "bl": "7.0.13",
-    "boxen": "^7.1.1",
+    "boxen": "^9.0.0",
     "date-fns": "3.6.0",
     "dockerode": "5.0.1",
     "dotenv": "18.0.9",
