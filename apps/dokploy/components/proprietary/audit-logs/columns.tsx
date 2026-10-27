@@ -27,6 +27,7 @@ import {
 	DialogTitle,
 	DialogTrigger,
 } from "@/components/ui/dialog";
+import type { features } from "./data-table";
 
 const ACTION_CONFIG: Record<
 	string,
@@ -148,7 +149,7 @@ function MetadataCell({ metadata }: { metadata: string | null }) {
 	);
 }
 
-export const columns: ColumnDef<AuditLog>[] = [
+export const columns: ColumnDef<typeof features, AuditLog>[] = [
 	{
 		accessorKey: "createdAt",
 		header: ({ column }) => (

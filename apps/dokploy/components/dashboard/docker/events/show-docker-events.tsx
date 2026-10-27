@@ -1,12 +1,18 @@
 import {
 	type ColumnDef,
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import { Activity, ArrowUpDown, Loader2, RefreshCw } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -36,6 +42,19 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { api, type RouterOutputs } from "@/utils/api";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 interface Props {
 	serverId?: string;
@@ -153,7 +172,7 @@ export const ShowDockerEvents = ({ serverId }: Props) => {
 		});
 	}, [events, search]);
 
-	const columns = useMemo<ColumnDef<EventRow>[]>(
+	const columns = useMemo<ColumnDef<typeof features, EventRow>[]>(
 		() => [
 			{
 				id: "time",
@@ -228,7 +247,8 @@ export const ShowDockerEvents = ({ serverId }: Props) => {
 		[],
 	);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredEvents,
 		columns,
 		getRowId: (row) => row.key,
@@ -238,9 +258,6 @@ export const ShowDockerEvents = ({ serverId }: Props) => {
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (
@@ -362,7 +379,7 @@ export const ShowDockerEvents = ({ serverId }: Props) => {
 						{table.getPageCount() > 1 && (
 							<div className="flex items-center justify-end gap-4">
 								<span className="text-sm text-muted-foreground">
-									Page {table.getState().pagination.pageIndex + 1} of{" "}
+									Page {table.state.pagination.pageIndex + 1} of{" "}
 									{table.getPageCount()}
 								</span>
 								<div className="flex items-center gap-2">
@@ -371,8 +388,8 @@ export const ShowDockerEvents = ({ serverId }: Props) => {
 										type="number"
 										min={1}
 										max={table.getPageCount()}
-										defaultValue={table.getState().pagination.pageIndex + 1}
-										key={table.getState().pagination.pageIndex}
+										defaultValue={table.state.pagination.pageIndex + 1}
+										key={table.state.pagination.pageIndex}
 										onKeyDown={(e) => {
 											if (e.key !== "Enter") return;
 											const value = Number(

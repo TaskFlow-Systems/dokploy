@@ -3,6 +3,7 @@ import { format } from "date-fns";
 import { ArrowUpDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import type { features } from "./requests-table";
 import type { LogEntry } from "./show-requests";
 
 export const getStatusColor = (status: number) => {
@@ -42,7 +43,7 @@ const formatDuration = (nanos: number) => {
 	return `${(ms / 1000).toFixed(2)} s`;
 };
 
-export const columns: ColumnDef<LogEntry>[] = [
+export const columns: ColumnDef<typeof features, LogEntry>[] = [
 	{
 		accessorKey: "level",
 		header: () => {

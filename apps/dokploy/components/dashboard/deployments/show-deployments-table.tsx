@@ -1,13 +1,19 @@
 "use client";
 
 import {
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import type { inferRouterOutputs } from "@trpc/server";
 import {
@@ -42,6 +48,19 @@ import {
 } from "@/components/ui/table";
 import type { AppRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 type DeploymentRow =
 	inferRouterOutputs<AppRouter>["deployment"]["allCentralized"][number];
@@ -445,7 +464,8 @@ export function ShowDeploymentsTable({
 		[],
 	);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredData,
 		columns,
 		state: {
@@ -454,9 +474,6 @@ export function ShowDeploymentsTable({
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (
