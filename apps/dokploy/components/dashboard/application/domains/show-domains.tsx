@@ -1,13 +1,23 @@
 import {
 	type ColumnFiltersState,
+	type ColumnVisibilityState,
+	columnFilteringFeature,
+	columnVisibilityFeature,
+	createFilteredRowModel,
+	createPaginatedRowModel,
+	createSortedRowModel,
+	filterFn_equals,
+	filterFn_includesString,
 	flexRender,
-	getCoreRowModel,
-	getFilteredRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
+	rowPaginationFeature,
+	rowSelectionFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
-	type VisibilityState,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import {
 	CheckCircle2,
@@ -67,6 +77,26 @@ import { AddDomain } from "./handle-domain";
 import { HandleForwardAuth } from "./handle-forward-auth";
 import { COMPOSE_REDEPLOY_TOAST, ComposeRedeployAlert } from "./redeploy-hint";
 
+export const features = tableFeatures({
+	columnFilteringFeature,
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	rowSelectionFeature,
+	filteredRowModel: createFilteredRowModel(),
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	filterFns: {
+		equals: filterFn_equals,
+		includesString: filterFn_includesString,
+	},
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
+
 export type ValidationState = {
 	isLoading: boolean;
 	isValid?: boolean;
@@ -119,7 +149,8 @@ export const ShowDomains = ({ id, type }: Props) => {
 	});
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
-	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+	const [columnVisibility, setColumnVisibility] =
+		useState<ColumnVisibilityState>({});
 	const [rowSelection, setRowSelection] = useState({});
 	const { data: ip } = api.settings.getIp.useQuery();
 
@@ -232,15 +263,12 @@ export const ShowDomains = ({ id, type }: Props) => {
 		canDeleteDomain,
 	});
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: data ?? [],
 		columns,
 		onSortingChange: setSorting,
 		onColumnFiltersChange: setColumnFilters,
-		getCoreRowModel: getCoreRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getFilteredRowModel: getFilteredRowModel(),
 		onColumnVisibilityChange: setColumnVisibility,
 		onRowSelectionChange: setRowSelection,
 		state: {

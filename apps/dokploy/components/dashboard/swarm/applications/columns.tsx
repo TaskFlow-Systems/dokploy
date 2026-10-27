@@ -9,6 +9,7 @@ import {
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ShowDockerModalStackLogs } from "../../docker/logs/show-docker-modal-stack-logs";
+import type { features } from "./data-table";
 
 export interface ApplicationList {
 	ID: string;
@@ -24,7 +25,7 @@ export interface ApplicationList {
 	serverId: string;
 }
 
-export const columns: ColumnDef<ApplicationList>[] = [
+export const columns: ColumnDef<typeof features, ApplicationList>[] = [
 	{
 		accessorKey: "ID",
 		accessorFn: (row) => row.ID,

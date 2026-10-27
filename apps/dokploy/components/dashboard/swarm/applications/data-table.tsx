@@ -3,14 +3,25 @@
 import {
 	type ColumnDef,
 	type ColumnFiltersState,
+	type ColumnVisibilityState,
+	columnFilteringFeature,
+	columnVisibilityFeature,
+	createFilteredRowModel,
+	createPaginatedRowModel,
+	createSortedRowModel,
+	filterFn_equals,
+	filterFn_includesString,
 	flexRender,
-	getCoreRowModel,
-	getFilteredRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
+	type RowData,
+	rowPaginationFeature,
+	rowSelectionFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
-	type VisibilityState,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import { ChevronDown } from "lucide-react";
 import React from "react";
@@ -31,36 +42,53 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 
-interface DataTableProps<TData, TValue> {
-	columns: ColumnDef<TData, TValue>[];
+export const features = tableFeatures({
+	columnFilteringFeature,
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	rowSelectionFeature,
+	filteredRowModel: createFilteredRowModel(),
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	filterFns: {
+		equals: filterFn_equals,
+		includesString: filterFn_includesString,
+	},
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
+
+interface DataTableProps<TData extends RowData> {
+	columns: ColumnDef<typeof features, TData>[];
 	data: TData[];
 }
 
-export function DataTable<TData, TValue>({
+export function DataTable<TData extends RowData>({
 	columns,
 	data,
-}: DataTableProps<TData, TValue>) {
+}: DataTableProps<TData>) {
 	const [sorting, setSorting] = React.useState<SortingState>([]);
 	const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
 		[],
 	);
 	const [columnVisibility, setColumnVisibility] =
-		React.useState<VisibilityState>({});
+		React.useState<ColumnVisibilityState>({});
 	const [rowSelection, setRowSelection] = React.useState({});
 	const [_pagination, _setPagination] = React.useState({
 		pageIndex: 0, //initial page index
 		pageSize: 8, //default page size
 	});
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data,
 		columns,
 		onSortingChange: setSorting,
 		onColumnFiltersChange: setColumnFilters,
-		getCoreRowModel: getCoreRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getFilteredRowModel: getFilteredRowModel(),
 		onColumnVisibilityChange: setColumnVisibility,
 		onRowSelectionChange: setRowSelection,
 		state: {

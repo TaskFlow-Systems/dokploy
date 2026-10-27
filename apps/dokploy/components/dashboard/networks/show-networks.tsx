@@ -2,13 +2,19 @@
 
 import {
 	type ColumnDef,
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import type { inferRouterOutputs } from "@trpc/server";
 import {
@@ -53,6 +59,19 @@ import {
 } from "@/components/ui/table";
 import type { AppRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 type NetworkRow = inferRouterOutputs<AppRouter>["network"]["all"][number];
 
@@ -154,7 +173,7 @@ export const ShowNetworks = ({ serverId }: Props) => {
 		return list;
 	}, [networks, driverFilter, globalFilter]);
 
-	const columns = useMemo<ColumnDef<NetworkRow>[]>(
+	const columns = useMemo<ColumnDef<typeof features, NetworkRow>[]>(
 		() => [
 			{
 				accessorKey: "name",
@@ -326,7 +345,8 @@ export const ShowNetworks = ({ serverId }: Props) => {
 		[verified, syncStatus, missingIds, removeNetwork, recreateMutation, utils],
 	);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredData,
 		columns,
 		state: {
@@ -335,9 +355,6 @@ export const ShowNetworks = ({ serverId }: Props) => {
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (
@@ -461,7 +478,7 @@ export const ShowNetworks = ({ serverId }: Props) => {
 								{table.getPageCount() > 1 && (
 									<div className="flex items-center justify-end gap-4">
 										<span className="text-sm text-muted-foreground">
-											Page {table.getState().pagination.pageIndex + 1} of{" "}
+											Page {table.state.pagination.pageIndex + 1} of{" "}
 											{table.getPageCount()}
 										</span>
 										<div className="flex gap-2">

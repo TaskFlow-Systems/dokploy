@@ -2,13 +2,19 @@
 
 import {
 	type ColumnDef,
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import type { inferRouterOutputs } from "@trpc/server";
 import { ArrowUpDown, Eye, Layers, Loader2, Trash2 } from "lucide-react";
@@ -55,6 +61,19 @@ import {
 } from "@/components/ui/table";
 import type { AppRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 type ImageBase =
 	inferRouterOutputs<AppRouter>["dockerImage"]["getImages"][number];
@@ -226,7 +245,7 @@ export const ShowImages = ({ serverId }: Props) => {
 		}
 	};
 
-	const columns = useMemo<ColumnDef<ImageRow>[]>(
+	const columns = useMemo<ColumnDef<typeof features, ImageRow>[]>(
 		() => [
 			{
 				accessorKey: "Repository",
@@ -304,7 +323,8 @@ export const ShowImages = ({ serverId }: Props) => {
 		[serverId],
 	);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredData,
 		columns,
 		getRowId: (row) => row.key,
@@ -314,9 +334,6 @@ export const ShowImages = ({ serverId }: Props) => {
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (
@@ -410,7 +427,7 @@ export const ShowImages = ({ serverId }: Props) => {
 								{table.getPageCount() > 1 && (
 									<div className="flex items-center justify-end gap-4">
 										<span className="text-sm text-muted-foreground">
-											Page {table.getState().pagination.pageIndex + 1} of{" "}
+											Page {table.state.pagination.pageIndex + 1} of{" "}
 											{table.getPageCount()}
 										</span>
 										<div className="flex gap-2">

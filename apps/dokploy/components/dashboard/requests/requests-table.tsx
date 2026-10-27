@@ -1,13 +1,23 @@
 import {
 	type ColumnFiltersState,
+	type ColumnVisibilityState,
+	columnFilteringFeature,
+	columnVisibilityFeature,
+	createFilteredRowModel,
+	createSortedRowModel,
+	filterFn_equals,
+	filterFn_includesString,
 	flexRender,
-	getCoreRowModel,
-	getFilteredRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSelectionFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
-	type VisibilityState,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import copy from "copy-to-clipboard";
 import {
@@ -54,6 +64,25 @@ import { columns, getStatusColor } from "./columns";
 import type { LogEntry } from "./show-requests";
 import { DataTableFacetedFilter } from "./status-request-filter";
 
+export const features = tableFeatures({
+	columnFilteringFeature,
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	rowSelectionFeature,
+	filteredRowModel: createFilteredRowModel(),
+	sortedRowModel: createSortedRowModel(),
+	filterFns: {
+		equals: filterFn_equals,
+		includesString: filterFn_includesString,
+	},
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
+
 export const priorities = [
 	{
 		label: "100 - 199",
@@ -94,7 +123,8 @@ export const RequestsTable = ({ dateRange }: RequestsTableProps) => {
 	const [search, setSearch] = useState("");
 	const [selectedRow, setSelectedRow] = useState<LogEntry>();
 	const [sorting, setSorting] = useState<SortingState>([]);
-	const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+	const [columnVisibility, setColumnVisibility] =
+		useState<ColumnVisibilityState>({});
 	const [rowSelection, setRowSelection] = useState({});
 	const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 	const [pagination, setPagination] = useState<PaginationState>({
@@ -132,16 +162,14 @@ export const RequestsTable = ({ dateRange }: RequestsTableProps) => {
 		return -1;
 	}, [statsLogs?.totalCount, pagination.pageSize]);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: statsLogs?.data ?? [],
 		columns,
 		onPaginationChange: setPagination,
 		onSortingChange: setSorting,
 		pageCount: pageCount,
 		onColumnFiltersChange: setColumnFilters,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getFilteredRowModel: getFilteredRowModel(),
 		onColumnVisibilityChange: setColumnVisibility,
 		onRowSelectionChange: setRowSelection,
 		manualPagination: true,
