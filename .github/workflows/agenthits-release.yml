@@ -1,0 +1,79 @@
+name: AgentHits Release
+
+on:
+  push:
+    branches: [AgentHits-Dev]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version part to raise (auto: minor if a merged PR title starts with feat, else patch)"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: read
+
+# The next version is counted from the newest tag, so runs must not overlap.
+# A queued run that GitHub replaces loses nothing: the next run collects every
+# PR merged since the newest tag.
+concurrency:
+  group: agenthits-release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      build: ${{ steps.next.outputs.build }}
+      tag: ${{ steps.next.outputs.tag }}
+      title: ${{ steps.next.outputs.title }}
+      notes: ${{ steps.next.outputs.notes }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Compute next version and notes
+        id: next
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BUMP: ${{ inputs.bump || 'auto' }}
+        run: bash .github/scripts/agenthits-next-release.sh
+
+  image:
+    needs: version
+    if: needs.version.outputs.build == 'true'
+    uses: ./.github/workflows/agenthits-image.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      release-tag: ${{ needs.version.outputs.tag }}
+    secrets: inherit
+
+  release:
+    needs: [version, image]
+    if: needs.version.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          TITLE: ${{ needs.version.outputs.title }}
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: |
+          printf '%s\n' "$NOTES" > release-notes.md
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$TITLE" \
+            --notes-file release-notes.md

@@ -1,17 +1,30 @@
 name: AgentHits Dokploy Image
 
+# Pushes to AgentHits-Dev build through agenthits-release.yml, which calls this
+# workflow with the release tag. A manual run builds the selected branch, or,
+# with release-tag set to a published release, rebuilds that release's image.
 on:
-  push:
-    branches: [AgentHits-Dev]
+  workflow_call:
+    inputs:
+      release-tag:
+        description: agenthits-vX.Y.Z tag the calling workflow publishes for this commit
+        type: string
+        default: ""
   workflow_dispatch:
+    inputs:
+      release-tag:
+        description: "Existing agenthits-vX.Y.Z tag to rebuild (empty: dev build of the selected branch)"
+        type: string
+        default: ""
 
 permissions:
   contents: read
   packages: write
 
-# Cancel superseded dev builds on rapid pushes.
+# Cancel superseded manual builds. The workflow name keeps release builds, which
+# agenthits-release.yml already runs one at a time, out of this group.
 concurrency:
-  group: agenthits-image-${{ github.ref }}
+  group: agenthits-image-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -28,6 +41,26 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check out published release
+        id: release
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          if [ -z "$RELEASE_TAG" ]; then
+            exit 0
+          fi
+          if ! printf '%s' "$RELEASE_TAG" | grep -Eq '^agenthits-v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::release-tag must look like agenthits-vX.Y.Z, got '${RELEASE_TAG}'"
+            exit 1
+          fi
+          # The release workflow creates its tag only after this image is
+          # pushed, so an existing tag means a rebuild of an older release:
+          # build that commit and leave agenthits-dev on the branch tip.
+          if git rev-parse -q --verify "refs/tags/${RELEASE_TAG}" >/dev/null; then
+            git checkout -q --detach "refs/tags/${RELEASE_TAG}"
+            echo "rebuild=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare production env file
         run: |
           cp apps/dokploy/.env.production.example .env.production
@@ -37,31 +70,32 @@ jobs:
 
       - name: Set image tags
         id: tags
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+          REBUILD: ${{ steps.release.outputs.rebuild }}
         run: |
-          SHORT_SHA="${GITHUB_SHA::12}"
+          SHORT_SHA="$(git rev-parse --short=12 HEAD)"
           IMAGE="${REGISTRY}/${IMAGE_NAME}"
           OFFICIAL_VERSION="$(node -p "require('./apps/dokploy/package.json').version")"
-          OFFICIAL_REF="${OFFICIAL_VERSION}"
-          if git ls-remote --exit-code --tags https://github.com/Dokploy/dokploy.git "refs/tags/${OFFICIAL_VERSION}" >/dev/null 2>&1; then
-            git fetch --no-tags https://github.com/Dokploy/dokploy.git "refs/tags/${OFFICIAL_VERSION}:refs/tags/${OFFICIAL_VERSION}"
+          if [ -n "$RELEASE_TAG" ]; then
+            FORK_VERSION="$RELEASE_TAG"
           else
-            OFFICIAL_REF="refs/remotes/upstream/canary"
-            if ! git rev-parse --verify --quiet "${OFFICIAL_REF}^{commit}" >/dev/null; then
-              git fetch --no-tags https://github.com/Dokploy/dokploy.git "refs/heads/canary:${OFFICIAL_REF}"
-            fi
+            FORK_VERSION="$(git describe --tags --match 'agenthits-v*' --abbrev=12 2>/dev/null || echo "${STABLE_TAG}-${SHORT_SHA}")"
           fi
-          FORK_DISTANCE="$(git rev-list --count "${OFFICIAL_REF}..HEAD")"
-          FORK_VERSION="off_${OFFICIAL_VERSION}/Fork_${FORK_DISTANCE}+${SHORT_SHA}"
           {
             echo "tags<<EOF"
-            echo "${IMAGE}:${STABLE_TAG}"
-            echo "${IMAGE}:${STABLE_TAG}-${SHORT_SHA}"
-            echo "${IMAGE}:sha-${GITHUB_SHA}"
+            if [ "$REBUILD" != true ]; then
+              echo "${IMAGE}:${STABLE_TAG}"
+              echo "${IMAGE}:${STABLE_TAG}-${SHORT_SHA}"
+            fi
+            if [ -n "$RELEASE_TAG" ]; then
+              echo "${IMAGE}:${RELEASE_TAG}"
+            fi
             echo "EOF"
+            echo "cache=${IMAGE}:buildcache"
+            echo "official-version=${OFFICIAL_VERSION}"
+            echo "fork-version=${FORK_VERSION}"
           } >> "$GITHUB_OUTPUT"
-          echo "cache=${IMAGE}:buildcache" >> "$GITHUB_OUTPUT"
-          echo "official-version=${OFFICIAL_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "fork-version=${FORK_VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4

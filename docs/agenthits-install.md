@@ -10,14 +10,14 @@ ghcr.io/agenthits/dokploy:agenthits-dev
 ```
 
 Тег `agenthits-dev` всегда указывает на последнюю сборку ветки
-`AgentHits-Dev`. Для воспроизводимой установки можно использовать immutable
-тег вида `agenthits-dev-<short-sha>`.
+`AgentHits-Dev`. Для воспроизводимой установки используйте тег релиза
+`agenthits-vX.Y.Z` (список — в GitHub Releases); эти теги не удаляются.
 
 В dashboard отображаются две версии:
 
 ```text
 Official: v0.29.8
-Fork: off_v0.29.8/Fork_<commits-since-official>+<short-sha>
+Fork: agenthits-vX.Y.Z
 ```
 
 `Official` показывает официальный Dokploy base, а `Fork` показывает сборку
@@ -162,7 +162,7 @@ Hyper-V VM (Windows Pro/Enterprise/Education):
 curl -fsSL https://raw.githubusercontent.com/agentHits/dokploy/AgentHits-Dev/install-agenthits.sh -o install-agenthits.sh
 chmod +x install-agenthits.sh
 
-DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-dev-7bc40dd7fad5 \
+DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-vX.Y.Z \
 DOKPLOY_RELEASE_TAG=agenthits-dev \
 bash install-agenthits.sh
 ```
@@ -314,7 +314,7 @@ Docker service image digest с `ghcr.io/agenthits/dokploy:agenthits-dev`.
 Обновление на конкретный immutable tag:
 
 ```bash
-DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-dev-<short-sha> \
+DOKPLOY_IMAGE=ghcr.io/agenthits/dokploy:agenthits-vX.Y.Z \
 DOKPLOY_RELEASE_TAG=agenthits-dev \
 bash install-agenthits.sh update
 ```
@@ -356,5 +356,6 @@ echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --passwo
   `DOKPLOY_FORK_VERSION` вручную только для custom/local images.
 - Dashboard update button в AgentHits fork обновляет из
   `ghcr.io/agenthits/dokploy:agenthits-dev`.
-- Для rollback храните конкретный tag `agenthits-dev-<short-sha>` или
-  `sha-<full-sha>` после успешной проверки.
+- Для rollback используйте тег релиза `agenthits-vX.Y.Z`. Теги
+  `agenthits-dev-<short-sha>` живут только для последних ~10 сборок: старые
+  версии образа удаляет еженедельная очистка GHCR.
