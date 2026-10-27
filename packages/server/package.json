@@ -86,7 +86,7 @@
     "pino": "10.4.0",
     "pino-pretty": "13.2.0",
     "postgres": "3.4.9",
-    "public-ip": "6.0.2",
+    "public-ip": "8.0.0",
     "qrcode": "^1.5.4",
     "react": "19.3.1",
     "react-dom": "19.3.1",
