@@ -117,7 +117,7 @@
 		"next": "16.4.3",
 		"next-themes": "^0.4.6",
 		"nextjs-toploader": "^3.9.17",
-		"node-os-utils": "2.0.5",
+		"node-os-utils": "3.1.0",
 		"node-pty": "1.1.0",
 		"node-schedule": "2.1.1",
 		"nodemailer": "10.2.1",
