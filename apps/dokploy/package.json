@@ -176,7 +176,7 @@
 		"@types/ws": "8.18.2",
 		"drizzle-kit": "^0.31.11",
 		"esbuild": "0.28.2",
-		"lint-staged": "^15.5.2",
+		"lint-staged": "^17.6.0",
 		"memfs": "^4.80.0",
 		"simple-icons": "^16.36.0",
 		"tailwindcss": "^4.3.3",
