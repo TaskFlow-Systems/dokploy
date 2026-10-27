@@ -101,7 +101,7 @@
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
 		"copy-to-clipboard": "^3.3.3",
-		"date-fns": "3.6.0",
+		"date-fns": "4.4.0",
 		"dockerode": "5.0.1",
 		"dompurify": "^3.4.17",
 		"dotenv": "18.0.9",
