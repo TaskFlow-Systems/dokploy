@@ -1,0 +1,27 @@
+name: Dependency audit
+
+# The audit in pull-request.yml only sees advisories that exist when a PR runs.
+# This weekly run catches advisories published later for dependencies nobody
+# touched. GitHub notifies the person who last changed the cron line when a
+# scheduled run fails.
+on:
+  schedule:
+    - cron: "41 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.4
+      - run: bun audit --audit-level=moderate
