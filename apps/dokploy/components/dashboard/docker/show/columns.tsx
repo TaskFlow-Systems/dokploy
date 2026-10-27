@@ -19,9 +19,9 @@ import { ShowContainerNetworks } from "../networks/show-container-networks";
 import { RemoveContainerDialog } from "../remove/remove-container";
 import { DockerTerminalModal } from "../terminal/docker-terminal-modal";
 import { UploadFileModal } from "../upload/upload-file-modal";
-import type { Container } from "./show-containers";
+import type { Container, features } from "./show-containers";
 
-export const columns: ColumnDef<Container>[] = [
+export const columns: ColumnDef<typeof features, Container>[] = [
 	{
 		accessorKey: "name",
 		header: ({ column }) => {

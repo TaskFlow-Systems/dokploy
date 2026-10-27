@@ -24,7 +24,7 @@ import {
 import type { RouterOutputs } from "@/utils/api";
 import { DnsHelperModal } from "./dns-helper-modal";
 import { AddDomain } from "./handle-domain";
-import type { ValidationStates } from "./show-domains";
+import type { features, ValidationStates } from "./show-domains";
 
 export type Domain =
 	| RouterOutputs["domain"]["byApplicationId"][0]
@@ -56,7 +56,7 @@ export const createColumns = ({
 	serverIp,
 	canCreateDomain,
 	canDeleteDomain,
-}: ColumnsProps): ColumnDef<Domain>[] => [
+}: ColumnsProps): ColumnDef<typeof features, Domain>[] => [
 	...(type === "compose"
 		? [
 				{
@@ -72,7 +72,7 @@ export const createColumns = ({
 							</Badge>
 						);
 					},
-				} satisfies ColumnDef<Domain>,
+				} satisfies ColumnDef<typeof features, Domain>,
 			]
 		: []),
 	{

@@ -1,12 +1,18 @@
 import {
 	type ColumnDef,
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import {
 	ArrowLeft,
@@ -63,6 +69,19 @@ import {
 	PROXIABLE_TYPES,
 } from "./dns-record-panel";
 import { DnsRecordTypeBadge } from "./dns-record-type-badge";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 interface Props {
 	dnsProviderId: string;
@@ -159,7 +178,7 @@ export const ShowDnsRecords = ({ dnsProviderId, zoneId }: Props) => {
 			.finally(() => setDeletingId(null));
 	};
 
-	const columns = useMemo<ColumnDef<DnsRecordValue>[]>(
+	const columns = useMemo<ColumnDef<typeof features, DnsRecordValue>[]>(
 		() => [
 			{
 				accessorKey: "type",
@@ -233,7 +252,7 @@ export const ShowDnsRecords = ({ dnsProviderId, zoneId }: Props) => {
 									</Tooltip>
 								);
 							},
-						} satisfies ColumnDef<DnsRecordValue>,
+						} satisfies ColumnDef<typeof features, DnsRecordValue>,
 					]
 				: []),
 			{
@@ -303,7 +322,8 @@ export const ShowDnsRecords = ({ dnsProviderId, zoneId }: Props) => {
 	const resetToFirstPage = () =>
 		setPagination((previous) => ({ ...previous, pageIndex: 0 }));
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredRecords,
 		columns,
 		getRowId: (row) => row.id,
@@ -313,9 +333,6 @@ export const ShowDnsRecords = ({ dnsProviderId, zoneId }: Props) => {
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (

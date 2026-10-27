@@ -3,12 +3,19 @@
 import type { AuditLog } from "@dokploy/server/db/schema";
 import {
 	type ColumnDef,
+	type ColumnVisibilityState,
+	columnFilteringFeature,
+	columnVisibilityFeature,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getSortedRowModel,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
-	type VisibilityState,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import { format } from "date-fns";
 import { CalendarIcon, ChevronDown, X } from "lucide-react";
@@ -43,6 +50,19 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+
+export const features = tableFeatures({
+	columnFilteringFeature,
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 const ACTION_OPTIONS = [
 	{ value: "create", label: "Created" },
@@ -114,7 +134,7 @@ export interface AuditLogFilters {
 }
 
 interface DataTableProps {
-	columns: ColumnDef<AuditLog>[];
+	columns: ColumnDef<typeof features, AuditLog>[];
 	data: AuditLog[];
 	total: number;
 	pageIndex: number;
@@ -145,14 +165,13 @@ export function DataTable({
 		{ id: "createdAt", desc: true },
 	]);
 	const [columnVisibility, setColumnVisibility] =
-		React.useState<VisibilityState>({});
+		React.useState<ColumnVisibilityState>({});
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data,
 		columns,
 		onSortingChange: setSorting,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
 		onColumnVisibilityChange: setColumnVisibility,
 		manualPagination: true,
 		manualFiltering: true,

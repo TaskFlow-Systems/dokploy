@@ -1,12 +1,18 @@
 import {
 	type ColumnDef,
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import { format } from "date-fns";
 import { ArrowUpDown, Loader2, LogOut, Smartphone } from "lucide-react";
@@ -39,6 +45,19 @@ import {
 	TableRow,
 } from "@/components/ui/table";
 import { api } from "@/utils/api";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 type SessionRow = {
 	id: string;
@@ -139,7 +158,7 @@ export const ShowSessions = () => {
 		return list;
 	}, [sessions, statusFilter, userFilter, isOwner, globalFilter]);
 
-	const columns = useMemo<ColumnDef<SessionRow>[]>(
+	const columns = useMemo<ColumnDef<typeof features, SessionRow>[]>(
 		() => [
 			{
 				id: "user",
@@ -259,7 +278,8 @@ export const ShowSessions = () => {
 		[isRevoking, handleRevoke],
 	);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredData,
 		columns,
 		state: {
@@ -268,9 +288,6 @@ export const ShowSessions = () => {
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (
@@ -400,7 +417,7 @@ export const ShowSessions = () => {
 								{table.getPageCount() > 1 && (
 									<div className="flex items-center justify-end gap-4">
 										<span className="text-sm text-muted-foreground">
-											Page {table.getState().pagination.pageIndex + 1} of{" "}
+											Page {table.state.pagination.pageIndex + 1} of{" "}
 											{table.getPageCount()}
 										</span>
 										<div className="flex gap-2">

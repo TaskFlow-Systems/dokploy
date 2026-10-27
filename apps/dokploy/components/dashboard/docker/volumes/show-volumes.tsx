@@ -2,13 +2,19 @@
 
 import {
 	type ColumnDef,
+	columnVisibilityFeature,
+	createPaginatedRowModel,
+	createSortedRowModel,
 	flexRender,
-	getCoreRowModel,
-	getPaginationRowModel,
-	getSortedRowModel,
 	type PaginationState,
+	rowPaginationFeature,
+	rowSortingFeature,
 	type SortingState,
-	useReactTable,
+	sortFn_alphanumeric,
+	sortFn_datetime,
+	sortFn_text,
+	tableFeatures,
+	useTable,
 } from "@tanstack/react-table";
 import type { inferRouterOutputs } from "@trpc/server";
 import {
@@ -53,6 +59,19 @@ import {
 } from "@/components/ui/table";
 import type { AppRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
+
+const features = tableFeatures({
+	rowSortingFeature,
+	rowPaginationFeature,
+	columnVisibilityFeature,
+	sortedRowModel: createSortedRowModel(),
+	paginatedRowModel: createPaginatedRowModel(),
+	sortFns: {
+		alphanumeric: sortFn_alphanumeric,
+		datetime: sortFn_datetime,
+		text: sortFn_text,
+	},
+});
 
 type VolumeRow =
 	inferRouterOutputs<AppRouter>["dockerVolume"]["getVolumes"][number];
@@ -183,7 +202,7 @@ export const ShowVolumes = ({ serverId }: Props) => {
 		return list.filter((volume) => volume.Name.toLowerCase().includes(query));
 	}, [volumes, globalFilter]);
 
-	const columns = useMemo<ColumnDef<VolumeRow>[]>(
+	const columns = useMemo<ColumnDef<typeof features, VolumeRow>[]>(
 		() => [
 			{
 				accessorKey: "Name",
@@ -218,7 +237,7 @@ export const ShowVolumes = ({ serverId }: Props) => {
 			{
 				id: "Size",
 				header: ({ column }) => <SortableHeader column={column} title="Size" />,
-				sortingFn: (a, b) =>
+				sortFn: (a, b) =>
 					parseSize(sizeByName.get(a.original.Name) ?? undefined) -
 					parseSize(sizeByName.get(b.original.Name) ?? undefined),
 				cell: ({ row }) =>
@@ -297,7 +316,8 @@ export const ShowVolumes = ({ serverId }: Props) => {
 		[serverId, removeVolume, utils, sizeByName, isLoadingSizes],
 	);
 
-	const table = useReactTable({
+	const table = useTable({
+		features,
 		data: filteredData,
 		columns,
 		state: {
@@ -306,9 +326,6 @@ export const ShowVolumes = ({ serverId }: Props) => {
 		},
 		onSortingChange: setSorting,
 		onPaginationChange: setPagination,
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
 	});
 
 	return (
@@ -401,7 +418,7 @@ export const ShowVolumes = ({ serverId }: Props) => {
 								{table.getPageCount() > 1 && (
 									<div className="flex items-center justify-end gap-4">
 										<span className="text-sm text-muted-foreground">
-											Page {table.getState().pagination.pageIndex + 1} of{" "}
+											Page {table.state.pagination.pageIndex + 1} of{" "}
 											{table.getPageCount()}
 										</span>
 										<div className="flex gap-2">
