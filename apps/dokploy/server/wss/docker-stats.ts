@@ -136,7 +136,7 @@ export const setupDockerStatsMonitoringSocketServer = (
 				);
 			}
 		} catch {
-			ws.close();
+			ws.close(4003, "Not authorized");
 			return;
 		}
 

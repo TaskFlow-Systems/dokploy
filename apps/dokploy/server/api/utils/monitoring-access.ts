@@ -11,8 +11,10 @@ import {
 	redis,
 } from "@dokploy/server/db/schema";
 import { checkServicePermissionAndAccess } from "@dokploy/server/services/permission";
+import { execAsync } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
+import { quote } from "shell-quote";
 
 type MonitoringAccessCtx = {
 	session: {
@@ -384,6 +386,61 @@ export const findAccessibleContainerResourceStat = async <
 	);
 };
 
+const CONTAINER_OWNER_LABELS = [
+	"com.docker.compose.project",
+	"com.docker.stack.namespace",
+	"com.docker.swarm.service.name",
+];
+
+// Compose and stack containers are named "<project>-<service>-1" or
+// "<stack>_<service>.1.<task>", not after the Dokploy service, so the monitoring
+// tab asks for a container name that matches no service. The owning service is
+// then taken from the local container's labels; only services on this host
+// count, because the lookup only sees local containers.
+const findLocalContainerMonitoringService = async (containerName: string) => {
+	const name = normalizeDockerLabelValue(containerName);
+	if (!name) {
+		return null;
+	}
+
+	let container: { name?: string; labels?: Record<string, string> | null };
+	try {
+		const { stdout } = await execAsync(
+			quote([
+				"docker",
+				"inspect",
+				"--type",
+				"container",
+				"--format",
+				'{"name":{{json .Name}},"labels":{{json .Config.Labels}}}',
+				name,
+			]),
+		);
+		container = JSON.parse(stdout.trim());
+	} catch {
+		return null;
+	}
+
+	// `docker inspect` also resolves ID prefixes; only an exact name counts.
+	if (container.name !== `/${name}`) {
+		return null;
+	}
+
+	const labels = parseDockerLabels(container.labels);
+	for (const label of CONTAINER_OWNER_LABELS) {
+		const ownerAppName = normalizeDockerLabelValue(labels[label]);
+		if (!ownerAppName) {
+			continue;
+		}
+		const service = await findMonitoringServiceByAppName(ownerAppName);
+		if (service && !service.serverId) {
+			return service;
+		}
+	}
+
+	return null;
+};
+
 export const assertContainerMetricsServiceAccess = async (
 	ctx: MonitoringAccessCtx,
 	appName: string,
@@ -395,7 +452,11 @@ export const assertContainerMetricsServiceAccess = async (
 			message: "You are not authorized to access this monitored service",
 		});
 	}
-	const service = await findMonitoringServiceByAppName(appName);
+	const service =
+		(await findMonitoringServiceByAppName(appName)) ??
+		(serverId === undefined
+			? await findLocalContainerMonitoringService(appName)
+			: null);
 	if (
 		!service ||
 		service.environment?.project?.organizationId !==
