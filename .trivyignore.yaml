@@ -1,4 +1,5 @@
-# Fixable findings in bundled tools whose latest release still carries them.
+# Fixable findings in bundled tools and pinned images whose latest release
+# still carries them.
 # Each entry expires, so the image audit fails again and the tool gets checked
 # for a new release.
 vulnerabilities:
@@ -18,4 +19,9 @@ vulnerabilities:
     paths:
       - usr/libexec/docker/cli-plugins/docker-buildx
     statement: buildx 0.38.1, the latest release, uses moby/go-archive 0.2.0.
+    expired_at: 2026-11-27
+  - id: CVE-2026-116587
+    paths:
+      - usr/local/bin/traefik
+    statement: Traefik 3.7.16, the latest release, uses go-jose 4.1.5; the fix is in 4.1.6.
     expired_at: 2026-11-27

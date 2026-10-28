@@ -12,7 +12,7 @@
 | `--harden` | все три | Все три флага сразу. |
 | — | `DOKPLOY_SERVER_HARDENING=ssh,ufw,fail2ban` | То же самое панель применяет к новым серверам в «Setup Server». Если задан флаг установки, переменная выставляется автоматически. |
 
-Версия Traefik для серверов берётся из установщика: `TRAEFIK_IMAGE`, сейчас `traefik:v3.7.14`. Тест `apps/dokploy/__test__/server/component-versions-sync.test.ts` падает, если версия по умолчанию в панели расходится с установщиком.
+Версия Traefik для серверов берётся из установщика: `TRAEFIK_IMAGE`, сейчас `traefik:v3.7.16`. Тест `apps/dokploy/__test__/server/component-versions-sync.test.ts` падает, если версия по умолчанию в панели расходится с установщиком.
 
 Флаги усиления принимают только `install` и `harden`. `install-agenthits.sh update` обновляет панель и её стек, но не меняет SSH, UFW и Fail2Ban.
 

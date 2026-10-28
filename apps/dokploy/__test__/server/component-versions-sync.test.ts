@@ -121,6 +121,22 @@ describe("CI workflow", () => {
 	});
 });
 
+describe("image audit workflow", () => {
+	const audit = read(".github/workflows/image-audit.yml");
+
+	it("scans the pinned Traefik", () => {
+		expect(pinIn(audit, /image: traefik:v(\S+)/)).toBe(PINNED_VERSIONS.traefik);
+	});
+	it("scans the pinned Postgres", () => {
+		expect(pinIn(audit, /image: postgres:(\S+)/)).toBe(
+			PINNED_VERSIONS.postgres,
+		);
+	});
+	it("scans the pinned Redis", () => {
+		expect(pinIn(audit, /image: redis:(\S+)/)).toBe(PINNED_VERSIONS.redis);
+	});
+});
+
 describe("application Railpack picker", () => {
 	const picker = read(
 		"apps/dokploy/components/dashboard/application/build/show.tsx",
