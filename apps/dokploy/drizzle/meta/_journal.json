@@ -1478,6 +1478,13 @@
       "when": 1793202867422,
       "tag": "0210_railpack_default_0_42_0",
       "breakpoints": true
+    },
+    {
+      "idx": 211,
+      "version": "7",
+      "when": 1793209780808,
+      "tag": "0211_whitelabeling_config_default",
+      "breakpoints": true
     }
   ]
 }
