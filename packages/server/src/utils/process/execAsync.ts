@@ -193,7 +193,7 @@ export const execAsyncStream = (
 							command,
 							stdout: stdoutComplete,
 							stderr: stderrComplete,
-							exitCode: error.code,
+							exitCode: typeof error.code === "number" ? error.code : undefined,
 							originalError: error,
 						},
 					),
