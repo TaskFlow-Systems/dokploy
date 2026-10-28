@@ -64,6 +64,10 @@ ARG DOKPLOY_FORK_VERSION=off_v0.29.8/Fork_local
 ENV NODE_ENV=production
 ENV DOKPLOY_OFFICIAL_VERSION=$DOKPLOY_OFFICIAL_VERSION
 ENV DOKPLOY_FORK_VERSION=$DOKPLOY_FORK_VERSION
+# Node sizes the young generation from the host's RAM: on a 4 GB server it
+# grows to ~60 MB under load, while the panel's short-lived request garbage
+# fits in far less. A service-level NODE_OPTIONS replaces this value.
+ENV NODE_OPTIONS=--max-semi-space-size=16
 
 # Recommends would add systemd, dbus and X11 libraries; the packages the panel
 # calls are listed instead: openssh-client for git over SSH and ssh-keyscan,
