@@ -48,7 +48,7 @@ Installer сам определяет систему:
 
 ```text
 Dokploy: ghcr.io/agenthits/dokploy:agenthits-dev
-Traefik: traefik:v3.7.14
+Traefik: traefik:v3.7.16
 Postgres: postgres:18.6
 Redis: redis:8.10.2
 ```

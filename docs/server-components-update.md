@@ -6,6 +6,7 @@
 - установщик панели `install-agenthits.sh` (значения по умолчанию, плюс Nixpacks, Railpack, pack и RClone на хосте панели);
 - образ панели `Dockerfile` (Docker, RClone, Railpack, pack);
 - CI `.github/workflows/pull-request.yml` (Nixpacks, Railpack);
+- еженедельный аудит образов `.github/workflows/image-audit.yml` (Traefik, Postgres, Redis);
 - список версий Railpack в форме приложения (значение по умолчанию и список).
 
 Тест `apps/dokploy/__test__/server/component-versions-sync.test.ts` сверяет каждый из этих файлов с `PINNED_VERSIONS` и падает при расхождении.
@@ -16,7 +17,7 @@
 |---|---|---|
 | Node.js (базовый образ панели и CI) | 26.12.1 | `node:26.12.1-bookworm-slim`, последний релиз; ветка 26 — LTS с 2026-10-28 |
 | Docker Engine | 29.9.2 | docker-ce для noble и resolute, amd64 и arm64; в образе панели только docker-ce-cli для bookworm |
-| Traefik | 3.7.14 | последний стабильный релиз (GitHub), образ `traefik:v3.7.14` |
+| Traefik | 3.7.16 | последний стабильный релиз (GitHub), образ `traefik:v3.7.16` |
 | Postgres (база панели) | 18.6 | `postgres:18.6`, более новых тегов 18.x нет |
 | Redis (база панели) | 8.10.2 | `redis:8.10.2`, более новых тегов 8.10.x нет |
 | Nixpacks | 1.41.0 | последний релиз |
@@ -39,7 +40,7 @@ Postgres и Redis относятся к базе панели. На сервер
 ## Как поменять версию
 
 1. Поменять значение в `PINNED_VERSIONS` (`component-versions.ts`). Для Traefik также можно переопределить переменной окружения `TRAEFIK_VERSION`, но для одинаковой установки этого делать не стоит.
-2. Поменять то же значение в `install-agenthits.sh` (значения по умолчанию), `Dockerfile` (ARG) и `.github/workflows/pull-request.yml`. Если тест не проходит, какой-то файл остался со старым значением.
+2. Поменять то же значение в `install-agenthits.sh` (значения по умолчанию), `Dockerfile` (ARG), `.github/workflows/pull-request.yml` и `.github/workflows/image-audit.yml`. Если тест не проходит, какой-то файл остался со старым значением.
 3. Выпустить панель обычным путём: PR, merge, образ.
 4. На каждом сервере нажать Components → Update.
 
