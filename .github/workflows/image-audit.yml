@@ -1,0 +1,44 @@
+name: Image audit
+
+# bun audit sees only the npm dependencies. This scan reads the published panel
+# image: its Debian packages, the Go binaries of the bundled tools (Docker CLI,
+# rclone, Railpack, pack) and the npm packages inside it. It fails on critical
+# and high findings that already have a fix; .trivyignore.yaml lists the ones
+# still waiting for a tool release. GitHub notifies the person who last changed
+# the cron line when a scheduled run fails.
+on:
+  schedule:
+    - cron: "53 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      image:
+        description: Image to scan
+        type: string
+        default: ghcr.io/agenthits/dokploy:agenthits-dev
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by digest: in March 2026 Trivy releases, its images and the
+  # trivy-action tags were replaced with credential stealers (GHSA-69fq-xp46-6x23).
+  # bun-migration-docker-check.yml pins the same image.
+  TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+
+jobs:
+  scan:
+    name: image audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Scan image
+        env:
+          IMAGE: ${{ inputs.image || 'ghcr.io/agenthits/dokploy:agenthits-dev' }}
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src "$TRIVY_IMAGE" image \
+            --image-src remote --scanners vuln --severity CRITICAL,HIGH \
+            --ignore-unfixed --ignorefile .trivyignore.yaml --exit-code 1 \
+            --no-progress "$IMAGE"

@@ -68,7 +68,7 @@ jobs:
       - name: Install Railpack
         if: matrix.job == 'test' && runner.environment == 'github-hosted'
         run:  |
-          export RAILPACK_VERSION=0.40.1
+          export RAILPACK_VERSION=0.42.0
           curl -sSL https://railpack.com/install.sh | bash
           echo "Railpack installed $RAILPACK_VERSION"
       

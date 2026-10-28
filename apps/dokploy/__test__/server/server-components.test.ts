@@ -517,7 +517,7 @@ case "$1" in
 		if [ "$FAKE_CANDIDATE_AFTER_REPO" = 1 ] && [ ! -f "$DOKPLOY_APT_SOURCES_DIR/docker.list" ]; then
 			exit 0
 		fi
-		echo " docker-ce | 5:29.8.2-1~ubuntu.24.04~noble | https://download.docker.com/linux/ubuntu noble/stable amd64 Packages"
+		echo " docker-ce | 5:${PINNED_VERSIONS.docker}-1~ubuntu.24.04~noble | https://download.docker.com/linux/ubuntu noble/stable amd64 Packages"
 		;;
 	policy)
 		case "$2" in
@@ -726,7 +726,7 @@ const runComponentScript = (
 				CALL_LOG: callLog,
 				FAKE_STATE: dir,
 				FAKE_PREVIOUS_ENGINE: "28.3.0",
-				FAKE_TARGET_ENGINE: "29.8.2",
+				FAKE_TARGET_ENGINE: PINNED_VERSIONS.docker,
 				FAKE_OLD_IMAGE: "traefik:v3.6.25",
 				TMPDIR: dir,
 				TRAEFIK_SETTLE_SECONDS: "0",
@@ -763,7 +763,7 @@ const runComponentScript = (
 
 const SPAWN_TEST_TIMEOUT_MS = 30_000;
 const DOCKER_OLD = "5:28.3.0-1~ubuntu.24.04~noble";
-const DOCKER_NEW = "5:29.8.2-1~ubuntu.24.04~noble";
+const DOCKER_NEW = `5:${PINNED_VERSIONS.docker}-1~ubuntu.24.04~noble`;
 const HTTP_CHALLENGE_CONFIG =
 	"certificatesResolvers:\n  letsencrypt:\n    acme:\n      email: admin@example.com\n      httpChallenge:\n        entryPoint: web\n";
 const TLS_CHALLENGE_CONFIG =
@@ -1413,7 +1413,7 @@ describe("buildComponentUpdateScript run order", { timeout: 60_000 }, () => {
 
 			expect(run.status).toBe(0);
 			expect(run.stdout).toContain(
-				"Docker not updated: Docker 29.8.2 is not offered by the Docker apt repository configured on this host.",
+				`Docker not updated: Docker ${PINNED_VERSIONS.docker} is not offered by the Docker apt repository configured on this host.`,
 			);
 			expect(run.stdout).toContain(
 				`Traefik version ${TRAEFIK_VERSION} installed`,
@@ -1499,7 +1499,7 @@ describe("buildComponentUpdateScript run order", { timeout: 60_000 }, () => {
 
 			expect(run.status).toBe(0);
 			expect(run.stdout).toContain(
-				"Docker not updated: Docker 29.8.2 is not in the apt sources, even after adding Docker's repository. The other components continue.",
+				`Docker not updated: Docker ${PINNED_VERSIONS.docker} is not in the apt sources, even after adding Docker's repository. The other components continue.`,
 			);
 			expect(run.stdout).toContain(
 				`Traefik version ${TRAEFIK_VERSION} installed`,
