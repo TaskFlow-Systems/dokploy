@@ -17,7 +17,9 @@ const globalForDb = globalThis as unknown as {
 };
 
 if (!globalForDb.db) {
-	globalForDb.db = drizzle(postgres(dbUrl), {
+	// postgres.js keeps every connection it opens for 30-60 minutes. The panel
+	// is idle most of the time, and each idle backend holds memory in Postgres.
+	globalForDb.db = drizzle(postgres(dbUrl, { idle_timeout: 60 }), {
 		schema,
 	});
 }
