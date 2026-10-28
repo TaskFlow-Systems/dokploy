@@ -105,7 +105,7 @@
     "@types/dockerode": "4.0.2",
     "@types/lodash": "4.17.27",
     "@types/micromatch": "4.0.10",
-    "@types/node": "^24.19.2",
+    "@types/node": "^26.6.5",
     "@types/node-schedule": "2.1.8",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.3.0",
@@ -125,7 +125,7 @@
   },
   "packageManager": "bun@1.4.4",
   "engines": {
-    "node": "^24.22.1",
+    "node": "^26.12.1",
     "bun": ">=1.4.2"
   }
 }

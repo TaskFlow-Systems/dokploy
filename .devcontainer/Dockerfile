@@ -1,5 +1,5 @@
 # Dockerfile for DevContainer
-FROM node:24.22.1-bookworm-slim
+FROM node:26.12.1-bookworm-slim
 
 # Install essential packages
 RUN apt-get update && apt-get install -y \
