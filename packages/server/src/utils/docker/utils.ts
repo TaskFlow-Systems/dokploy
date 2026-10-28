@@ -362,7 +362,9 @@ const sortDiskUsageDetails = (items: DockerDiskUsageDetailItem[]) =>
 interface DockerDiskUsageContainerReference {
 	id: string;
 	image: string;
+	imageId: string;
 	name: string;
+	state?: string;
 }
 
 interface DockerImageInspect {
@@ -410,22 +412,58 @@ const parseJsonArray = <T>(stdout: string): T[] => {
 
 const isDanglingImageName = (name: string) => name === "<none>:<none>";
 
-const isSameImageReference = (
-	containerImage: string,
+const isImageIdReference = (reference: string) =>
+	/^(sha256:)?[a-f0-9]{12,64}$/.test(reference);
+
+const splitImageReference = (reference: string) => {
+	const [repositoryAndTag = reference, digest] = reference.split("@");
+	const lastPathSegment = repositoryAndTag.slice(
+		repositoryAndTag.lastIndexOf("/") + 1,
+	);
+	return {
+		digest,
+		hasTag: lastPathSegment.includes(":"),
+		repositoryAndTag,
+	};
+};
+
+const getImageReferenceName = (reference: string) => {
+	const { digest, hasTag, repositoryAndTag } = splitImageReference(reference);
+	if (hasTag || !digest) {
+		return repositoryAndTag;
+	}
+	return `${repositoryAndTag}@${digest.slice(0, "sha256:".length + 12)}`;
+};
+
+// Docker drops the tag from an image once the tag moves to a newer pull or
+// build, and never stores one for an image pulled by digest; the reference a
+// container was created from still says what the image is.
+const describeUntaggedImage = (references: string[], usedBy: string[]) => {
+	const hasMovedTag = references.some((reference) => {
+		const { digest, hasTag } = splitImageReference(reference);
+		return hasTag && !digest;
+	});
+	if (hasMovedTag) {
+		return "Previous version: the tag now points to another image";
+	}
+	if (references.length > 0) {
+		return "Pulled by digest, no local tag";
+	}
+	return usedBy.length > 0 ? "Untagged local image" : "Dangling local image";
+};
+
+const isContainerOfImage = (
+	container: DockerDiskUsageContainerReference,
 	detail: DockerDiskUsageDetailItem,
 	inspect?: DockerImageInspect,
-) => {
-	const fullId = inspect?.Id ?? "";
-	const shortId = detail.id;
+) =>
+	container.imageId === inspect?.Id ||
+	container.imageId.startsWith(`sha256:${detail.id}`);
 
-	return (
-		containerImage === detail.name ||
-		containerImage === shortId ||
-		containerImage.startsWith(shortId) ||
-		(Boolean(fullId) && containerImage === fullId) ||
-		(Boolean(fullId) && fullId.startsWith(`sha256:${containerImage}`))
-	);
-};
+const formatContainerName = (container: DockerDiskUsageContainerReference) =>
+	container.state && container.state !== "running"
+		? `${container.name} (${container.state})`
+		: container.name;
 
 const formatListValue = (items: string[], emptyValue = "--") =>
 	items.length > 0 ? items.join(", ") : emptyValue;
@@ -452,18 +490,29 @@ export const enrichDockerDiskUsageDetails = (
 				inspect?.RepoTags?.filter((tag: string) => tag !== "<none>:<none>") ??
 				[];
 			const repoDigests = inspect?.RepoDigests ?? [];
-			const usedBy = containers
-				.filter((container) =>
-					isSameImageReference(container.image, detail, inspect),
-				)
-				.map((container) => container.name);
+			const imageContainers = containers
+				.filter((container) => isContainerOfImage(container, detail, inspect))
+				.sort(
+					(a, b) =>
+						Number(b.state === "running") - Number(a.state === "running"),
+				);
+			const usedBy = imageContainers.map(formatContainerName);
+			const isUntagged = isDanglingImageName(detail.name);
+			const references = [
+				...new Set(
+					imageContainers
+						.map((container) => container.image)
+						.filter((reference) => !isImageIdReference(reference)),
+				),
+			];
+			const nameReference = references[0] ?? repoDigests[0];
 			const imagePath = getImagePathFromInspect(inspect);
 			const extraMeta = [
 				{ label: "Full image id", value: fullId },
 				{
 					label: "Source",
-					value: isDanglingImageName(detail.name)
-						? "dangling local image"
+					value: isUntagged
+						? formatListValue(references, "dangling local image")
 						: detail.name,
 				},
 				...(repoTags.length > 0
@@ -487,8 +536,12 @@ export const enrichDockerDiskUsageDetails = (
 						(meta) => meta.label !== "Containers" || usedBy.length === 0,
 					),
 				],
-				subtitle: isDanglingImageName(detail.name)
-					? "Dangling local image"
+				name:
+					isUntagged && nameReference
+						? getImageReferenceName(nameReference)
+						: detail.name,
+				subtitle: isUntagged
+					? describeUntaggedImage(references, usedBy)
 					: detail.subtitle,
 			};
 		}),
@@ -688,26 +741,51 @@ export const limitDockerDiskUsageDetails = (
 	volumes: limitDiskUsageDetailItems(details.volumes, detailLimit),
 });
 
+// docker ps has no image id and prints a bare id instead of the reference once
+// the tag has moved on, so only inspect ties a container to an untagged image.
+const dockerContainerReferenceFormat =
+	'{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"imageId":{{json .Image}},"state":{{json .State.Status}}}';
+
 const getDockerDiskUsageContainerReferences = async (): Promise<
 	DockerDiskUsageContainerReference[]
 > => {
+	const { stdout: idsStdout } = await execAsync("docker ps -aq --no-trunc");
+	const containerIds = idsStdout
+		.split("\n")
+		.map((containerId) => containerId.trim())
+		.filter(Boolean);
+	if (containerIds.length === 0) {
+		return [];
+	}
+
 	const { stdout } = await execAsync(
-		"docker ps -a --no-trunc --format '{{json .}}'",
+		`docker container inspect --format ${quoteShellArg(
+			dockerContainerReferenceFormat,
+		)} ${containerIds.map((containerId) => quoteShellArg(containerId)).join(" ")}`,
 	);
 
 	return parseJsonLines<{
-		ID?: string;
-		Image?: string;
-		Names?: string;
+		id?: string;
+		image?: string;
+		imageId?: string;
+		name?: string;
+		state?: string;
 	}>(stdout).flatMap((container) => {
-		if (!container.ID || !container.Image || !container.Names) {
+		if (
+			!container.id ||
+			!container.image ||
+			!container.imageId ||
+			!container.name
+		) {
 			return [];
 		}
 
 		return {
-			id: container.ID,
-			image: container.Image,
-			name: container.Names,
+			id: container.id,
+			image: container.image,
+			imageId: container.imageId,
+			name: container.name.replace(/^\//, ""),
+			state: container.state,
 		};
 	});
 };
