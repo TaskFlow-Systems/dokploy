@@ -25,10 +25,14 @@ COPY packages/server/package.json ./packages/server/package.json
 # build-stage install kept Bun's isolated store (node_modules/.bun, 1.6 GB) in
 # the image, and packages/server resolved its imports through that store, so
 # the panel loaded every shared dependency into memory twice.
+#
+# The @trpc packages list typescript as a required peer, so the production
+# install also brings the TypeScript 7 compiler, a Go binary the panel never runs.
 FROM deps AS prod-deps
 RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache \
     bun install --production --frozen-lockfile --linker hoisted \
     && rm -f node_modules/dokploy node_modules/@dokploy/api node_modules/@dokploy/schedules \
+    && rm -rf node_modules/typescript node_modules/@typescript node_modules/.bin/tsc \
     && mkdir -p packages/server/node_modules
 
 FROM deps AS build
@@ -61,7 +65,18 @@ ENV NODE_ENV=production
 ENV DOKPLOY_OFFICIAL_VERSION=$DOKPLOY_OFFICIAL_VERSION
 ENV DOKPLOY_FORK_VERSION=$DOKPLOY_FORK_VERSION
 
-RUN apt-get update && apt-get install -y tini curl unzip zip apache2-utils iproute2 rsync jq git-lfs && git lfs install && rm -rf /var/lib/apt/lists/*
+# Recommends would add systemd, dbus and X11 libraries; the packages the panel
+# calls are listed instead: openssh-client for git over SSH and ssh-keyscan,
+# procps for pkill when a deployment is cancelled.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini curl unzip zip apache2-utils iproute2 rsync jq git-lfs openssh-client procps xz-utils netbase \
+    && git lfs install \
+    && rm -rf /var/lib/apt/lists/*
+
+# The panel runs on node and bun. npm, npx and node-gyp only serve the build
+# stages, and npm ships its own copies of packages with open advisories.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/node-gyp \
+    /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/node-gyp
 
 # Copy only the necessary files
 COPY --from=build /usr/src/app/apps/dokploy/.next ./.next
@@ -78,12 +93,21 @@ COPY --from=build /usr/src/app/packages/server/package.json ./packages/server/pa
 COPY --from=build /usr/src/app/packages/server/dist ./packages/server/dist
 
 
-# Install docker
-ARG DOCKER_VERSION=29.8.2
-RUN curl -fsSL https://get.docker.com -o get-docker.sh && sh get-docker.sh --version "$DOCKER_VERSION" && rm get-docker.sh
+# The panel drives the host's Docker daemon through the mounted socket, so it
+# needs only the CLI and its buildx and compose plugins. get.docker.com would
+# also install the engine, containerd and the rootless extras: unused binaries
+# that scanners report.
+ARG DOCKER_VERSION=29.9.2
+RUN . /etc/os-release \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${VERSION_CODENAME} stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends "docker-ce-cli=5:${DOCKER_VERSION}-1~debian.${VERSION_ID}~${VERSION_CODENAME}" docker-buildx-plugin docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install rclone
-ARG RCLONE_VERSION=1.75.1
+ARG RCLONE_VERSION=1.75.2
 RUN apt-get update \
     && apt-get install -y --no-install-recommends unzip \
     && curl -fsSL "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" -o /tmp/rclone.zip \
@@ -102,12 +126,12 @@ RUN curl -sSL https://nixpacks.com/install.sh -o install.sh \
     && bun install -g tsx
 
 # Install Railpack
-ARG RAILPACK_VERSION=0.40.1
+ARG RAILPACK_VERSION=0.42.0
 RUN curl -sSL https://railpack.com/install.sh \
     | RAILPACK_VERSION="$RAILPACK_VERSION" bash -s -- --yes --bin-dir /usr/local/bin
 
 # Install buildpacks
-COPY --from=buildpacksio/pack:0.40.9 /usr/local/bin/pack /usr/local/bin/pack
+COPY --from=buildpacksio/pack:0.40.10 /usr/local/bin/pack /usr/local/bin/pack
 
 EXPOSE 3000
 

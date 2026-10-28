@@ -31,6 +31,8 @@ import { api } from "@/utils/api";
 
 // Railpack versions from https://github.com/railwayapp/railpack/releases
 export const RAILPACK_VERSIONS = [
+	"0.42.0",
+	"0.41.0",
 	"0.40.1",
 	"0.39.0",
 	"0.38.0",
@@ -142,7 +144,7 @@ const mySchema = z.discriminatedUnion("buildType", [
 	}),
 	z.object({
 		buildType: z.literal(BuildType.railpack),
-		railpackVersion: z.string().nullable().default("0.40.1"),
+		railpackVersion: z.string().nullable().default("0.42.0"),
 	}),
 	z.object({
 		buildType: z.literal(BuildType.static),
@@ -283,7 +285,7 @@ export const ShowBuildChooseForm = ({ applicationId }: Props) => {
 					: null,
 			railpackVersion:
 				data.buildType === BuildType.railpack
-					? data.railpackVersion || "0.40.1"
+					? data.railpackVersion || "0.42.0"
 					: null,
 		})
 			.then(async () => {
@@ -545,7 +547,7 @@ export const ShowBuildChooseForm = ({ applicationId }: Props) => {
 															size="sm"
 															onClick={() => {
 																setIsManualRailpackVersion(false);
-																field.onChange("0.40.1");
+																field.onChange("0.42.0");
 															}}
 														>
 															Use predefined versions
@@ -561,7 +563,7 @@ export const ShowBuildChooseForm = ({ applicationId }: Props) => {
 																field.onChange(value);
 															}
 														}}
-														value={field.value ?? "0.40.1"}
+														value={field.value ?? "0.42.0"}
 													>
 														<SelectTrigger>
 															<SelectValue placeholder="Select Railpack version" />
@@ -575,7 +577,7 @@ export const ShowBuildChooseForm = ({ applicationId }: Props) => {
 															{RAILPACK_VERSIONS.map((version) => (
 																<SelectItem key={version} value={version}>
 																	v{version}
-																	{version === "0.40.1" && (
+																	{version === "0.42.0" && (
 																		<Badge
 																			variant="secondary"
 																			className="ml-2 px-1 text-xs"

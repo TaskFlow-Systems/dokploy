@@ -4,14 +4,14 @@
 // when they drift from this object.
 export const PINNED_VERSIONS = {
 	node: "26.12.1",
-	docker: "29.8.2",
+	docker: "29.9.2",
 	traefik: "3.7.14",
 	postgres: "18.6",
 	redis: "8.10.2",
 	nixpacks: "1.41.0",
-	railpack: "0.40.1",
-	buildpacks: "0.40.9",
-	rclone: "1.75.1",
+	railpack: "0.42.0",
+	buildpacks: "0.40.10",
+	rclone: "1.75.2",
 } as const;
 
 export const NIXPACKS_VERSION = PINNED_VERSIONS.nixpacks;

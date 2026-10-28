@@ -6,6 +6,7 @@ on:
     branches: [AgentHits-Dev]
     paths:
       - ".github/workflows/bun-migration-docker-check.yml"
+      - ".trivyignore.yaml"
       - "Dockerfile"
       - "Dockerfile.cloud"
       - "Dockerfile.server"
@@ -58,6 +59,30 @@ jobs:
             test -f /app/packages/server/dist/index.js
             node --input-type=module -e "console.log(await import.meta.resolve(\"@dokploy/server\"))"
           '
+          # The panel calls these at runtime; the image installs them without
+          # apt recommends and without the Docker engine.
+          docker run --rm --entrypoint sh dokploy-bun-check:main -ec '
+            docker --version
+            docker buildx version
+            docker compose version
+            rclone version | head -n 1
+            railpack --version
+            pack --version
+            nixpacks --version
+            git lfs version
+            ssh -V
+            for tool in ssh-keyscan pkill htpasswd rsync jq zip unzip ip tini; do command -v "$tool"; done
+          '
+
+      # Same scan as image-audit.yml, on the image this PR builds.
+      - name: Scan main image
+        env:
+          TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src:ro" -w /src "$TRIVY_IMAGE" image \
+            --image-src docker --scanners vuln --severity CRITICAL,HIGH \
+            --ignore-unfixed --ignorefile .trivyignore.yaml --exit-code 1 \
+            --no-progress dokploy-bun-check:main
 
   service-image-builds:
     runs-on: ubuntu-24.04

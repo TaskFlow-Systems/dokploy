@@ -1,0 +1,21 @@
+# Fixable findings in bundled tools whose latest release still carries them.
+# Each entry expires, so the image audit fails again and the tool gets checked
+# for a new release.
+vulnerabilities:
+  - id: CVE-2026-111943
+    paths:
+      - usr/bin/rclone
+      - usr/local/bin/railpack
+    statement: rclone 1.75.2 and Railpack 0.42.0 are built with Go 1.26.9; the fix needs Go 1.26.10.
+    expired_at: 2026-11-27
+  - id: CVE-2026-78669
+    paths:
+      - usr/libexec/docker/cli-plugins/docker-buildx
+      - usr/libexec/docker/cli-plugins/docker-compose
+    statement: buildx 0.38.1 and compose 5.6.1, the latest releases, use golang.org/x/net below 0.60.0.
+    expired_at: 2026-11-27
+  - id: CVE-2026-17106
+    paths:
+      - usr/libexec/docker/cli-plugins/docker-buildx
+    statement: buildx 0.38.1, the latest release, uses moby/go-archive 0.2.0.
+    expired_at: 2026-11-27
