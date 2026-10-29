@@ -28,8 +28,8 @@ Fork: agenthits-vX.Y.Z
 - Официальный `package.json` version остается semver-версией Dokploy, поэтому
   стандартная логика проверки upstream releases не смешивается с fork metadata.
 - Dashboard update check для форка сравнивает текущий Docker service digest с
-  `ghcr.io/agenthits/dokploy:agenthits-dev`, поэтому UI обновляет установленный
-  сервер из ветки `AgentHits-Dev`.
+  `ghcr.io/agenthits/dokploy:agenthits-stable`, поэтому UI ставит на
+  установленный сервер только выпущенные релизы `agenthits-vX.Y.Z`.
 
 ### Преимущества форка
 
@@ -88,8 +88,8 @@ shows as `agenthits-vX.Y.Z-<commits since the release>-g<short-sha>`.
 - The official `package.json` version remains Dokploy's semver version, so
   upstream release checks are not mixed with fork metadata.
 - The fork dashboard update check compares the current Docker service digest
-  with `ghcr.io/agenthits/dokploy:agenthits-dev`, so the UI updates installed
-  servers from the `AgentHits-Dev` branch.
+  with `ghcr.io/agenthits/dokploy:agenthits-stable`, so the UI installs only
+  published `agenthits-vX.Y.Z` releases on installed servers.
 
 ### Fork advantages
 

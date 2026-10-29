@@ -338,7 +338,7 @@ describe("Dokploy update commands", () => {
 	it("pulls the AgentHits image while the old container still runs", () => {
 		expectPullBeforeUpdate(
 			getAgentHitsUpdateCommand("v0.30.6"),
-			"docker pull ghcr.io/agenthits/dokploy\\:agenthits-dev",
+			"docker pull ghcr.io/agenthits/dokploy\\:agenthits-stable",
 		);
 	});
 
@@ -470,7 +470,7 @@ esac
 });
 
 describe("Dokploy update command", () => {
-	const AGENTHITS_IMAGE = "ghcr.io/agenthits/dokploy:agenthits-dev";
+	const AGENTHITS_IMAGE = "ghcr.io/agenthits/dokploy:agenthits-stable";
 	const PINNED = `sha256:${"c".repeat(64)}`;
 	const FORK_VERSION = "agenthits-v1.0.9-3-g0123456789ab";
 
@@ -557,7 +557,7 @@ esac
 			]);
 			expect(stdout).toContain(UPDATE_IMAGE_PULLED_MARKER);
 			expect(update).toBe(
-				`service update --force --no-resolve-image --image ${AGENTHITS_IMAGE}@${PINNED} --env-add RELEASE_TAG=agenthits-dev --env-add DOKPLOY_OFFICIAL_VERSION=v0.30.7 --env-add DOKPLOY_FORK_VERSION=${FORK_VERSION} --env-add DOKPLOY_KEEP_OLD_IMAGES=2 --env-add DOKPLOY_PREVIOUS_IMAGE=${PREVIOUS} --update-order stop-first --update-failure-action rollback dokploy`,
+				`service update --force --no-resolve-image --image ${AGENTHITS_IMAGE}@${PINNED} --env-add RELEASE_TAG=agenthits-stable --env-add DOKPLOY_OFFICIAL_VERSION=v0.30.7 --env-add DOKPLOY_FORK_VERSION=${FORK_VERSION} --env-add DOKPLOY_KEEP_OLD_IMAGES=2 --env-add DOKPLOY_PREVIOUS_IMAGE=${PREVIOUS} --update-order stop-first --update-failure-action rollback dokploy`,
 			);
 			expect(calls.at(-1)).toBe(update);
 		},
@@ -631,7 +631,7 @@ esac
 						if (url.includes("/token")) {
 							return Response.json({ token: "token" });
 						}
-						if (url.endsWith("/manifests/agenthits-dev")) {
+						if (url.endsWith("/manifests/agenthits-stable")) {
 							return Response.json(
 								{ config: { digest: "sha256:config" } },
 								{ headers: { "docker-content-digest": latestDigest } },

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deletes old GHCR versions of the AgentHits image. Kept: every version tagged
-# agenthits-vX.Y.Z, agenthits-dev or buildcache, the newest KEEP_RECENT other
+# agenthits-vX.Y.Z, agenthits-dev, agenthits-stable or buildcache, the newest KEEP_RECENT other
 # versions, and every manifest a kept image index points at (GHCR lists the
 # platform manifests of an index as separate untagged versions, and deleting
 # them breaks the tagged image).
@@ -19,7 +19,7 @@ versions="$(gh api --paginate "${api}?per_page=100" | jq -s 'add // []')"
 plan="$(jq --argjson keep "$keep_recent" '
 	def protected:
 		(.metadata.container.tags // [])
-		| any(. == "agenthits-dev" or . == "buildcache" or test("^agenthits-v[0-9]+\\.[0-9]+\\.[0-9]+$"));
+		| any(. == "agenthits-dev" or . == "agenthits-stable" or . == "buildcache" or test("^agenthits-v[0-9]+\\.[0-9]+\\.[0-9]+$"));
 	sort_by(.created_at) | reverse
 	| map(select(protected | not)) as $rest
 	| {keep: (map(select(protected)) + $rest[:$keep]), delete: $rest[$keep:]}

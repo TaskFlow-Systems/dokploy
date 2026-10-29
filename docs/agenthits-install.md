@@ -307,9 +307,14 @@ docker version --format '{{.Server.Version}}'
 `docker start dokploy-traefik` безопасен, даже если контейнер уже запущен.
 
 В dashboard кнопка `Check for updates` для AgentHits fork сравнивает текущий
-Docker service image digest с `ghcr.io/agenthits/dokploy:agenthits-dev`.
-Если digest отличается, обновление через UI запускает `docker service update`
-на AgentHits GHCR image, а не на официальный `dokploy/dokploy`.
+Docker service image digest с `ghcr.io/agenthits/dokploy:agenthits-stable`.
+Этот тег указывает на последний выпущенный релиз `agenthits-vX.Y.Z`, поэтому
+UI ставит только релизы, а не каждую сборку ветки `AgentHits-Dev`. Если digest
+отличается и релиз не старше установленной сборки, обновление через UI запускает
+`docker service update` на этот образ, закреплённый по digest, а не на
+официальный `dokploy/dokploy`. Тестовая панель может следить за каждой сборкой
+через переменную `DOKPLOY_AGENTHITS_UPDATE_TAG=agenthits-dev` у сервиса
+`dokploy`.
 
 Обновление на конкретный immutable tag:
 
@@ -355,7 +360,8 @@ echo "YOUR_GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --passwo
 - Fork version обычно зашита в GitHub image build. Передавайте
   `DOKPLOY_FORK_VERSION` вручную только для custom/local images.
 - Dashboard update button в AgentHits fork обновляет из
-  `ghcr.io/agenthits/dokploy:agenthits-dev`.
+  `ghcr.io/agenthits/dokploy:agenthits-stable` (последний релиз). Перевести
+  кнопку на другой релиз можно ручным запуском workflow `AgentHits Stable Tag`.
 - Для rollback используйте тег релиза `agenthits-vX.Y.Z`. Теги
   `agenthits-dev-<short-sha>` живут только для последних ~10 сборок: старые
   версии образа удаляет еженедельная очистка GHCR.

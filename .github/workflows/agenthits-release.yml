@@ -83,3 +83,14 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "$TITLE" \
             --notes-file release-notes.md
+
+  stable:
+    needs: [version, release]
+    if: needs.version.outputs.tag != ''
+    uses: ./.github/workflows/agenthits-stable-tag.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      release-tag: ${{ needs.version.outputs.tag }}
+    secrets: inherit

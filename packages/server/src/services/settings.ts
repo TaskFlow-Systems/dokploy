@@ -50,8 +50,35 @@ export const getDokployImageTag = () => {
 	return process.env.RELEASE_TAG || "latest";
 };
 
+// agenthits-stable names the newest published release, so Update installs
+// releases only. DOKPLOY_AGENTHITS_UPDATE_TAG=agenthits-dev makes a test panel
+// follow every build of AgentHits-Dev instead.
 export const getAgentHitsUpdateTag = () => {
-	return process.env.DOKPLOY_AGENTHITS_UPDATE_TAG?.trim() || "agenthits-dev";
+	return process.env.DOKPLOY_AGENTHITS_UPDATE_TAG?.trim() || "agenthits-stable";
+};
+
+// agenthits-vX.Y.Z is a release, agenthits-vX.Y.Z-N-g<sha> a build N commits
+// after it (git describe).
+const parseAgentHitsVersion = (version: string) => {
+	const match = /^agenthits-v(\d+)\.(\d+)\.(\d+)(?:-(\d+)-g[0-9a-f]+)?$/.exec(
+		version.trim(),
+	);
+	return match ? match.slice(1).map((part) => Number(part ?? 0)) : null;
+};
+
+export const isOlderAgentHitsVersion = (candidate: string, current: string) => {
+	const candidateParts = parseAgentHitsVersion(candidate);
+	const currentParts = parseAgentHitsVersion(current);
+	if (!candidateParts || !currentParts) {
+		return false;
+	}
+	for (const [index, part] of candidateParts.entries()) {
+		const currentPart = currentParts[index] ?? 0;
+		if (part !== currentPart) {
+			return part < currentPart;
+		}
+	}
+	return false;
 };
 
 export const getAgentHitsUpdateImage = () => {
@@ -253,10 +280,17 @@ export const getAgentHitsUpdateData = async (
 		Boolean(currentDigest) &&
 		currentDigest !== latestImageData.latestDigest &&
 		currentDigest !== latestImageData.latestPlatformDigest;
+	// A panel on a build made after the newest release is not offered that older
+	// release: its database may already carry the build's migrations.
+	const latestIsOlder = isOlderAgentHitsVersion(
+		latestImageData.forkVersion,
+		currentVersionData.forkVersion,
+	);
 
 	return {
 		latestVersion: latestImageData.forkVersion,
-		updateAvailable: digestUpdateAvailable || metadataUpdateAvailable,
+		updateAvailable:
+			!latestIsOlder && (digestUpdateAvailable || metadataUpdateAvailable),
 		updateSource: "agenthits",
 		latestImage: latestImageData.image,
 		latestOfficialVersion: latestImageData.officialVersion,
