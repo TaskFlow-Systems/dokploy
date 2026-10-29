@@ -123,7 +123,8 @@ docker service inspect dokploy --format '{{.Spec.TaskTemplate.ContainerSpec.Imag
 ```
 
 Dashboard update button в AgentHits fork проверяет и обновляет image из
-`ghcr.io/agenthits/dokploy:agenthits-dev`.
+`ghcr.io/agenthits/dokploy:agenthits-stable`: это последний выпущенный релиз
+`agenthits-vX.Y.Z`. Сборку новее этого релиза кнопка не откатывает назад.
 
 Подробная инструкция: [docs/agenthits-install.md](docs/agenthits-install.md).
 
@@ -241,7 +242,9 @@ docker service inspect dokploy --format '{{.Spec.TaskTemplate.ContainerSpec.Imag
 ```
 
 The dashboard update button in the AgentHits fork checks and updates the image
-from `ghcr.io/agenthits/dokploy:agenthits-dev`.
+from `ghcr.io/agenthits/dokploy:agenthits-stable`, the latest published
+`agenthits-vX.Y.Z` release. It never moves a build newer than that release back
+to it.
 
 Full guide: [docs/agenthits-install.md](docs/agenthits-install.md).
 
