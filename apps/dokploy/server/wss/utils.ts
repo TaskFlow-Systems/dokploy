@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -104,6 +105,34 @@ export const parseResizeMessage = (data: string) => {
 	}
 	return null;
 };
+
+// Killing a `docker exec` client leaves its shell running in the container: the
+// daemon keeps the terminal open, so the shell never gets a hangup. Every
+// process of a terminal session inherits this marker, so closing the session
+// can hang up its shell the way closing an SSH session does.
+export const newTerminalSessionMarker = () =>
+	`DOKPLOY_TERMINAL_SESSION=${randomBytes(16).toString("hex")}`;
+
+// Only the session's first process gets the hangup, so a shell passes it on to
+// its jobs and a process started with nohup keeps running, as over SSH. The
+// script avoids single quotes and backslashes because the SSH path quotes it.
+export const getTerminalHangupArgs = (
+	containerId: string,
+	shell: string,
+	marker: string,
+) => [
+	"exec",
+	containerId,
+	shell,
+	"-c",
+	`marker="${marker}"
+for dir in /proc/[0-9]*; do
+	grep -qF "$marker" "$dir/environ" 2>/dev/null || continue
+	parent=$(sed -n "s/^PPid:[[:space:]]*//p" "$dir/status" 2>/dev/null)
+	grep -qF "$marker" "/proc/$parent/environ" 2>/dev/null || kill -HUP "\${dir#/proc/}" 2>/dev/null
+done
+exit 0`,
+];
 
 export const getShell = () => {
 	if (IS_CLOUD) {

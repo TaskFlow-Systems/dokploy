@@ -23,12 +23,14 @@ vi.mock("@dokploy/server/utils/process/execAsync", () => ({
 
 const {
 	cleanupOldDokployImages,
+	getAgentHitsReloadCommand,
 	getAgentHitsUpdateCommand,
 	getDokployImageCleanupCommand,
 	getDokployImageKeepCount,
 	getDokployImageRepositories,
 	getDokployImages,
 	getOfficialUpdateCommand,
+	reloadDockerResource,
 } = await import("@dokploy/server/services/settings");
 const { UPDATE_IMAGE_PULLED_MARKER } = await import(
 	"@dokploy/server/services/web-server-update"
@@ -370,5 +372,98 @@ describe("Dokploy update commands", () => {
 		expect(getDokployImageCleanupCommand(3, null)).toContain(
 			"docker image ls -a -q",
 		);
+	});
+});
+
+describe("Dokploy reload command", () => {
+	const DIGEST = `ghcr.io/agenthits/dokploy@sha256:${"b".repeat(64)}`;
+
+	const runReload = (env: Record<string, string>) => {
+		const dir = mkdtempSync(join(tmpdir(), "dokploy-reload-"));
+		const log = join(dir, "log");
+		try {
+			writeFileSync(
+				join(dir, "docker"),
+				`#!/bin/sh
+echo "$*" >> "${log}"
+case "$*" in
+	"ps -q"*) [ -n "$NO_TASK" ] || echo task1 ;;
+	"inspect --format {{.Image}} task1") echo sha256:cur ;;
+	"image inspect --format {{index .RepoDigests 0}} sha256:cur")
+		if [ -n "$NO_DIGEST" ]; then echo "index out of range: 0" >&2; exit 1; fi
+		echo "${DIGEST}" ;;
+esac
+`,
+			);
+			chmodSync(join(dir, "docker"), 0o755);
+			writeFileSync(log, "");
+			let status = 0;
+			try {
+				execFileSync("sh", ["-c", getAgentHitsReloadCommand()], {
+					env: {
+						...process.env,
+						...env,
+						PATH: `${dir}:${process.env.PATH}`,
+					},
+					stdio: "pipe",
+				});
+			} catch (error) {
+				status = (error as { status: number }).status;
+			}
+			return { status, calls: readFileSync(log, "utf8").trim().split("\n") };
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	};
+
+	it(
+		"restarts the running build by digest without pulling",
+		() => {
+			const { status, calls } = runReload({});
+			expect(status).toBe(0);
+			expect(calls.some((call) => call.startsWith("pull"))).toBe(false);
+			expect(calls.at(-1)).toBe(
+				`service update --force --no-resolve-image --image ${DIGEST} --update-order stop-first --update-failure-action rollback dokploy`,
+			);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"falls back to the image id for a build without a registry digest",
+		() => {
+			const { status, calls } = runReload({ NO_DIGEST: "1" });
+			expect(status).toBe(0);
+			expect(calls.at(-1)).toContain("--image sha256:cur ");
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"does not restart the panel when its running image is unknown",
+		() => {
+			const { status, calls } = runReload({ NO_TASK: "1" });
+			expect(status).toBe(1);
+			expect(calls.some((call) => call.startsWith("service update"))).toBe(
+				false,
+			);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it("reloads an AgentHits panel without the update command", async () => {
+		vi.stubEnv("DOKPLOY_UPDATE_SOURCE", "agenthits");
+		execAsync.mockReset();
+		execAsync
+			.mockResolvedValueOnce({ stdout: "service\n", stderr: "" })
+			.mockResolvedValueOnce({ stdout: "", stderr: "" });
+		try {
+			await reloadDockerResource("dokploy", undefined, "v0.30.6");
+
+			expect(execAsync).toHaveBeenLastCalledWith(getAgentHitsReloadCommand());
+			expect(execAsync.mock.lastCall?.[0]).not.toContain("docker pull");
+		} finally {
+			vi.unstubAllEnvs();
+		}
 	});
 });

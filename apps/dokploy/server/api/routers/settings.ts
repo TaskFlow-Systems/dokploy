@@ -100,6 +100,7 @@ import { parse, stringify } from "yaml";
 import { z } from "zod";
 import { audit } from "@/server/api/utils/audit";
 import { assertLocalHostAccess } from "@/server/api/utils/local-host-access";
+import { logPanelRestart } from "@/server/api/utils/panel-restart-log";
 import {
 	assertProtectedResourceAccess,
 	hasProtectedResourceAccess,
@@ -185,6 +186,7 @@ export const settingsRouter = createTRPCRouter({
 		if (IS_CLOUD) {
 			return true;
 		}
+		logPanelRestart("Reload", ctx);
 		await reloadDockerResource("dokploy", undefined, packageInfo.version);
 		await audit(ctx, {
 			action: "reload",
@@ -887,7 +889,7 @@ export const settingsRouter = createTRPCRouter({
 				});
 			}
 			if (data.updateAvailable) {
-				startServerUpdate(
+				const started = startServerUpdate(
 					data.updateSource === "agenthits"
 						? getAgentHitsUpdateCommand(
 								packageInfo.version,
@@ -900,6 +902,12 @@ export const settingsRouter = createTRPCRouter({
 						? getAgentHitsUpdateImage()
 						: getOfficialUpdateImage(data.latestVersion ?? ""),
 				);
+				if (started) {
+					logPanelRestart(
+						`Update to ${data.latestVersion ?? "the latest version"}`,
+						ctx,
+					);
+				}
 				await audit(ctx, {
 					action: "update",
 					resourceType: "settings",

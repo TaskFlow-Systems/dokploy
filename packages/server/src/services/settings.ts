@@ -665,6 +665,29 @@ docker service update --force \\
 `;
 };
 
+// The service names a moving tag such as `agenthits-dev`, and swarm pulls a
+// tag again whenever it starts a task, so a plain forced restart can come up on
+// a newer build. Reload pins the image the panel runs now: by digest, which
+// swarm does not pull when the image is present, or by image id for a build
+// that never came from a registry.
+export const getAgentHitsReloadCommand = () => `
+running_tasks=$(${DOKPLOY_RUNNING_TASKS})
+running_image=""
+if [ -n "$running_tasks" ]; then
+	running_image=$(docker inspect --format '{{.Image}}' $running_tasks 2>/dev/null | head -n 1)
+fi
+if [ -z "$running_image" ]; then
+	echo "The image of the running panel could not be found, so the panel was not restarted." >&2
+	exit 1
+fi
+reload_image=$(docker image inspect --format '{{index .RepoDigests 0}}' "$running_image" 2>/dev/null || true)
+docker service update --force --no-resolve-image \\
+	--image "\${reload_image:-$running_image}" \\
+	--update-order stop-first \\
+	--update-failure-action rollback \\
+	dokploy
+`;
+
 export const getOfficialUpdateImage = (version: string) =>
 	`dokploy/dokploy:${version}`;
 
@@ -980,7 +1003,7 @@ export const reloadDockerResource = async (
 			}
 
 			command = isAgentHitsUpdateChannel(version || "")
-				? getAgentHitsUpdateCommand(version || "")
+				? getAgentHitsReloadCommand()
 				: `docker service update --force --image dokploy/dokploy:${imageTag} ${resourceName}`;
 		} else {
 			command = `docker service update --force ${resourceName}`;

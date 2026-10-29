@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import type http from "node:http";
 import { findServerById, IS_CLOUD, validateRequest } from "@dokploy/server";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
+import { quoteShellArgs } from "@dokploy/server/utils/shell";
 import { spawn } from "node-pty";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
@@ -11,8 +13,10 @@ import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
 import { rejectTerminalWithoutSuperSession } from "./super-session";
 import {
+	getTerminalHangupArgs,
 	isValidContainerId,
 	isValidShell,
+	newTerminalSessionMarker,
 	parseResizeMessage,
 	parseTerminalSize,
 } from "./utils";
@@ -76,6 +80,8 @@ export const setupDockerContainerTerminalWebSocketServer = (
 
 		// Default to 'sh' if no shell specified
 		const shell = activeWay || "sh";
+		const sessionMarker = newTerminalSessionMarker();
+		const hangupArgs = getTerminalHangupArgs(containerId, shell, sessionMarker);
 
 		if (
 			!(await canAccessDockerTerminalWebSocket({
@@ -130,6 +136,8 @@ export const setupDockerContainerTerminalWebSocketServer = (
 							"docker",
 							"exec",
 							"-it",
+							"-e",
+							sessionMarker,
 							"-w",
 							"/",
 							containerId,
@@ -143,10 +151,13 @@ export const setupDockerContainerTerminalWebSocketServer = (
 								return;
 							}
 
+							let hangingUp = false;
 							stream
 								.on("close", (code: number, _signal: string) => {
 									ws.send(`\nContainer closed with code: ${code}\n`);
-									conn.end();
+									if (!hangingUp) {
+										conn.end();
+									}
 								})
 								.on("data", (data: string) => {
 									_stdout += data.toString();
@@ -181,9 +192,29 @@ export const setupDockerContainerTerminalWebSocketServer = (
 							});
 
 							ws.on("close", () => {
-								stream.end();
-								// Ensure SSH connection is closed when WebSocket closes
-								conn.end();
+								hangingUp = true;
+								const endConnection = () => {
+									stream.end();
+									conn.end();
+								};
+								// Ending the connection first would kill the hangup with it.
+								const fallback = setTimeout(endConnection, 10_000);
+								conn.exec(
+									quoteShellArgs(["docker", ...hangupArgs]),
+									(hangupError, hangup) => {
+										if (hangupError) {
+											clearTimeout(fallback);
+											endConnection();
+											return;
+										}
+										hangup.on("close", () => {
+											clearTimeout(fallback);
+											endConnection();
+										});
+										hangup.resume();
+										hangup.stderr.resume();
+									},
+								);
 							});
 						});
 					})
@@ -209,7 +240,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				}
 				const ptyProcess = spawn(
 					"docker",
-					["exec", "-it", "-w", "/", containerId, shell],
+					["exec", "-it", "-e", sessionMarker, "-w", "/", containerId, shell],
 					{ cols, rows },
 				);
 
@@ -222,6 +253,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				});
 				ws.on("close", () => {
 					ptyProcess.kill();
+					execFile("docker", hangupArgs, () => {});
 				});
 				ws.on("message", (message) => {
 					try {
