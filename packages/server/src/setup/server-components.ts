@@ -1,5 +1,10 @@
 import { PINNED_VERSIONS } from "./component-versions";
-import { rcloneInstallCommand } from "./server-setup";
+import {
+	installScriptDownload,
+	NIXPACKS_INSTALL_SCRIPT_URLS,
+	RAILPACK_INSTALL_SCRIPT_URLS,
+	rcloneInstallCommand,
+} from "./server-setup";
 import { runSshCommand } from "./ssh-command";
 import {
 	buildTraefikCreateWithImage,
@@ -552,12 +557,12 @@ fi
 		case "nixpacks":
 			return `
 echo "Updating Nixpacks to ${PINNED_VERSIONS.nixpacks}"
-nixpacks_installer="$(mktemp)"
-if ! curl -fsSL https://nixpacks.com/install.sh -o "$nixpacks_installer" || [ ! -s "$nixpacks_installer" ] || ! bash -n "$nixpacks_installer"; then
-	rm -f "$nixpacks_installer"
-	echo "Error: the Nixpacks install script could not be downloaded or checked; Nixpacks was not changed." >&2
-	exit 1
-fi
+${installScriptDownload({
+	label: "Nixpacks",
+	name: "nixpacks",
+	urls: NIXPACKS_INSTALL_SCRIPT_URLS,
+	outcome: "Nixpacks was not changed.",
+})}
 if ! $SUDO_CMD env NIXPACKS_VERSION=${PINNED_VERSIONS.nixpacks} bash "$nixpacks_installer"; then
 	rm -f "$nixpacks_installer"
 	echo "Error: the Nixpacks install script failed." >&2
@@ -569,12 +574,12 @@ echo "Nixpacks version ${PINNED_VERSIONS.nixpacks} installed ✅"
 		case "railpack":
 			return `
 echo "Updating Railpack to ${PINNED_VERSIONS.railpack}"
-railpack_installer="$(mktemp)"
-if ! curl -fsSL https://railpack.com/install.sh -o "$railpack_installer" || [ ! -s "$railpack_installer" ] || ! bash -n "$railpack_installer"; then
-	rm -f "$railpack_installer"
-	echo "Error: the Railpack install script could not be downloaded or checked; Railpack was not changed." >&2
-	exit 1
-fi
+${installScriptDownload({
+	label: "Railpack",
+	name: "railpack",
+	urls: RAILPACK_INSTALL_SCRIPT_URLS,
+	outcome: "Railpack was not changed.",
+})}
 if ! $SUDO_CMD env RAILPACK_VERSION=${PINNED_VERSIONS.railpack} bash "$railpack_installer"; then
 	rm -f "$railpack_installer"
 	echo "Error: the Railpack install script failed." >&2

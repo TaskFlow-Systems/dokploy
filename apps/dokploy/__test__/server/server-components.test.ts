@@ -28,6 +28,7 @@ import {
 	parseComponentVersions,
 	type UpdatableComponent,
 } from "@dokploy/server/setup/server-components";
+import { RAILPACK_INSTALL_SCRIPT_URLS } from "@dokploy/server/setup/server-setup";
 import {
 	buildTraefikCreateCommand,
 	buildTraefikCreateWithImage,
@@ -251,10 +252,10 @@ describe("buildComponentUpdateScript", () => {
 		const script = buildComponentUpdateScript(["nixpacks", "railpack"]);
 
 		expect(script).toContain(
-			'curl -fsSL https://nixpacks.com/install.sh -o "$nixpacks_installer"',
+			"for nixpacks_installer_url in https://nixpacks.com/install.sh; do",
 		);
 		expect(script).toContain(
-			'curl -fsSL https://railpack.com/install.sh -o "$railpack_installer"',
+			`for railpack_installer_url in ${RAILPACK_INSTALL_SCRIPT_URLS.join(" ")}; do`,
 		);
 		expect(script).toContain('bash -n "$nixpacks_installer"');
 		expect(script).not.toContain('bash -c "$(curl');
@@ -1587,6 +1588,46 @@ describe("buildComponentUpdateScript run order", { timeout: 60_000 }, () => {
 			expect(run.stdout).toContain(
 				`Railpack version ${RAILPACK_VERSION} installed`,
 			);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+	it(
+		"installs Railpack from the GitHub copy of the install script when railpack.com fails",
+		() => {
+			const run = runComponentScript(["railpack"], {
+				env: { FAKE_CURL_FAILS_FOR: "railpack.com" },
+			});
+
+			expect(run.status).toBe(0);
+			expect(
+				run.calls.some((call) =>
+					call.startsWith(
+						"curl -fsSL https://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh -o ",
+					),
+				),
+			).toBe(true);
+			expect(run.stderr).toContain(
+				"The Railpack install script could not be downloaded or checked from https://railpack.com/install.sh.",
+			);
+			expect(run.stdout).toContain(
+				`Railpack version ${RAILPACK_VERSION} installed`,
+			);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"fails the update when neither copy of the Railpack install script can be downloaded",
+		() => {
+			const run = runComponentScript(["railpack"], {
+				env: { FAKE_CURL_FAILS_FOR: "install.sh" },
+			});
+
+			expect(run.status).not.toBe(0);
+			expect(run.stderr).toContain(
+				"the Railpack install script could not be downloaded or checked; Railpack was not changed.",
+			);
+			expect(run.stdout).not.toContain("Railpack version");
 		},
 		SPAWN_TEST_TIMEOUT_MS,
 	);

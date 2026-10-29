@@ -12,6 +12,7 @@ import path from "node:path";
 import {
 	createTraefikInstance,
 	defaultCommand,
+	RAILPACK_INSTALL_SCRIPT_URLS,
 	reportDockerVersion,
 } from "@dokploy/server";
 import {
@@ -129,7 +130,8 @@ const setupStep = (script: string, marker: string) => {
 
 // Runs one step as the setup script runs it: under set -e, with a PATH that holds only
 // the fake curl and the tools the step needs, so nixpacks, railpack and pack are absent.
-const runSetupStep = (step: string, curlMode: "ok" | "fail") => {
+// failsFor fails only the downloads whose URL contains it.
+const runSetupStep = (step: string, curlMode: "ok" | "fail", failsFor = "") => {
 	const dir = mkdtempSync(path.join(tmpdir(), "dokploy-setup-step-"));
 	try {
 		const binDir = path.join(dir, "bin");
@@ -142,6 +144,11 @@ const runSetupStep = (step: string, curlMode: "ok" | "fail") => {
 			curl,
 			`#!/bin/sh
 if [ "$FAKE_CURL_MODE" = fail ]; then exit 22; fi
+if [ -n "$FAKE_CURL_FAILS_FOR" ]; then
+	case "$*" in
+		*"$FAKE_CURL_FAILS_FOR"*) exit 22 ;;
+	esac
+fi
 out=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then out="$2"; fi
@@ -165,6 +172,7 @@ printf '%s\\n' 'echo fake installer "$NIXPACKS_VERSION$RAILPACK_VERSION"' > "$ou
 				...process.env,
 				PATH: `${dir}:${binDir}`,
 				FAKE_CURL_MODE: curlMode,
+				FAKE_CURL_FAILS_FOR: failsFor,
 			},
 		});
 	} finally {
@@ -192,14 +200,20 @@ describe("install scripts in the server setup", () => {
 			const script = defaultCommand(isBuildServer);
 
 			expect(script).toContain(
-				'curl -fsSL https://nixpacks.com/install.sh -o "$nixpacks_installer"',
+				"for nixpacks_installer_url in https://nixpacks.com/install.sh; do",
+			);
+			expect(script).toContain(
+				'curl -fsSL "$nixpacks_installer_url" -o "$nixpacks_installer"',
 			);
 			expect(script).toContain('bash -n "$nixpacks_installer"');
 			expect(script).toContain(
 				`env NIXPACKS_VERSION=${NIXPACKS_VERSION} bash "$nixpacks_installer"`,
 			);
 			expect(script).toContain(
-				'curl -fsSL https://railpack.com/install.sh -o "$railpack_installer"',
+				`for railpack_installer_url in ${RAILPACK_INSTALL_SCRIPT_URLS.join(" ")}; do`,
+			);
+			expect(script).toContain(
+				'curl -fsSL "$railpack_installer_url" -o "$railpack_installer"',
 			);
 			expect(script).toContain('bash -n "$railpack_installer"');
 			expect(script).toContain(
@@ -246,6 +260,37 @@ describe("install scripts in the server setup", () => {
 		expect(result.stdout).toContain(
 			`Railpack version ${RAILPACK_VERSION} installed`,
 		);
+	});
+
+	it("installs Railpack from the GitHub copy of the install script when railpack.com fails", () => {
+		const result = runSetupStep(
+			setupStep(defaultCommand(true), 'Installing Railpack"'),
+			"ok",
+			"railpack.com",
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain(
+			"The Railpack install script could not be downloaded or checked from https://railpack.com/install.sh.",
+		);
+		expect(result.stdout).toContain(`fake installer ${RAILPACK_VERSION}`);
+		expect(result.stdout).toContain(
+			`Railpack version ${RAILPACK_VERSION} installed`,
+		);
+	});
+
+	it("stops the setup when neither copy of the Railpack install script can be downloaded", () => {
+		const result = runSetupStep(
+			setupStep(defaultCommand(true), 'Installing Railpack"'),
+			"ok",
+			"install.sh",
+		);
+
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(
+			"could not be downloaded or checked from https://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh.",
+		);
+		expect(result.stdout).not.toContain("Railpack version");
 	});
 
 	it("stops the setup when the RClone download fails", () => {

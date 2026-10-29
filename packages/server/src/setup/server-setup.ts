@@ -792,27 +792,58 @@ ${buildTraefikTlsMigrationStep()}
 	return command;
 };
 
+export const NIXPACKS_INSTALL_SCRIPT_URLS = ["https://nixpacks.com/install.sh"];
+
+// railpack.com only redirects through Cloudflare to the script on GitHub, and some
+// networks get a 525 from Cloudflare there, so the GitHub copy is the fallback.
+export const RAILPACK_INSTALL_SCRIPT_URLS = [
+	"https://railpack.com/install.sh",
+	"https://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh",
+];
+
 // A failed download must fail the setup. Piping curl into bash, or running it inside
 // $(...), runs nothing when the download fails and still reports success.
+export const installScriptDownload = ({
+	label,
+	name,
+	urls,
+	outcome,
+}: {
+	label: string;
+	name: string;
+	urls: string[];
+	outcome: string;
+}) => `
+${name}_installer="$(mktemp)"
+${name}_installer_ok=0
+for ${name}_installer_url in ${urls.join(" ")}; do
+	if curl -fsSL "$${name}_installer_url" -o "$${name}_installer" && [ -s "$${name}_installer" ] && bash -n "$${name}_installer"; then
+		${name}_installer_ok=1
+		break
+	fi
+	echo "The ${label} install script could not be downloaded or checked from $${name}_installer_url." >&2
+done
+if [ "$${name}_installer_ok" != 1 ]; then
+	rm -f "$${name}_installer"
+	echo "Error: the ${label} install script could not be downloaded or checked; ${outcome}" >&2
+	exit 1
+fi
+`;
+
 const installScriptRun = ({
 	label,
-	url,
+	urls,
 	name,
 	variable,
 	version,
 }: {
 	label: string;
-	url: string;
+	urls: string[];
 	name: string;
 	variable: string;
 	version: string;
 }) => `
-		${name}_installer="$(mktemp)"
-		if ! curl -fsSL ${url} -o "$${name}_installer" || [ ! -s "$${name}_installer" ] || ! bash -n "$${name}_installer"; then
-			rm -f "$${name}_installer"
-			echo "Error: the ${label} install script could not be downloaded or checked; ${label} was not installed." >&2
-			exit 1
-		fi
+${installScriptDownload({ label, name, urls, outcome: `${label} was not installed.` })}
 		if ! $SUDO_CMD env ${variable}=${version} bash "$${name}_installer"; then
 			rm -f "$${name}_installer"
 			echo "Error: the ${label} install script failed." >&2
@@ -828,7 +859,7 @@ const installNixpacks = () => `
 	    export NIXPACKS_VERSION=${NIXPACKS_VERSION}
 ${installScriptRun({
 	label: "Nixpacks",
-	url: "https://nixpacks.com/install.sh",
+	urls: NIXPACKS_INSTALL_SCRIPT_URLS,
 	name: "nixpacks",
 	variable: "NIXPACKS_VERSION",
 	version: NIXPACKS_VERSION,
@@ -844,7 +875,7 @@ const installRailpack = () => `
 	    export RAILPACK_VERSION=${RAILPACK_VERSION}
 ${installScriptRun({
 	label: "Railpack",
-	url: "https://railpack.com/install.sh",
+	urls: RAILPACK_INSTALL_SCRIPT_URLS,
 	name: "railpack",
 	variable: "RAILPACK_VERSION",
 	version: RAILPACK_VERSION,
