@@ -18,6 +18,7 @@ import {
 	DOKPLOY_KEEP_IMAGES_MIN,
 	diskHistoryInputSchema,
 	dockerDiskUsageDetailLimitSchema,
+	dockerRow,
 	filterProtectedTraefikEntries,
 	findServerById,
 	getAgentHitsUpdateCommand,
@@ -40,6 +41,7 @@ import {
 	HOST_STACK_COMPONENTS,
 	hostStackRefusals,
 	IS_CLOUD,
+	isHostDockerUpgradeActive,
 	isHostStackUiComponent,
 	isHostStackUpdateRunning,
 	isServerUpdateRunning,
@@ -53,6 +55,8 @@ import {
 	readDirectory,
 	readEnvironmentVariableList,
 	readEnvironmentVariables,
+	readHostDockerUpgradeStatus,
+	readHostDockerVersion,
 	readHostStackRows,
 	readMainConfig,
 	readMonitoringConfig,
@@ -65,6 +69,7 @@ import {
 	resolveDockerDiskUsageDetailLimit,
 	sendDockerCleanupNotifications,
 	setupGPUSupport,
+	startHostDockerUpgrade,
 	startLogCleanup,
 	startServerUpdate,
 	stopLogCleanup,
@@ -258,6 +263,13 @@ export const settingsRouter = createTRPCRouter({
 					message: refusals.join(" "),
 				});
 			}
+			if (isHostDockerUpgradeActive(await readHostDockerUpgradeStatus())) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message:
+						"Docker Engine is being upgraded on this host. Try again when it finishes.",
+				});
+			}
 			const releaseHostStackLock = isServerUpdateRunning()
 				? null
 				: acquireHostStackUpdateLock();
@@ -294,6 +306,77 @@ export const settingsRouter = createTRPCRouter({
 						emit.complete();
 					});
 			});
+		}),
+	hostDockerUpgrade: adminProcedure.query(async ({ ctx }) => {
+		await assertLocalHostAccess(ctx);
+		if (IS_CLOUD) {
+			return null;
+		}
+		return await readHostDockerUpgradeStatus();
+	}),
+	upgradeHostDocker: adminProcedure
+		.meta({
+			openapi: {
+				path: "/settings/upgrade-host-docker",
+				method: "POST",
+				override: true,
+				enabled: false,
+			},
+		})
+		.mutation(async ({ ctx }) => {
+			await assertLocalHostAccess(ctx);
+			if (IS_CLOUD) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "The panel host components are not managed here.",
+				});
+			}
+			const docker = dockerRow(await readHostDockerVersion());
+			if (!docker.outdated) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message:
+						docker.installed === null
+							? "The installed Docker Engine version could not be read on the panel host."
+							: `Docker Engine already runs ${docker.installed}.`,
+				});
+			}
+			const releaseHostStackLock = isServerUpdateRunning()
+				? null
+				: acquireHostStackUpdateLock();
+			if (!releaseHostStackLock) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message:
+						"Another update of this panel host is running. Try again when it finishes.",
+				});
+			}
+			try {
+				if (isHostDockerUpgradeActive(await readHostDockerUpgradeStatus())) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message: "Docker Engine is already being upgraded on this host.",
+					});
+				}
+				await audit(ctx, {
+					action: "update",
+					resourceType: "settings",
+					resourceName: "panel-host",
+					metadata: { components: ["docker"] },
+				});
+				await startHostDockerUpgrade(docker.installed);
+			} catch (error) {
+				if (error instanceof TRPCError) {
+					throw error;
+				}
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: error instanceof Error ? error.message : String(error),
+				});
+			} finally {
+				releaseHostStackLock();
+			}
+			return await readHostDockerUpgradeStatus();
 		}),
 	toggleDashboard: adminProcedure
 		.input(apiEnableDashboard)
@@ -793,7 +876,10 @@ export const settingsRouter = createTRPCRouter({
 			const keepImages = input?.keepImages;
 			const data = await getUpdateData(packageInfo.version);
 			// After the await: a host-stack update can start while the update check runs.
-			if (isHostStackUpdateRunning()) {
+			if (
+				isHostStackUpdateRunning() ||
+				isHostDockerUpgradeActive(await readHostDockerUpgradeStatus())
+			) {
 				throw new TRPCError({
 					code: "CONFLICT",
 					message:

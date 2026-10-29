@@ -15,7 +15,7 @@ export const HOST_STACK_UI_COMPONENTS = ["traefik", "redis"] as const;
 
 export type HostStackUiComponent = (typeof HOST_STACK_UI_COMPONENTS)[number];
 
-export type HostStackAction = "panel" | "ui" | "manual";
+export type HostStackAction = "panel" | "ui" | "docker" | "manual";
 
 export type HostStackStatus = "current" | "outdated" | "unknown";
 
@@ -54,7 +54,7 @@ const UNKNOWN_REASON =
 const PANEL_UNKNOWN_REASON =
 	"The update check did not return a version for this panel.";
 const DOCKER_REASON =
-	"Docker Engine upgrades restart the daemon, which stops this panel. Run them only in the maintenance window.";
+	"Upgrading restarts Docker: every site on this server and this panel stop for a minute or two. The upgrade runs on the host and rolls Docker back by itself if the services do not come back healthy.";
 const POSTGRES_REASON =
 	"Postgres changes only in the maintenance window, and keeps its major version.";
 
@@ -63,7 +63,8 @@ const HOST_STACK_REFUSALS: Record<
 	string
 > = {
 	panel: "The panel is updated from the Web Server Update dialog.",
-	docker: `Docker Engine is not upgraded from the panel because the daemon restart stops it. In the maintenance window run: ${DOCKER_UPGRADE_COMMAND}`,
+	docker:
+		"Docker Engine is upgraded with its own button in the Panel host components list, because the daemon restart stops this panel.",
 	postgres:
 		"Postgres is not updated from the panel, and its major version never changes here. In the maintenance window run the host update with POSTGRES_IMAGE set to the image Postgres runs now (see the Panel host components list).",
 };
@@ -145,12 +146,12 @@ const panelRow = ({
 	};
 };
 
-const dockerRow = (readout: string | null): HostStackRow => {
+export const dockerRow = (readout: string | null): HostStackRow => {
 	const target = PINNED_VERSIONS.docker;
 	const installed = versionOf(readout);
 	if (installed === null) {
 		return {
-			...unknownRow("docker", target, "manual"),
+			...unknownRow("docker", target, "docker"),
 			command: DOCKER_UPGRADE_COMMAND,
 		};
 	}
@@ -161,7 +162,7 @@ const dockerRow = (readout: string | null): HostStackRow => {
 		target,
 		status: outdated ? "outdated" : "current",
 		outdated,
-		action: "manual",
+		action: "docker",
 		reason: DOCKER_REASON,
 		command: DOCKER_UPGRADE_COMMAND,
 	};

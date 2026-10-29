@@ -53,14 +53,14 @@ describe("buildHostStackRows", () => {
 		}
 	});
 
-	it("keeps the reason of the maintenance-window steps even when they are current", () => {
+	it("keeps the downtime and maintenance-window reasons even when the rows are current", () => {
 		const rows = rowsFor({});
 
 		expect(rowNamed(rows, "docker")).toMatchObject({
-			action: "manual",
+			action: "docker",
 			command: "DOCKER_ENGINE_UPGRADE=1 bash install-agenthits.sh update",
 		});
-		expect(rowNamed(rows, "docker").reason).toContain("maintenance window");
+		expect(rowNamed(rows, "docker").reason).toContain("restarts Docker");
 		expect(rowNamed(rows, "postgres")).toMatchObject({
 			action: "manual",
 			command: null,
@@ -83,17 +83,17 @@ describe("buildHostStackRows", () => {
 		}
 	});
 
-	it("marks Docker Engine behind its pin as a maintenance-window step with the engine upgrade command", () => {
+	it("offers the panel's own upgrade for Docker Engine behind its pin and keeps the manual command", () => {
 		const docker = rowNamed(rowsFor({ docker: "29.4.1" }), "docker");
 
 		expect(docker).toMatchObject({
 			installed: "29.4.1",
 			target: PINNED_VERSIONS.docker,
 			outdated: true,
-			action: "manual",
+			action: "docker",
 			command: "DOCKER_ENGINE_UPGRADE=1 bash install-agenthits.sh update",
 		});
-		expect(docker.reason).toContain("maintenance window");
+		expect(docker.reason).toContain("rolls Docker back");
 	});
 
 	it("compares Docker Engine versions numerically", () => {
@@ -295,9 +295,7 @@ describe("host stack update rules", () => {
 		]);
 
 		expect(refusals).toHaveLength(3);
-		expect(refusals[0]).toContain(
-			"DOCKER_ENGINE_UPGRADE=1 bash install-agenthits.sh update",
-		);
+		expect(refusals[0]).toContain("its own button");
 		expect(refusals[1]).toContain("POSTGRES_IMAGE");
 		expect(refusals[2]).toContain("Web Server Update");
 		expect(hostStackRefusals(["traefik", "redis"])).toEqual([]);

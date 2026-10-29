@@ -41,12 +41,15 @@ const checkPanelUpdate = async (currentVersion: string) => {
 	}
 };
 
+export const readHostDockerVersion = () =>
+	readCommand("docker version --format '{{.Server.Version}}'");
+
 export const readHostStackRows = async (
 	currentVersion: string,
 ): Promise<HostStackRow[]> => {
 	const [docker, traefikImage, postgresImage, redisImage, update] =
 		await Promise.all([
-			readCommand("docker version --format '{{.Server.Version}}'"),
+			readHostDockerVersion(),
 			readCommand("docker inspect -f '{{.Config.Image}}' dokploy-traefik"),
 			readCommand(
 				"docker service inspect dokploy-postgres --format '{{.Spec.TaskTemplate.ContainerSpec.Image}}'",
