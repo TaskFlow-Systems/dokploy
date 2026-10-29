@@ -25,6 +25,7 @@ const {
 	cleanupOldDokployImages,
 	getAgentHitsReloadCommand,
 	getAgentHitsUpdateCommand,
+	getAgentHitsUpdateData,
 	getDokployImageCleanupCommand,
 	getDokployImageKeepCount,
 	getDokployImageRepositories,
@@ -346,7 +347,7 @@ describe("Dokploy update commands", () => {
 
 		expectPullBeforeUpdate(command, "docker pull dokploy/dokploy\\:v0.30.7");
 		expect(command).toContain(
-			"--image dokploy/dokploy\\:v0.30.7 --env-add DOKPLOY_KEEP_OLD_IMAGES\\=3 ",
+			'--image "$pinned_image" --env-add DOKPLOY_KEEP_OLD_IMAGES\\=3 ',
 		);
 		expect(getOfficialUpdateCommand("v0.30.7")).not.toContain(
 			"DOKPLOY_KEEP_OLD_IMAGES",
@@ -466,4 +467,201 @@ esac
 			vi.unstubAllEnvs();
 		}
 	});
+});
+
+describe("Dokploy update command", () => {
+	const AGENTHITS_IMAGE = "ghcr.io/agenthits/dokploy:agenthits-dev";
+	const PINNED = `sha256:${"c".repeat(64)}`;
+	const FORK_VERSION = "agenthits-v1.0.9-3-g0123456789ab";
+
+	beforeEach(() => {
+		vi.stubEnv("DOKPLOY_AGENTHITS_UPDATE_IMAGE", undefined);
+		vi.stubEnv("DOKPLOY_AGENTHITS_UPDATE_TAG", undefined);
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
+		vi.unstubAllGlobals();
+	});
+
+	// The fake image lists a digest of another repository first, as a host that
+	// also pulled the build from a mirror would.
+	const runUpdate = (
+		command: string,
+		repository: string,
+		env: Record<string, string> = {},
+	) => {
+		const dir = mkdtempSync(join(tmpdir(), "dokploy-update-"));
+		const log = join(dir, "log");
+		try {
+			writeFileSync(
+				join(dir, "docker"),
+				`#!/bin/sh
+echo "$*" >> "${log}"
+case "$*" in
+	"pull "*) [ -z "$PULL_FAILS" ] || exit 1 ;;
+	"ps -q"*) echo task1 ;;
+	"inspect --format {{.Image}} task1") echo ${PREVIOUS} ;;
+	"image inspect "*)
+		[ -z "$NO_IMAGE" ] || exit 1
+		echo "mirror.example/dokploy@sha256:${"d".repeat(64)}"
+		[ -n "$NO_DIGEST" ] || echo "${repository}@${PINNED}"
+		echo sha256:new ;;
+esac
+`,
+			);
+			chmodSync(join(dir, "docker"), 0o755);
+			writeFileSync(log, "");
+			let status = 0;
+			let stdout = "";
+			try {
+				stdout = execFileSync("sh", ["-c", command], {
+					env: {
+						...process.env,
+						...env,
+						PATH: `${dir}:${process.env.PATH}`,
+					},
+					encoding: "utf8",
+					stdio: "pipe",
+				});
+			} catch (error) {
+				status = (error as { status: number }).status;
+				stdout = String((error as { stdout?: string }).stdout ?? "");
+			}
+			const calls = readFileSync(log, "utf8").trim().split("\n");
+			return {
+				status,
+				stdout,
+				calls,
+				update: calls.find((call) => call.startsWith("service update")),
+			};
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	};
+
+	const runAgentHitsUpdate = (env?: Record<string, string>) =>
+		runUpdate(
+			getAgentHitsUpdateCommand("v0.30.6", FORK_VERSION, "v0.30.7", 2),
+			"ghcr.io/agenthits/dokploy",
+			env,
+		);
+
+	it(
+		"pins the AgentHits build it pulled by digest",
+		() => {
+			const { status, stdout, calls, update } = runAgentHitsUpdate();
+			expect(status).toBe(0);
+			expect(calls.filter((call) => call.startsWith("pull"))).toEqual([
+				`pull ${AGENTHITS_IMAGE}`,
+			]);
+			expect(stdout).toContain(UPDATE_IMAGE_PULLED_MARKER);
+			expect(update).toBe(
+				`service update --force --no-resolve-image --image ${AGENTHITS_IMAGE}@${PINNED} --env-add RELEASE_TAG=agenthits-dev --env-add DOKPLOY_OFFICIAL_VERSION=v0.30.7 --env-add DOKPLOY_FORK_VERSION=${FORK_VERSION} --env-add DOKPLOY_KEEP_OLD_IMAGES=2 --env-add DOKPLOY_PREVIOUS_IMAGE=${PREVIOUS} --update-order stop-first --update-failure-action rollback dokploy`,
+			);
+			expect(calls.at(-1)).toBe(update);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"pins a moving official tag by digest",
+		() => {
+			const { status, update } = runUpdate(
+				getOfficialUpdateCommand("canary"),
+				"dokploy/dokploy",
+			);
+			expect(status).toBe(0);
+			expect(update).toBe(
+				`service update --force --no-resolve-image --image dokploy/dokploy:canary@${PINNED} --env-add DOKPLOY_PREVIOUS_IMAGE=${PREVIOUS} --update-order stop-first --update-failure-action rollback dokploy`,
+			);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"falls back to the image id when the pull left no digest for the repository",
+		() => {
+			const { status, update } = runAgentHitsUpdate({ NO_DIGEST: "1" });
+			expect(status).toBe(0);
+			expect(update).toContain("--no-resolve-image --image sha256:new ");
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"leaves the service alone when the pull fails",
+		() => {
+			const { status, stdout, calls } = runAgentHitsUpdate({
+				PULL_FAILS: "1",
+			});
+			expect(status).toBe(1);
+			expect(stdout).not.toContain(UPDATE_IMAGE_PULLED_MARKER);
+			expect(calls).toEqual([`pull ${AGENTHITS_IMAGE}`]);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"does not fall back to the moving tag when the pulled image is missing",
+		() => {
+			const { status, update } = runAgentHitsUpdate({ NO_IMAGE: "1" });
+			expect(status).toBe(1);
+			expect(update).toBeUndefined();
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+
+	it(
+		"does not offer the pinned build as an update again",
+		async () => {
+			vi.stubEnv("DOKPLOY_FORK_VERSION", FORK_VERSION);
+			vi.stubEnv("DOKPLOY_OFFICIAL_VERSION", "v0.30.7");
+			const pinnedImage =
+				runAgentHitsUpdate().update?.match(/--image (\S+)/)?.[1];
+			expect(pinnedImage).toBe(`${AGENTHITS_IMAGE}@${PINNED}`);
+
+			const checkAgainst = (latestDigest: string) => {
+				execAsync.mockReset();
+				execAsync.mockResolvedValue({ stdout: `${pinnedImage}\n`, stderr: "" });
+				vi.stubGlobal(
+					"fetch",
+					vi.fn(async (input: RequestInfo | URL) => {
+						const url = input.toString();
+						if (url.includes("/token")) {
+							return Response.json({ token: "token" });
+						}
+						if (url.endsWith("/manifests/agenthits-dev")) {
+							return Response.json(
+								{ config: { digest: "sha256:config" } },
+								{ headers: { "docker-content-digest": latestDigest } },
+							);
+						}
+						if (url.endsWith("/blobs/sha256:config")) {
+							return Response.json({
+								config: {
+									Env: [
+										"DOKPLOY_OFFICIAL_VERSION=v0.30.7",
+										`DOKPLOY_FORK_VERSION=${FORK_VERSION}`,
+									],
+								},
+							});
+						}
+						throw new Error(`Unexpected URL: ${url}`);
+					}),
+				);
+				return getAgentHitsUpdateData("v0.30.7");
+			};
+
+			expect(await checkAgainst(PINNED)).toMatchObject({
+				updateAvailable: false,
+				currentDigest: PINNED,
+			});
+			expect(await checkAgainst(`sha256:${"e".repeat(64)}`)).toMatchObject({
+				updateAvailable: true,
+				currentDigest: PINNED,
+			});
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
 });
