@@ -539,6 +539,60 @@ describe("settings Docker server boundary", () => {
 		);
 	});
 
+	it("logs who started a panel update", async () => {
+		mocks.getUpdateData.mockResolvedValue({
+			latestVersion: "off_v0.29.8/Fork_159+next",
+			updateAvailable: true,
+			updateSource: "agenthits",
+			latestOfficialVersion: "v0.30.0",
+		});
+		mocks.startServerUpdate.mockReturnValue(true);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await expect(createCaller("owner").updateServer()).resolves.toBe(true);
+
+		expect(log).toHaveBeenCalledWith(
+			"[panel] Update to off_v0.29.8/Fork_159+next requested by an unknown user (owner) through a browser session from an unknown address, user agent: none",
+		);
+		log.mockRestore();
+	});
+
+	it("does not log an update that did not start", async () => {
+		mocks.getUpdateData.mockResolvedValue({
+			latestVersion: "off_v0.29.8/Fork_159+next",
+			updateAvailable: true,
+			updateSource: "agenthits",
+			latestOfficialVersion: "v0.30.0",
+		});
+		mocks.startServerUpdate.mockReturnValue(false);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		await expect(createCaller().updateServer()).resolves.toBe(true);
+
+		expect(log).not.toHaveBeenCalledWith(
+			expect.stringContaining("[panel] Update"),
+		);
+		log.mockRestore();
+	});
+
+	it("logs who reloaded the panel before it restarts", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		mocks.reloadDockerResource.mockImplementation(async () => {
+			expect(log).toHaveBeenCalledWith(
+				expect.stringMatching(/^\[panel\] Reload requested by .* \(owner\) /),
+			);
+		});
+
+		await expect(createCaller("owner").reloadServer()).resolves.toBe(true);
+
+		expect(mocks.reloadDockerResource).toHaveBeenCalledWith(
+			"dokploy",
+			undefined,
+			"v0.30.6",
+		);
+		log.mockRestore();
+	});
+
 	it("passes the image keep count to the AgentHits update command", async () => {
 		mocks.getUpdateData.mockResolvedValue({
 			latestVersion: "off_v0.29.8/Fork_159+next",

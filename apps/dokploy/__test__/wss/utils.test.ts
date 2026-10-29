@@ -1,9 +1,13 @@
+import { execFileSync } from "node:child_process";
+import { quoteShellArgs } from "@dokploy/server/utils/shell";
 import { describe, expect, it } from "vitest";
 import {
+	getTerminalHangupArgs,
 	isValidContainerId,
 	isValidSearch,
 	isValidSince,
 	isValidTail,
+	newTerminalSessionMarker,
 } from "../../server/wss/utils";
 
 describe("isValidTail (docker-container-logs)", () => {
@@ -128,5 +132,36 @@ describe("isValidContainerId (docker-container-logs)", () => {
 		expect(isValidContainerId("`id`")).toBe(false);
 		expect(isValidContainerId("container|cat /etc/passwd")).toBe(false);
 		expect(isValidContainerId("x; env | grep DATABASE")).toBe(false);
+	});
+});
+
+describe("terminal session hangup", () => {
+	const marker = newTerminalSessionMarker();
+	const args = getTerminalHangupArgs("abc123def456", "bash", marker);
+
+	it("gives every session its own marker", () => {
+		expect(marker).toMatch(/^DOKPLOY_TERMINAL_SESSION=[a-f0-9]{32}$/);
+		expect(newTerminalSessionMarker()).not.toBe(marker);
+	});
+
+	it("runs the hangup with the session's shell in its container", () => {
+		expect(args.slice(0, 4)).toEqual(["exec", "abc123def456", "bash", "-c"]);
+		expect(args[4]).toContain(`marker="${marker}"`);
+		expect(args[4]).toContain('kill -HUP "${dir#/proc/}"');
+		expect(() =>
+			execFileSync("sh", ["-n", "-c", args[4] as string]),
+		).not.toThrow();
+	});
+
+	it("survives the quoting of the SSH path unchanged", () => {
+		expect(args[4]).not.toMatch(/['\\]/);
+		const parsed = execFileSync(
+			"sh",
+			["-c", `printf '%s\\0' ${quoteShellArgs(["docker", ...args])}`],
+			{ encoding: "utf8" },
+		)
+			.split("\0")
+			.slice(0, -1);
+		expect(parsed).toEqual(["docker", ...args]);
 	});
 });
