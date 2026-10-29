@@ -1085,6 +1085,13 @@ describe("install-agenthits.sh toolchain downloads", () => {
 	};
 	const FAKE_INSTALL_CURL = `#!/bin/sh
 if [ "$FAKE_CURL_MODE" = fail ]; then exit 22; fi
+case "$FAKE_CURL_MODE" in
+	fail-for:*)
+		case "$*" in
+			*"\${FAKE_CURL_MODE#fail-for:}"*) exit 22 ;;
+		esac
+		;;
+esac
 out=""
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "-o" ]; then out="$2"; fi
@@ -1093,7 +1100,11 @@ done
 printf '%s\\n' 'echo fake nixpacks "$NIXPACKS_VERSION"' > "$out"
 `;
 
-	const runHelper = (args: string[], curlMode: "ok" | "fail") => {
+	// "fail-for:<text>" fails only the downloads whose URL contains <text>.
+	const runHelper = (
+		args: string[],
+		curlMode: "ok" | "fail" | `fail-for:${string}`,
+	) => {
 		const dir = mkdtempSync(path.join(tmpdir(), "dokploy-install-script-"));
 		try {
 			const binDir = path.join(dir, "bin");
@@ -1131,7 +1142,7 @@ printf '%s\\n' 'echo fake nixpacks "$NIXPACKS_VERSION"' > "$out"
 			'run_install_script https://nixpacks.com/install.sh Nixpacks "NIXPACKS_VERSION=$NIXPACKS_VERSION"',
 		);
 		expect(installer).toContain(
-			'run_install_script https://railpack.com/install.sh Railpack "RAILPACK_VERSION=$RAILPACK_VERSION"',
+			'run_install_script https://railpack.com/install.sh Railpack "RAILPACK_VERSION=$RAILPACK_VERSION" \\\n\t\t\thttps://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh',
 		);
 		expect(installer).not.toContain('bash -c "$(curl');
 	});
@@ -1149,6 +1160,41 @@ printf '%s\\n' 'echo fake nixpacks "$NIXPACKS_VERSION"' > "$out"
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain(
 			"the Nixpacks install script could not be downloaded or checked",
+		);
+	});
+
+	it("downloads the install script from the fallback URL when the first one fails", () => {
+		const result = runHelper(
+			[
+				"https://railpack.com/install.sh",
+				"Railpack",
+				"NIXPACKS_VERSION=29.4.0",
+				"https://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh",
+			],
+			"fail-for:railpack.com",
+		);
+
+		expect(result.status).toBe(0);
+		expect(result.stderr).toContain(
+			"The Railpack install script could not be downloaded or checked from https://railpack.com/install.sh.",
+		);
+		expect(result.stdout).toContain("fake nixpacks 29.4.0");
+	});
+
+	it("stops the install when the fallback URL fails too", () => {
+		const result = runHelper(
+			[
+				"https://railpack.com/install.sh",
+				"Railpack",
+				"NIXPACKS_VERSION=29.4.0",
+				"https://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh",
+			],
+			"fail-for:install.sh",
+		);
+
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain(
+			"the Railpack install script could not be downloaded or checked; Railpack was not installed.",
 		);
 	});
 

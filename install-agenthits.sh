@@ -395,9 +395,17 @@ run_install_script() {
 	local url="$1"
 	local label="$2"
 	local assignment="$3"
-	local script=""
+	local fallback_url="${4:-}"
+	local script="" candidate="" downloaded=0
 	script="$(mktemp)"
-	if ! curl -fsSL "$url" -o "$script" || [ ! -s "$script" ] || ! bash -n "$script"; then
+	for candidate in "$url" ${fallback_url:+"$fallback_url"}; do
+		if curl -fsSL "$candidate" -o "$script" && [ -s "$script" ] && bash -n "$script"; then
+			downloaded=1
+			break
+		fi
+		echo "The $label install script could not be downloaded or checked from $candidate." >&2
+	done
+	if [ "$downloaded" != 1 ]; then
 		rm -f "$script"
 		echo "Error: the $label install script could not be downloaded or checked; $label was not installed." >&2
 		exit 1
@@ -430,7 +438,10 @@ install_toolchain() {
 		run_install_script https://nixpacks.com/install.sh Nixpacks "NIXPACKS_VERSION=$NIXPACKS_VERSION"
 	fi
 	if ! tool_version_matches "$RAILPACK_VERSION" railpack --version; then
-		run_install_script https://railpack.com/install.sh Railpack "RAILPACK_VERSION=$RAILPACK_VERSION"
+		# railpack.com only redirects through Cloudflare to this GitHub file, and some
+		# networks get a 525 from Cloudflare there.
+		run_install_script https://railpack.com/install.sh Railpack "RAILPACK_VERSION=$RAILPACK_VERSION" \
+			https://raw.githubusercontent.com/railwayapp/railpack/refs/heads/main/install.sh
 	fi
 	if ! tool_version_matches "$BUILDPACKS_VERSION" pack --version; then
 		curl -sSL "https://github.com/buildpacks/pack/releases/download/v${BUILDPACKS_VERSION}/pack-v${BUILDPACKS_VERSION}-linux${pack_suffix}.tgz" | tar -C /usr/local/bin/ --no-same-owner -xz pack
