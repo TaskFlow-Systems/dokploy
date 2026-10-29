@@ -490,8 +490,9 @@ describe("AgentHits fork version metadata", () => {
 		);
 
 		expect(command).toContain(
-			"--image ghcr.io/agenthits/dokploy\\:agenthits-dev",
+			"docker pull ghcr.io/agenthits/dokploy\\:agenthits-dev",
 		);
+		expect(command).toContain('--image "$pinned_image"');
 		expect(command).toContain("--env-add RELEASE_TAG\\=agenthits-dev");
 		expect(command).toContain("--env-add DOKPLOY_OFFICIAL_VERSION\\=v0.30.0");
 		expect(command).toContain(

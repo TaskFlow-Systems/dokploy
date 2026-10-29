@@ -626,12 +626,33 @@ export const getUpdateDiskSpace = async (): Promise<UpdateDiskSpace> => {
 	};
 };
 
+// Swarm pulls a tag again whenever it starts a task, so a service that names a
+// moving tag such as `agenthits-dev` or `canary` can come up on a newer build
+// after a crash, a node reboot or a Docker restart. The update names the build
+// it just pulled instead: by digest, which swarm does not pull while the image
+// is present, or by image id when the pull left no digest for this repository.
+const getPinPulledImageCommand = (image: string) => {
+	const reference = image.split("@")[0] ?? image;
+	return `pinned_image=""
+for pulled_ref in $(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}{{.Id}}' ${quoteShellArg(image)} 2>/dev/null); do
+	case "$pulled_ref" in
+		${quoteShellArg(getImageRepository(image))}@sha256:*) pinned_image=${quoteShellArg(reference)}"@\${pulled_ref#*@}"; break ;;
+		sha256:*) pinned_image="$pulled_ref" ;;
+	esac
+done
+if [ -z "$pinned_image" ]; then
+	echo "The pulled image could not be found, so the panel was not updated." >&2
+	exit 1
+fi`;
+};
+
 export const getAgentHitsUpdateCommand = (
 	currentVersion: string,
 	forkVersion?: string | null,
 	officialVersion?: string | null,
 	keepImages?: number | null,
 ) => {
+	const image = getAgentHitsUpdateImage();
 	const forkVersionArg = forkVersion?.trim()
 		? `--env-add ${quoteShellArg(`DOKPLOY_FORK_VERSION=${forkVersion.trim()}`)}`
 		: "$fork_version_env_arg";
@@ -645,15 +666,16 @@ export const getAgentHitsUpdateCommand = (
 	// stop-first, so a pull inside it would happen with Dokploy down. Stop-first
 	// also keeps two panel versions from running migrations at the same time.
 	return `
-docker pull ${quoteShellArg(getAgentHitsUpdateImage())} || exit 1
+docker pull ${quoteShellArg(image)} || exit 1
 echo ${quoteShellArg(UPDATE_IMAGE_PULLED_MARKER)}
 ${RECORD_PREVIOUS_IMAGE}
+${getPinPulledImageCommand(image)}
 fork_version_env_arg=""
 if docker service inspect dokploy --format '{{range .Spec.TaskTemplate.ContainerSpec.Env}}{{println .}}{{end}}' 2>/dev/null | grep -q '^DOKPLOY_FORK_VERSION='; then
 	fork_version_env_arg="--env-rm DOKPLOY_FORK_VERSION"
 fi
-docker service update --force \\
-	--image ${quoteShellArg(getAgentHitsUpdateImage())} \\
+docker service update --force --no-resolve-image \\
+	--image "$pinned_image" \\
 	--env-add ${quoteShellArg(`RELEASE_TAG=${getAgentHitsUpdateTag()}`)} \\
 	--env-add ${quoteShellArg(`DOKPLOY_OFFICIAL_VERSION=${officialVersionArg}`)} \\
 	${forkVersionArg} \\
@@ -665,11 +687,10 @@ docker service update --force \\
 `;
 };
 
-// The service names a moving tag such as `agenthits-dev`, and swarm pulls a
-// tag again whenever it starts a task, so a plain forced restart can come up on
-// a newer build. Reload pins the image the panel runs now: by digest, which
-// swarm does not pull when the image is present, or by image id for a build
-// that never came from a registry.
+// A service last updated by an older panel still names a moving tag, so a plain
+// forced restart can come up on a newer build (see getPinPulledImageCommand).
+// Reload pins the image the panel runs now: by digest, or by image id for a
+// build that never came from a registry.
 export const getAgentHitsReloadCommand = () => `
 running_tasks=$(${DOKPLOY_RUNNING_TASKS})
 running_image=""
@@ -695,15 +716,16 @@ export const getOfficialUpdateCommand = (
 	version: string,
 	keepImages?: number | null,
 ) => {
-	const image = quoteShellArg(getOfficialUpdateImage(version));
+	const image = getOfficialUpdateImage(version);
 	const keepImagesArg =
 		keepImages === undefined ? "" : getDokployKeepImagesEnvArg(keepImages);
 
 	return `
-docker pull ${image} || exit 1
+docker pull ${quoteShellArg(image)} || exit 1
 echo ${quoteShellArg(UPDATE_IMAGE_PULLED_MARKER)}
 ${RECORD_PREVIOUS_IMAGE}
-docker service update --force --image ${image} ${keepImagesArg} ${PREVIOUS_IMAGE_ENV_ARG} --update-order stop-first --update-failure-action rollback dokploy
+${getPinPulledImageCommand(image)}
+docker service update --force --no-resolve-image --image "$pinned_image" ${keepImagesArg} ${PREVIOUS_IMAGE_ENV_ARG} --update-order stop-first --update-failure-action rollback dokploy
 `;
 };
 
