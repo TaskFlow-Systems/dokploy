@@ -374,8 +374,9 @@ describe("buildComponentUpdateScript", () => {
 		);
 
 		expect(wait).toContain(
-			'if [ "$attempt" -ge "${DOKPLOY_DOCKER_VERIFY_TIMEOUT:-30}" ]; then',
+			'local timeout="${DOKPLOY_DOCKER_VERIFY_TIMEOUT:-30}"',
 		);
+		expect(wait).toContain('if [ "$(date +%s)" -ge "$deadline" ]; then');
 		expect(wait).toContain("sleep 1");
 		expect(wait).not.toContain("sleep 2");
 	});
@@ -590,6 +591,8 @@ const runComponentScript = (
 				FAKE_OLD_IMAGE: "traefik:v3.6.25",
 				TMPDIR: dir,
 				TRAEFIK_SETTLE_SECONDS: "0",
+				// The fake sleep returns at once, so a failed wait spins until this deadline.
+				DOKPLOY_DOCKER_VERIFY_TIMEOUT: "2",
 				DOKPLOY_BACKUP_DIR: backups,
 				DOKPLOY_OS_RELEASE: osRelease,
 				DOKPLOY_APT_SOURCES_DIR: sources,

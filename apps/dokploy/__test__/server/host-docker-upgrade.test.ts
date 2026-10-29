@@ -145,6 +145,9 @@ describe("buildHostDockerUpgradeScript", { timeout: 60_000 }, () => {
 		expect(run.log).toContain(
 			`Error: Docker ${PINNED_VERSIONS.docker} did not come up healthy after the install.`,
 		);
+		expect(run.log).toContain(
+			`Not ready on Docker ${PINNED_VERSIONS.docker} after 3 seconds: the panel container is starting`,
+		);
 		expect(run.log).toContain(`Rolling Docker back to ${PREVIOUS_ENGINE}`);
 		expect(run.stored).toMatchObject({
 			state: "failed",

@@ -65,26 +65,33 @@ const filesIn = (dir: string) => ({
 const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
 const HOST_READY_CHECK = `
+	DOCKER_NOT_READY="this node is not an active swarm node"
 	[ "$(docker info --format '{{.Swarm.LocalNodeState}}' 2>/dev/null)" = "active" ] || return 1
-	local service="" container=""
+	local service="" container="" health=""
 	for service in dokploy dokploy-postgres dokploy-redis; do
+		DOCKER_NOT_READY="$service has no running task"
 		container="$(docker ps -q --no-trunc --filter "label=com.docker.swarm.service.name=$service" --filter status=running | head -n1)"
 		[ -n "$container" ] || return 1
 		case "$service" in
 			dokploy)
-				case "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null)" in
+				health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null)"
+				DOCKER_NOT_READY="the panel container is \${health:-not inspectable}"
+				case "$health" in
 					healthy | none) ;;
 					*) return 1 ;;
 				esac
 				;;
 			dokploy-postgres)
+				DOCKER_NOT_READY="Postgres does not accept connections"
 				docker exec "$container" pg_isready -U dokploy -d dokploy >/dev/null 2>&1 || return 1
 				;;
 			dokploy-redis)
+				DOCKER_NOT_READY="Redis does not answer PING"
 				[ "$(docker exec "$container" redis-cli ping 2>/dev/null)" = "PONG" ] || return 1
 				;;
 		esac
-	done`;
+	done
+	DOCKER_NOT_READY=""`;
 
 export const buildHostDockerUpgradeScript = (dir = HOST_UPDATES_DIR) => {
 	const files = filesIn(dir);
