@@ -323,18 +323,24 @@ docker_prepare_apt() {
 	return 0
 }
 
+# The panel host replaces this with a check of its own swarm services.
+docker_host_ready() {
+	return 0
+}
+
 docker_ready_on() {
 	[ "$($SUDO_CMD docker version --format '{{.Server.Version}}' 2>/dev/null)" = "$1" ] || return 1
 	if [ "$2" = 1 ]; then
 		[ "$($SUDO_CMD docker inspect -f '{{.State.Running}}' dokploy-traefik 2>/dev/null)" = "true" ] || return 1
 	fi
+	docker_host_ready
 }
 
 docker_wait_ready() {
 	local attempt=0
 	until docker_ready_on "$1" "$2"; do
 		attempt=$((attempt + 1))
-		if [ "$attempt" -ge 30 ]; then
+		if [ "$attempt" -ge "\${DOKPLOY_DOCKER_VERIFY_TIMEOUT:-30}" ]; then
 			return 1
 		fi
 		sleep 1
@@ -605,6 +611,23 @@ echo "Buildpacks version ${PINNED_VERSIONS.buildpacks} installed ✅"
 export const buildComponentUpdateSteps = (components: UpdatableComponent[]) => `
 ${predownloadGate(components)}
 ${components.map(updateStepFor).join("\n")}
+`;
+
+// On the panel host a skipped Docker upgrade is the whole job failing, and the
+// host is ready only when its own services are back, so both differ from the
+// remote-server step above.
+export const buildDockerEngineUpgradeSteps = (hostReadyCheck: string) => `
+${predownloadGate(["docker"])}
+if [ "$DOCKER_SKIPPED" = 1 ]; then
+	echo "Error: Docker not upgraded: $DOCKER_SKIP_REASON. Nothing was changed." >&2
+	exit 1
+fi
+docker_host_ready() {
+${hostReadyCheck}
+}
+echo "Upgrading Docker Engine to ${PINNED_VERSIONS.docker}. The daemon restarts, and every container on this server restarts with it."
+docker_update_from_apt
+echo "Docker version ${PINNED_VERSIONS.docker} installed ✅"
 `;
 
 export const wrapComponentUpdateSteps = (steps: string) => `

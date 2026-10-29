@@ -70,6 +70,9 @@ const mocks = vi.hoisted(() => ({
 	writeMainConfig: vi.fn(),
 	writeTraefikConfigInPath: vi.fn(),
 	writeTraefikSetup: vi.fn(),
+	readHostDockerUpgradeStatus: vi.fn(async (): Promise<unknown> => null),
+	readHostDockerVersion: vi.fn(async (): Promise<string | null> => "29.8.2"),
+	startHostDockerUpgrade: vi.fn(async () => {}),
 }));
 
 const redactWebServerSettings = <T>(settings: T) => settings;
@@ -91,6 +94,12 @@ vi.mock("@dokploy/server", async () => ({
 		component === "traefik" || component === "redis",
 	readHostStackRows: vi.fn(),
 	updateHostStackComponents: vi.fn(() => Promise.resolve()),
+	dockerRow: (await import("@dokploy/server/setup/host-stack-rows")).dockerRow,
+	isHostDockerUpgradeActive: (status: { state: string } | null) =>
+		status?.state === "starting" || status?.state === "running",
+	readHostDockerUpgradeStatus: mocks.readHostDockerUpgradeStatus,
+	readHostDockerVersion: mocks.readHostDockerVersion,
+	startHostDockerUpgrade: mocks.startHostDockerUpgrade,
 	checkGPUStatus: mocks.checkGPUStatus,
 	checkPortInUse: mocks.checkPortInUse,
 	checkPostgresHealth: mocks.checkPostgresHealth,
@@ -927,6 +936,98 @@ describe("panel host update lock", () => {
 	it("starts a panel update when no host-stack update is running", async () => {
 		await expect(createCaller().updateServer()).resolves.toBe(true);
 		expect(mocks.startServerUpdate).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("panel host Docker upgrade", () => {
+	const RUNNING = {
+		state: "running",
+		from: "29.8.2",
+		to: "29.9.2",
+		startedAt: "2026-10-29T10:00:00Z",
+		finishedAt: null,
+		exitCode: null,
+		log: "",
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.isServerUpdateRunning.mockReturnValue(false);
+		mocks.audit.mockResolvedValue(undefined);
+		mocks.readHostDockerVersion.mockResolvedValue("29.8.2");
+		mocks.readHostDockerUpgradeStatus.mockResolvedValue(null);
+		mocks.startHostDockerUpgrade.mockResolvedValue(undefined);
+		mocks.getUpdateData.mockResolvedValue({
+			updateAvailable: true,
+			updateSource: "official",
+			latestVersion: "v2.0.0",
+			latestOfficialVersion: "v2.0.0",
+		});
+	});
+
+	it("starts the host upgrade of an outdated Docker Engine and returns its status", async () => {
+		mocks.readHostDockerUpgradeStatus
+			.mockResolvedValueOnce(null)
+			.mockResolvedValueOnce({ ...RUNNING, state: "starting" });
+
+		await expect(createCaller().upgradeHostDocker()).resolves.toMatchObject({
+			state: "starting",
+		});
+		expect(mocks.startHostDockerUpgrade).toHaveBeenCalledWith("29.8.2");
+		expect(mocks.audit).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				resourceName: "panel-host",
+				metadata: { components: ["docker"] },
+			}),
+		);
+	});
+
+	it("refuses when Docker Engine already runs the pinned version or cannot be read", async () => {
+		mocks.readHostDockerVersion.mockResolvedValueOnce("99.0.0");
+		await expect(createCaller().upgradeHostDocker()).rejects.toMatchObject({
+			code: "BAD_REQUEST",
+			message: "Docker Engine already runs 99.0.0.",
+		});
+
+		mocks.readHostDockerVersion.mockResolvedValueOnce(null);
+		await expect(createCaller().upgradeHostDocker()).rejects.toMatchObject({
+			code: "BAD_REQUEST",
+		});
+		expect(mocks.startHostDockerUpgrade).not.toHaveBeenCalled();
+	});
+
+	it("refuses a second upgrade while one runs on the host", async () => {
+		mocks.readHostDockerUpgradeStatus.mockResolvedValue(RUNNING);
+
+		await expect(createCaller().upgradeHostDocker()).rejects.toMatchObject({
+			code: "CONFLICT",
+		});
+		expect(mocks.startHostDockerUpgrade).not.toHaveBeenCalled();
+	});
+
+	it("keeps the panel update and the Traefik and Redis update out while Docker is upgraded", async () => {
+		mocks.readHostDockerUpgradeStatus.mockResolvedValue(RUNNING);
+
+		await expect(createCaller().updateServer()).rejects.toMatchObject({
+			code: "CONFLICT",
+		});
+		await expect(
+			createCaller().updateHostStack({ components: ["redis"] }),
+		).rejects.toMatchObject({ code: "CONFLICT" });
+		expect(mocks.startServerUpdate).not.toHaveBeenCalled();
+	});
+
+	it("frees the host-stack lock when the upgrade cannot start", async () => {
+		mocks.startHostDockerUpgrade.mockRejectedValueOnce(
+			new Error("The upgrade could not start on the host: no systemd"),
+		);
+
+		await expect(createCaller().upgradeHostDocker()).rejects.toMatchObject({
+			code: "INTERNAL_SERVER_ERROR",
+			message: "The upgrade could not start on the host: no systemd",
+		});
+		await expect(createCaller().upgradeHostDocker()).resolves.toBeNull();
 	});
 });
 
