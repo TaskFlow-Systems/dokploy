@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM node:26.12.1-bookworm-slim AS base
+FROM node:26.13.0-bookworm-slim AS base
 ENV BUN_INSTALL="/root/.bun"
 ENV PATH="$BUN_INSTALL/bin:$PATH"
 RUN apt-get update \
