@@ -13,7 +13,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { audit } from "@/server/api/utils/audit";
 import { isLocalSystemDockerVolume } from "@/server/api/utils/local-docker-access";
-import { assertProtectedResourceAccess } from "@/server/api/utils/super-session";
+import { assertProtectedResourceAccess } from "@/server/api/utils/protected-resource-access";
 import { createTRPCRouter, withPermission } from "../trpc";
 import { assertDockerServerAccess } from "./docker";
 

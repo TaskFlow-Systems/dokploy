@@ -29,11 +29,6 @@ vi.mock("@dokploy/server/services/known-secrets", () => ({
 	resetKnownSecretMatcherCache: () => {},
 }));
 
-vi.mock("@/server/api/utils/super-session", async (original) => ({
-	...(await original<object>()),
-	enforceProcedureSuperSession: async () => {},
-}));
-
 const {
 	adminProcedure,
 	cliProcedure,

@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	checkPermission: vi.fn(),
-	checkProtectedResourceAccess: vi.fn(),
-	checkSuperSessionAccess: vi.fn(),
 	findApiKeySecret: vi.fn(),
 	apikeyFindFirst: vi.fn(),
 	audit: vi.fn(),
@@ -21,15 +19,6 @@ vi.mock("@dokploy/server/db", () => ({
 			apikey: { findFirst: mocks.apikeyFindFirst },
 		},
 	},
-}));
-
-vi.mock("@dokploy/server/services/super-password", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("@dokploy/server/services/super-password")
-	>()),
-	checkProtectedResourceAccess: mocks.checkProtectedResourceAccess,
-	// The router-wide super session middleware; covered by its own tests.
-	checkSuperSessionAccess: mocks.checkSuperSessionAccess,
 }));
 
 vi.mock("@dokploy/server/services/permission", () => ({
@@ -82,13 +71,11 @@ describe("user.revealApiKey", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		mocks.checkPermission.mockResolvedValue(undefined);
-		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
-		mocks.checkSuperSessionAccess.mockResolvedValue(null);
 		mocks.apikeyFindFirst.mockResolvedValue(storedKey);
 		mocks.findApiKeySecret.mockResolvedValue("ci-deploy_secret-value");
 	});
 
-	it("returns the stored key inside an open super session and audits it", async () => {
+	it("returns the stored key to a browser session and audits it", async () => {
 		await expect(
 			callerFor().revealApiKey({ apiKeyId: "key-1" }),
 		).resolves.toEqual({ key: "ci-deploy_secret-value" });
@@ -98,12 +85,9 @@ describe("user.revealApiKey", () => {
 		);
 	});
 
-	it("asks for the super password when no super session is open", async () => {
-		mocks.checkProtectedResourceAccess.mockResolvedValue(
-			"super-session-required",
-		);
+	it("refuses a session without an id", async () => {
 		await expect(
-			callerFor().revealApiKey({ apiKeyId: "key-1" }),
+			callerFor({ id: null }).revealApiKey({ apiKeyId: "key-1" }),
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
 		expect(mocks.findApiKeySecret).not.toHaveBeenCalled();
 	});

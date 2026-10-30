@@ -1485,6 +1485,13 @@
       "when": 1793209780808,
       "tag": "0211_whitelabeling_config_default",
       "breakpoints": true
+    },
+    {
+      "idx": 212,
+      "version": "7",
+      "when": 1793387672538,
+      "tag": "0212_remove_super_password",
+      "breakpoints": true
     }
   ]
 }

@@ -116,7 +116,7 @@ describe("Traefik file path boundary", () => {
 		},
 	);
 
-	it("opens TLS secret files only when the caller passed the super session check", async () => {
+	it("opens TLS secret files only when the caller passed the protected resource check", async () => {
 		const acmePath = "/etc/dokploy/traefik/dynamic/acme.json";
 		mocks.execAsyncRemote.mockResolvedValue({ stdout: "{}" });
 

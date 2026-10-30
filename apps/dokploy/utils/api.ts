@@ -10,7 +10,6 @@ import type { inferRouterInputs, inferRouterOutputs } from "@trpc/server";
 import superjson from "superjson";
 import type { AppRouter } from "@/server/api/root";
 import { noSessionLink, retryUnlessNoSession } from "@/utils/session-expiry";
-import { superSessionLink } from "@/utils/super-session-link";
 
 const getBaseUrl = () => {
 	if (typeof window !== "undefined") return "";
@@ -48,7 +47,6 @@ const links =
 	typeof window !== "undefined"
 		? [
 				noSessionLink,
-				superSessionLink,
 				splitLink({
 					condition: (op) => op.type === "subscription",
 					true: wsLink({

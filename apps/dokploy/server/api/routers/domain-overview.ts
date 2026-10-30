@@ -11,7 +11,7 @@ import { audit } from "@/server/api/utils/audit";
 import {
 	assertProtectedResourceAccess,
 	hasProtectedResourceAccess,
-} from "@/server/api/utils/super-session";
+} from "@/server/api/utils/protected-resource-access";
 import {
 	assertTraefikFilesHostAccess,
 	hasTraefikFilesHostAccess,

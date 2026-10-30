@@ -14,7 +14,7 @@ const PUBLIC_PATHS = new Set([
 	"/reset-password",
 	"/send-reset-password",
 ]);
-const PUBLIC_PREFIXES = ["/accept-invitation", "/super-password"];
+const PUBLIC_PREFIXES = ["/accept-invitation"];
 
 // The server marks only a request that arrived without a valid session. The
 // same UNAUTHORIZED code also answers a signed-in user whose role is not

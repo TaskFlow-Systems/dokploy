@@ -40,17 +40,6 @@ vi.mock("@dokploy/server/utils/servers/destination", () => ({
 	resolveServerDestinationHost: vi.fn(async () => "203.0.113.10"),
 }));
 
-vi.mock("@dokploy/server/db", async () => {
-	const schema = await import("@dokploy/server/db/schema");
-	const { createFakeDrizzleDb } = await import("../helpers/fake-drizzle-db");
-	const fake = createFakeDrizzleDb({
-		superPassword: schema.superPassword,
-		superSession: schema.superSession,
-		account: schema.account,
-	});
-	return { db: fake.db, fake };
-});
-
 vi.mock("../../server/wss/authorize", () => ({
 	canAccessDockerOverWss: mocks.canAccessDockerOverWss,
 }));

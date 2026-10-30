@@ -7,15 +7,10 @@ import {
 import { apiUpsertApplicationEnv } from "@dokploy/server/db/schema";
 import { resetKnownSecretMatcherCache } from "@dokploy/server/services/known-secrets";
 import { checkServicePermissionAndAccess } from "@dokploy/server/services/permission";
-import {
-	checkSuperSessionAccess,
-	SUPER_SESSION_MESSAGES,
-} from "@dokploy/server/services/super-password";
 import { TRPCError } from "@trpc/server";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { ZodError } from "zod";
 import { audit } from "@/server/api/utils/audit";
-import { isApiKeySession } from "@/server/api/utils/super-session";
 import type { DeploymentJob } from "@/server/queues/queue-types";
 import { myQueue } from "@/server/queues/queueSetup";
 import { deploy } from "@/server/utils/deploy";
@@ -69,18 +64,6 @@ export const handleApplicationEnvUpsert = async (
 
 	if (!user || !session) {
 		res.status(401).json({ message: "Unauthorized" });
-		return;
-	}
-
-	const superSessionDenial = await checkSuperSessionAccess({
-		userId: user.id,
-		kind: "write",
-		viaApiKey: isApiKeySession(session),
-	});
-	if (superSessionDenial) {
-		res
-			.status(403)
-			.json({ message: SUPER_SESSION_MESSAGES[superSessionDenial] });
 		return;
 	}
 

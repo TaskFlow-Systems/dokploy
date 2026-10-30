@@ -135,7 +135,7 @@ const CertificateCell = ({
 	if (!certificatesVisible) {
 		return (
 			<span className="text-sm text-muted-foreground">
-				Hidden without a super session
+				Owners and admins only
 			</span>
 		);
 	}
@@ -311,8 +311,7 @@ export const ShowDomainOverview = () => {
 					{data && !data.certificatesVisible && (
 						<AlertBlock type="info">
 							Certificate dates are hidden. Traefik keeps them in its
-							certificate store, which only an owner or admin with an open super
-							session can read.
+							certificate store, which only an owner or admin can read.
 						</AlertBlock>
 					)}
 					{data && data.servers.length > 0 && (

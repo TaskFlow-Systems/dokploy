@@ -9,11 +9,6 @@ const LEGACY_HASHES = [
 		hash: "$2b$10$OZR9Sl3nuE.yt3N7Uz77Eu./0x/5vtxeregQv82qIwpWTJvrXoMMy",
 	},
 	{
-		label: "super password ($2b$, cost 12)",
-		password: "legacy-super-password",
-		hash: "$2b$12$l/i9B3BhLSjMvj0tSNi90.ArVCiYRq4rZSccKNrYh2woqzIiyadES",
-	},
-	{
 		label: "$2a$ hash (cost 10)",
 		password: "legacy-basic-auth",
 		hash: "$2a$10$.3CLNohfPPBm3RvuTs/IQucFilfkHNwtftJP6si4XSzO3ir03pp2O",

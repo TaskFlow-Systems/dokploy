@@ -219,10 +219,10 @@ export const readMonitoringConfig = async (readAll = false) => {
 type TraefikFileAccessOptions = { allowProtected?: boolean };
 
 // ACME storage and uploaded certificates hold TLS private keys, so the generic
-// Traefik file editor only opens them when the caller passed the super session
-// check (allowProtected). Backups made by operators or Traefik hold the same
-// keys, so every path segment is checked, not only the last one: acme.json
-// siblings, children of a directory with such a name, and names like
+// Traefik file editor only opens them when the caller passed the protected
+// resource check (allowProtected). Backups made by operators or Traefik hold
+// the same keys, so every path segment is checked, not only the last one:
+// acme.json siblings, children of a directory with such a name, and names like
 // old-acme.json or acme.bak.json. Ordinary config names such as acme-shop.yml
 // stay editable.
 const isProtectedSegment = (segment: string) => {

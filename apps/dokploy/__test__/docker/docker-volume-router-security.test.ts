@@ -4,7 +4,6 @@ const mocks = vi.hoisted(() => ({
 	audit: vi.fn(),
 	assertLocalDockerContainerAccess: vi.fn(),
 	checkPermission: vi.fn(),
-	checkProtectedResourceAccess: vi.fn(),
 	deleteVolumeFile: vi.fn(),
 	isLocalSystemDockerVolume: vi.fn(),
 	findMemberByUserId: vi.fn(),
@@ -46,18 +45,11 @@ vi.mock("@/server/api/utils/local-docker-access", () => ({
 	isLocalSystemDockerVolume: mocks.isLocalSystemDockerVolume,
 }));
 
-vi.mock("@dokploy/server/services/super-password", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("@dokploy/server/services/super-password")
-	>()),
-	checkProtectedResourceAccess: mocks.checkProtectedResourceAccess,
-}));
-
 const { dockerVolumeRouter } = await import(
 	"../../server/api/routers/docker-volume"
 );
 
-const createCaller = () =>
+const createCaller = (authMethod: "session" | "api-key" = "session") =>
 	dockerVolumeRouter.createCaller({
 		db: {},
 		req: {},
@@ -65,6 +57,7 @@ const createCaller = () =>
 		session: {
 			userId: "user-1",
 			activeOrganizationId: "org-1",
+			...(authMethod === "api-key" ? { authMethod } : {}),
 		},
 		user: {
 			id: "user-1",
@@ -72,8 +65,11 @@ const createCaller = () =>
 		},
 	} as never);
 
-const volumeCalls = (serverId?: string) => {
-	const caller = createCaller();
+const volumeCalls = (
+	serverId?: string,
+	authMethod: "session" | "api-key" = "session",
+) => {
+	const caller = createCaller(authMethod);
 	return [
 		{
 			name: "listVolumeFiles",
@@ -133,9 +129,6 @@ describe("docker volume router access boundary", () => {
 		mocks.listVolumeFiles.mockResolvedValue([]);
 		mocks.readVolumeFile.mockResolvedValue({ content: "" });
 		mocks.isLocalSystemDockerVolume.mockResolvedValue(false);
-		mocks.checkProtectedResourceAccess.mockResolvedValue(
-			"super-session-required",
-		);
 	});
 
 	it("denies non-admin volume file access and removal on the local host", async () => {
@@ -214,15 +207,17 @@ describe("docker volume router access boundary", () => {
 	});
 
 	describe("panel system volumes", () => {
-		const fileCalls = () =>
-			volumeCalls().filter((call) => call.name !== "removeVolume");
+		const fileCalls = (authMethod?: "session" | "api-key") =>
+			volumeCalls(undefined, authMethod).filter(
+				(call) => call.name !== "removeVolume",
+			);
 
 		beforeEach(() => {
 			mocks.isLocalSystemDockerVolume.mockResolvedValue(true);
 		});
 
-		it("denies local system volume files without an open super session", async () => {
-			for (const call of fileCalls()) {
+		it("never opens local system volume files through an API key", async () => {
+			for (const call of fileCalls("api-key")) {
 				await expect(call.run(), call.name).rejects.toMatchObject({
 					code: "FORBIDDEN",
 				});
@@ -231,9 +226,7 @@ describe("docker volume router access boundary", () => {
 			expect(mocks.isLocalSystemDockerVolume).toHaveBeenCalledWith("data");
 		});
 
-		it("opens local system volume files with an open super session", async () => {
-			mocks.checkProtectedResourceAccess.mockResolvedValue(null);
-
+		it("opens local system volume files for owners and admins", async () => {
 			for (const call of fileCalls()) {
 				await call.run();
 				expect(call.sideEffect, call.name).toHaveBeenCalled();

@@ -88,7 +88,7 @@ describe("local Docker system containers", () => {
 			mocks.getConfig.mockResolvedValue(container);
 			const assertSystemAccess = vi
 				.fn()
-				.mockRejectedValue(new Error("super session required"));
+				.mockRejectedValue(new Error("system access denied"));
 
 			await expect(
 				assertLocalDockerContainerOrSystemAccess(
@@ -97,7 +97,7 @@ describe("local Docker system containers", () => {
 					"write",
 					assertSystemAccess,
 				),
-			).rejects.toThrow("super session required");
+			).rejects.toThrow("system access denied");
 			expect(assertSystemAccess).toHaveBeenCalledTimes(1);
 
 			assertSystemAccess.mockResolvedValue(undefined);

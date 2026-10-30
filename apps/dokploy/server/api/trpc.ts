@@ -17,7 +17,6 @@ import {
 	resolvePermissions,
 } from "@dokploy/server/services/permission";
 import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
-import { getSuperSessionDenial } from "@dokploy/server/services/super-password";
 import type { OpenApiMeta } from "@dokploy/trpc-openapi";
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { CreateNextContextOptions } from "@trpc/server/adapters/next";
@@ -30,10 +29,7 @@ import {
 	scrubApiKeyError,
 	scrubApiKeyResult,
 } from "@/server/api/utils/api-key-output-guard";
-import {
-	enforceProcedureSuperSession,
-	isApiKeySession,
-} from "@/server/api/utils/super-session";
+import { isApiKeySession } from "@/server/api/utils/api-key-session";
 
 type Resource = keyof typeof statements;
 type ActionOf<R extends Resource> = (typeof statements)[R][number];
@@ -162,7 +158,6 @@ const t = initTRPC
 					...shape.data,
 					zodError:
 						error.cause instanceof ZodError ? error.cause.flatten() : null,
-					superSession: getSuperSessionDenial(error),
 					noSession: hasNoSession(error),
 				},
 			};
@@ -182,20 +177,6 @@ const t = initTRPC
  * @see https://trpc.io/docs/router
  */
 export const createTRPCRouter = t.router;
-
-const superSessionGuard = t.middleware(
-	async ({ ctx, path, type, getRawInput, next }) => {
-		if (ctx.user && ctx.session) {
-			await enforceProcedureSuperSession({
-				ctx: { user: ctx.user, session: ctx.session },
-				path,
-				type,
-				getRawInput,
-			});
-		}
-		return next();
-	},
-);
 
 // An API key is the channel scripts and AI agents use, so nothing it receives
 // may contain a secret value, whatever role the key's owner has.
@@ -223,7 +204,7 @@ const apiKeyOutputGuard = t.middleware(
 	},
 );
 
-const baseProcedure = t.procedure.use(superSessionGuard).use(apiKeyOutputGuard);
+const baseProcedure = t.procedure.use(apiKeyOutputGuard);
 
 /**
  * Public (unauthenticated) procedure

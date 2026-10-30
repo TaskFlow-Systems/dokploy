@@ -18,7 +18,7 @@ import {
 	scrubSecretText,
 } from "@dokploy/server/utils/security/secret-scrub";
 import { TRPCError } from "@trpc/server";
-import { isApiKeySession } from "@/server/api/utils/super-session";
+import { isApiKeySession } from "@/server/api/utils/api-key-session";
 
 // These hand back a stored secret or raw file bytes, which no scrubbing can
 // make safe (a container file may be nothing but one token), so an API key
