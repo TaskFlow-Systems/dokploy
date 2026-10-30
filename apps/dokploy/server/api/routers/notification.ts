@@ -42,10 +42,6 @@ import {
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
 import {
-	findSuperPasswordChannelsInOrganization,
-	notifySuperPasswordChannelChanges,
-} from "@dokploy/server/services/super-password";
-import {
 	redactNotificationSecrets,
 	redactNotificationSecretsList,
 } from "@dokploy/server/utils/notifications/security";
@@ -58,7 +54,6 @@ import {
 	withPermission,
 } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
-import { getRequestMeta } from "@/server/api/utils/request-meta";
 import {
 	apiCreateCustom,
 	apiCreateDiscord,
@@ -113,34 +108,8 @@ const assertNotificationProviderId = (
 	}
 };
 
-// Super password alert channels are recovery and alert paths, so every
-// change to which channels have the toggle on (or where they point) is
-// announced to all of them, old destinations included.
-const watchSuperPasswordChannels = (action: "create" | "update" | "delete") =>
-	withPermission("notification", action).use(async ({ ctx, next }) => {
-		const organizationId = ctx.session.activeOrganizationId;
-		const before = await findSuperPasswordChannelsInOrganization(
-			organizationId,
-		).catch(() => null);
-		const result = await next();
-		if (result.ok && before) {
-			void findSuperPasswordChannelsInOrganization(organizationId)
-				.then((after) =>
-					notifySuperPasswordChannelChanges({
-						before,
-						after,
-						context: { user: ctx.user, ...getRequestMeta(ctx.req) },
-					}),
-				)
-				.catch((error) =>
-					console.error("Failed to check super password channels", error),
-				);
-		}
-		return result;
-	});
-
 export const notificationRouter = createTRPCRouter({
-	createSlack: watchSuperPasswordChannels("create")
+	createSlack: withPermission("notification", "create")
 		.input(apiCreateSlack)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -159,7 +128,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateSlack: watchSuperPasswordChannels("update")
+	updateSlack: withPermission("notification", "update")
 		.input(apiUpdateSlack)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -203,7 +172,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createTelegram: watchSuperPasswordChannels("create")
+	createTelegram: withPermission("notification", "create")
 		.input(apiCreateTelegram)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -225,7 +194,7 @@ export const notificationRouter = createTRPCRouter({
 			}
 		}),
 
-	updateTelegram: watchSuperPasswordChannels("update")
+	updateTelegram: withPermission("notification", "update")
 		.input(apiUpdateTelegram)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -270,7 +239,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createDiscord: watchSuperPasswordChannels("create")
+	createDiscord: withPermission("notification", "create")
 		.input(apiCreateDiscord)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -292,7 +261,7 @@ export const notificationRouter = createTRPCRouter({
 			}
 		}),
 
-	updateDiscord: watchSuperPasswordChannels("update")
+	updateDiscord: withPermission("notification", "update")
 		.input(apiUpdateDiscord)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -346,7 +315,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createEmail: watchSuperPasswordChannels("create")
+	createEmail: withPermission("notification", "create")
 		.input(apiCreateEmail)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -364,7 +333,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateEmail: watchSuperPasswordChannels("update")
+	updateEmail: withPermission("notification", "update")
 		.input(apiUpdateEmail)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -416,7 +385,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createResend: watchSuperPasswordChannels("create")
+	createResend: withPermission("notification", "create")
 		.input(apiCreateResend)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -434,7 +403,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateResend: watchSuperPasswordChannels("update")
+	updateResend: withPermission("notification", "update")
 		.input(apiUpdateResend)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -483,7 +452,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	remove: watchSuperPasswordChannels("delete")
+	remove: withPermission("notification", "delete")
 		.input(apiFindOneNotification)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -613,7 +582,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createGotify: watchSuperPasswordChannels("create")
+	createGotify: withPermission("notification", "create")
 		.input(apiCreateGotify)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -631,7 +600,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateGotify: watchSuperPasswordChannels("update")
+	updateGotify: withPermission("notification", "update")
 		.input(apiUpdateGotify)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -676,7 +645,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createNtfy: watchSuperPasswordChannels("create")
+	createNtfy: withPermission("notification", "create")
 		.input(apiCreateNtfy)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -694,7 +663,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateNtfy: watchSuperPasswordChannels("update")
+	updateNtfy: withPermission("notification", "update")
 		.input(apiUpdateNtfy)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -744,7 +713,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createMattermost: watchSuperPasswordChannels("create")
+	createMattermost: withPermission("notification", "create")
 		.input(apiCreateMattermost)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -765,7 +734,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateMattermost: watchSuperPasswordChannels("update")
+	updateMattermost: withPermission("notification", "update")
 		.input(apiUpdateMattermost)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -813,7 +782,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createCustom: watchSuperPasswordChannels("create")
+	createCustom: withPermission("notification", "create")
 		.input(apiCreateCustom)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -831,7 +800,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateCustom: watchSuperPasswordChannels("update")
+	updateCustom: withPermission("notification", "update")
 		.input(apiUpdateCustom)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -876,7 +845,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createLark: watchSuperPasswordChannels("create")
+	createLark: withPermission("notification", "create")
 		.input(apiCreateLark)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -894,7 +863,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateLark: watchSuperPasswordChannels("update")
+	updateLark: withPermission("notification", "update")
 		.input(apiUpdateLark)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -940,7 +909,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createTeams: watchSuperPasswordChannels("create")
+	createTeams: withPermission("notification", "create")
 		.input(apiCreateTeams)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -958,7 +927,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updateTeams: watchSuperPasswordChannels("update")
+	updateTeams: withPermission("notification", "update")
 		.input(apiUpdateTeams)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -1002,7 +971,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	createPushover: watchSuperPasswordChannels("create")
+	createPushover: withPermission("notification", "create")
 		.input(apiCreatePushover)
 		.mutation(async ({ input, ctx }) => {
 			try {
@@ -1023,7 +992,7 @@ export const notificationRouter = createTRPCRouter({
 				});
 			}
 		}),
-	updatePushover: watchSuperPasswordChannels("update")
+	updatePushover: withPermission("notification", "update")
 		.input(apiUpdatePushover)
 		.mutation(async ({ input, ctx }) => {
 			try {

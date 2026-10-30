@@ -31,7 +31,7 @@ import {
 	type UnusedCertificate,
 } from "./shared";
 
-const HIDDEN_HINT = "Hidden without a super session";
+const HIDDEN_HINT = "Owners and admins only";
 
 const labelOf = (item: UnusedCertificate) => item.main ?? item.names[0] ?? "";
 

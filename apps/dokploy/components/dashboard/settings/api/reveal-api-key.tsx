@@ -60,7 +60,7 @@ export const RevealApiKey = ({ apiKeyId, name, revealable }: Props) => {
 					</TooltipTrigger>
 					<TooltipContent>
 						{revealable
-							? "Show key (requires the super password)"
+							? "Show key"
 							: "This key was created before keys could be revealed"}
 					</TooltipContent>
 				</Tooltip>

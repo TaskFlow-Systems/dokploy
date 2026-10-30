@@ -14,7 +14,6 @@ import { rejectApiKeySession } from "./api-key";
 import { canAccessTerminalOverWss } from "./authorize";
 import { verifyWebSocketOrigin } from "./origin";
 import { canAccessServerTerminalWebSocket } from "./server-permission";
-import { rejectTerminalWithoutSuperSession } from "./super-session";
 import {
 	parseResizeMessage,
 	parseTerminalSize,
@@ -119,9 +118,6 @@ export const setupTerminalWebSocketServer = (
 			return;
 		}
 
-		if (await rejectTerminalWithoutSuperSession(ws, user, session)) {
-			return;
-		}
 		if (rejectApiKeySession(ws, session)) {
 			return;
 		}

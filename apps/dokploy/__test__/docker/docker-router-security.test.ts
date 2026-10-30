@@ -6,7 +6,6 @@ const mocks = vi.hoisted(() => ({
 	assertLocalDockerContainerAccess: vi.fn(),
 	assertLocalDockerContainerOrSystemAccess: vi.fn(),
 	checkPermission: vi.fn(),
-	checkProtectedResourceAccess: vi.fn(),
 	containerKill: vi.fn(),
 	containerRemove: vi.fn(),
 	containerRestart: vi.fn(),
@@ -66,17 +65,7 @@ vi.mock("@/server/api/utils/local-docker-access", () => ({
 		mocks.assertLocalDockerContainerOrSystemAccess,
 }));
 
-vi.mock("@dokploy/server/services/super-password", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("@dokploy/server/services/super-password")
-	>()),
-	checkProtectedResourceAccess: mocks.checkProtectedResourceAccess,
-}));
-
 const { dockerRouter } = await import("../../server/api/routers/docker");
-const { getSuperSessionDenial } = await import(
-	"@dokploy/server/services/super-password"
-);
 
 const createCaller = (authMethod: "session" | "api-key" = "session") =>
 	dockerRouter.createCaller({
@@ -292,9 +281,6 @@ describe("docker router container file and event boundary", () => {
 			(ctx, containerId, permission) =>
 				mocks.assertLocalDockerContainerAccess(ctx, containerId, permission),
 		);
-		mocks.checkProtectedResourceAccess.mockResolvedValue(
-			"super-session-required",
-		);
 	});
 
 	const fileCalls = (
@@ -467,28 +453,7 @@ describe("docker router container file and event boundary", () => {
 			);
 		});
 
-		it("denies system container files without an open super session", async () => {
-			for (const call of fileCalls(createCaller())) {
-				const error = await call.run().then(
-					() => null,
-					(caught: unknown) => caught,
-				);
-				expect(error, call.name).toMatchObject({ code: "FORBIDDEN" });
-				expect(getSuperSessionDenial(error), call.name).toBe(
-					"super-session-required",
-				);
-				expect(call.sideEffect, call.name).not.toHaveBeenCalled();
-			}
-			expect(mocks.checkProtectedResourceAccess).toHaveBeenCalledWith({
-				userId: "user-1",
-				viaApiKey: false,
-			});
-			expect(mocks.audit).not.toHaveBeenCalled();
-		});
-
-		it("opens system container files for owners and admins with an open super session", async () => {
-			mocks.checkProtectedResourceAccess.mockResolvedValue(null);
-
+		it("opens system container files for owners and admins", async () => {
 			for (const call of fileCalls(createCaller())) {
 				await call.run();
 				expect(call.sideEffect, call.name).toHaveBeenCalledWith(
@@ -501,8 +466,7 @@ describe("docker router container file and event boundary", () => {
 			}
 		});
 
-		it("keeps members out even with an open super session", async () => {
-			mocks.checkProtectedResourceAccess.mockResolvedValue(null);
+		it("keeps members out of system container files", async () => {
 			mocks.findMemberByUserId.mockResolvedValue({ role: "member" });
 
 			for (const call of fileCalls(createCaller())) {
@@ -514,11 +478,6 @@ describe("docker router container file and event boundary", () => {
 		});
 
 		it("never opens system container files through an API key", async () => {
-			mocks.checkProtectedResourceAccess.mockImplementation(
-				async ({ viaApiKey }: { viaApiKey: boolean }) =>
-					viaApiKey ? "browser-session-required" : null,
-			);
-
 			for (const call of fileCalls(createCaller("api-key"))) {
 				await expect(call.run(), call.name).rejects.toMatchObject({
 					code: "FORBIDDEN",

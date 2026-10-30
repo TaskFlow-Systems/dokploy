@@ -75,7 +75,6 @@ describe("isPublicPath", () => {
 		"/reset-password",
 		"/send-reset-password",
 		"/accept-invitation/abc123",
-		"/super-password/lock",
 		"/register/",
 	])("treats %s as a page that needs no session", (path) => {
 		expect(isPublicPath(path)).toBe(true);
@@ -88,7 +87,7 @@ describe("isPublicPath", () => {
 		"/swagger",
 		"/registered",
 		"/invitations",
-		"/super-passwords",
+		"/accept-invitations",
 	])("treats %s as a page that needs one", (path) => {
 		expect(isPublicPath(path)).toBe(false);
 	});

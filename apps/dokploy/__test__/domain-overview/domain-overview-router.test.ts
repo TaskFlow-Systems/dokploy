@@ -5,8 +5,6 @@ const mocks = vi.hoisted(() => ({
 	assertNoTraefikDeletion: vi.fn(),
 	clearStaleDeletionLock: vi.fn(),
 	recoverInterruptedTraefik: vi.fn(),
-	checkProtectedResourceAccess: vi.fn(),
-	checkSuperSessionAccess: vi.fn(),
 	createAuditLog: vi.fn(),
 	deleteUnusedCertificates: vi.fn(),
 	findMember: vi.fn(),
@@ -40,14 +38,6 @@ vi.mock("@dokploy/server/services/domain-overview", () => ({
 
 vi.mock("@dokploy/server/services/proprietary/license-key", () => ({
 	hasValidLicense: mocks.hasValidLicense,
-}));
-
-vi.mock("@dokploy/server/services/super-password", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("@dokploy/server/services/super-password")
-	>()),
-	checkProtectedResourceAccess: mocks.checkProtectedResourceAccess,
-	checkSuperSessionAccess: mocks.checkSuperSessionAccess,
 }));
 
 vi.mock("@dokploy/server/services/known-secrets", async () => {
@@ -111,8 +101,6 @@ describe("domain overview router access", () => {
 			{ serverId: "server-2" },
 		]);
 		mocks.hasValidLicense.mockResolvedValue(false);
-		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
-		mocks.checkSuperSessionAccess.mockResolvedValue(null);
 		mocks.getDomainOverview.mockResolvedValue({
 			rows: [],
 			serverErrors: [],
@@ -180,47 +168,24 @@ describe("domain overview router access", () => {
 		await expect(access.canReadHost("server-9")).resolves.toBe(false);
 	});
 
-	it("keeps certificate data closed for a member even with an open super session", async () => {
+	it("keeps certificate data closed for a member", async () => {
 		await createCaller("member", { traefikFiles: true }).domainOverview.list();
 
 		expect(overviewAccess().canReadCertificates).toBe(false);
 	});
 
-	it("keeps certificate data closed while the owner's super session is closed", async () => {
-		mocks.checkProtectedResourceAccess.mockResolvedValue(
-			"super-session-required",
-		);
-
-		await createCaller("owner").domainOverview.list();
-
-		expect(overviewAccess().canReadCertificates).toBe(false);
-	});
-
-	it("opens certificate data to an owner with an open super session", async () => {
+	it("opens certificate data to an owner", async () => {
 		await createCaller("owner").domainOverview.list();
 
 		expect(overviewAccess().canReadCertificates).toBe(true);
-		expect(mocks.checkProtectedResourceAccess).toHaveBeenCalledWith({
-			userId: "user-1",
-			viaApiKey: false,
-		});
 	});
 
 	it("never opens certificate data through an API key", async () => {
-		mocks.checkProtectedResourceAccess.mockImplementation(
-			async ({ viaApiKey }: { viaApiKey: boolean }) =>
-				viaApiKey ? "browser-session-required" : null,
-		);
-
 		await createCaller("owner", {
 			authMethod: "api-key",
 		}).domainOverview.list();
 
 		expect(overviewAccess().canReadCertificates).toBe(false);
-		expect(mocks.checkProtectedResourceAccess).toHaveBeenCalledWith({
-			userId: "user-1",
-			viaApiKey: true,
-		});
 	});
 
 	it("passes a remote server to the Traefik logs for a member with Traefik file access", async () => {
@@ -258,17 +223,6 @@ describe("domain overview router access", () => {
 
 		expect(mocks.getTraefikLogs).toHaveBeenCalledWith("org-1", null);
 	});
-
-	it("classifies the certificate deletion as dangerous, like editing a Traefik file", async () => {
-		const { PROCEDURE_ACCESS } = await import(
-			"@/server/api/utils/procedure-access"
-		);
-
-		expect(PROCEDURE_ACCESS["domainOverview.deleteUnusedCertificates"]).toBe(
-			"dangerous",
-		);
-		expect(PROCEDURE_ACCESS["settings.updateTraefikFile"]).toBe("dangerous");
-	});
 });
 
 describe("domain overview certificate deletion access", () => {
@@ -281,8 +235,6 @@ describe("domain overview certificate deletion access", () => {
 			{ serverId: "server-2" },
 		]);
 		mocks.hasValidLicense.mockResolvedValue(false);
-		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
-		mocks.checkSuperSessionAccess.mockResolvedValue(null);
 		mocks.deleteUnusedCertificates.mockResolvedValue({
 			status: "deleted",
 			code: "ok",
@@ -308,22 +260,11 @@ describe("domain overview certificate deletion access", () => {
 		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
 	});
 
-	it("refuses an admin whose procedure-level super session is not open", async () => {
-		mocks.checkSuperSessionAccess.mockResolvedValue("super-session-required");
-
+	it("refuses an API key session", async () => {
 		await expect(
-			createCaller("admin").domainOverview.deleteUnusedCertificates(input),
-		).rejects.toMatchObject({ code: "FORBIDDEN" });
-		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
-	});
-
-	it("refuses an admin without an open super session", async () => {
-		mocks.checkProtectedResourceAccess.mockResolvedValue(
-			"super-session-required",
-		);
-
-		await expect(
-			createCaller("admin").domainOverview.deleteUnusedCertificates(input),
+			createCaller("admin", {
+				authMethod: "api-key",
+			}).domainOverview.deleteUnusedCertificates(input),
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
 		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
 		expect(mocks.createAuditLog).not.toHaveBeenCalled();
@@ -339,7 +280,7 @@ describe("domain overview certificate deletion access", () => {
 		expect(mocks.deleteUnusedCertificates).not.toHaveBeenCalled();
 	});
 
-	it("deletes for an admin with an open super session and audits who, where, what and the result", async () => {
+	it("deletes for an admin and audits who, where, what and the result", async () => {
 		mocks.hasValidLicense.mockResolvedValue(true);
 
 		const result =
@@ -461,21 +402,7 @@ describe.each([
 		vi.clearAllMocks();
 		mocks.findServers.mockResolvedValue([{ serverId: "server-1" }]);
 		mocks.hasValidLicense.mockResolvedValue(false);
-		mocks.checkProtectedResourceAccess.mockResolvedValue(null);
-		mocks.checkSuperSessionAccess.mockResolvedValue(null);
 		mocks[serviceName].mockResolvedValue(result);
-	});
-
-	it("is classified dangerous", async () => {
-		const { PROCEDURE_ACCESS } = await import(
-			"@/server/api/utils/procedure-access"
-		);
-
-		expect(
-			PROCEDURE_ACCESS[
-				`domainOverview.${procedure}` as keyof typeof PROCEDURE_ACCESS
-			],
-		).toBe("dangerous");
 	});
 
 	it("refuses a member without Traefik file access", async () => {
@@ -485,27 +412,14 @@ describe.each([
 		expect(mocks[serviceName]).not.toHaveBeenCalled();
 	});
 
-	it("refuses an admin without an open super session", async () => {
-		mocks.checkProtectedResourceAccess.mockResolvedValue(
-			"super-session-required",
-		);
-
-		await expect(call(createCaller("admin"))).rejects.toMatchObject({
-			code: "FORBIDDEN",
-		});
-		expect(mocks[serviceName]).not.toHaveBeenCalled();
-	});
-
 	it("refuses an API key session", async () => {
-		mocks.checkSuperSessionAccess.mockResolvedValue("api-key-write-locked");
-
 		await expect(
 			call(createCaller("admin", { authMethod: "api-key" })),
 		).rejects.toMatchObject({ code: "FORBIDDEN" });
 		expect(mocks[serviceName]).not.toHaveBeenCalled();
 	});
 
-	it("runs for an admin with an open super session", async () => {
+	it("runs for an admin", async () => {
 		await expect(call(createCaller("admin"))).resolves.toMatchObject(result);
 		expect(mocks[serviceName]).toHaveBeenCalledWith("org-1", "server-1");
 	});

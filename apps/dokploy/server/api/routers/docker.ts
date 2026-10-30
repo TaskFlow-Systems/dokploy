@@ -32,7 +32,7 @@ import {
 	assertLocalDockerContainerOrSystemAccess,
 	type LocalDockerPermission,
 } from "@/server/api/utils/local-docker-access";
-import { assertProtectedResourceAccess } from "@/server/api/utils/super-session";
+import { assertProtectedResourceAccess } from "@/server/api/utils/protected-resource-access";
 import { uploadFileToContainerSchema } from "@/utils/schema";
 import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
 
@@ -98,7 +98,7 @@ const resolveAuthorizedContainerId = async (
 };
 
 // The file manager may also open the panel's own containers (dokploy, its
-// postgres and redis, traefik), but only with an open super session.
+// postgres and redis, traefik), but only for an owner or admin in a browser.
 const resolveAuthorizedFileContainerId = async (
 	ctx: Parameters<typeof assertProtectedResourceAccess>[0],
 	containerId: string,

@@ -17,13 +17,6 @@ vi.mock("@dokploy/server/services/known-secrets", () => ({
 	resetKnownSecretMatcherCache: mocks.resetKnownSecretMatcherCache,
 }));
 
-vi.mock("@dokploy/server/services/super-password", async (importOriginal) => ({
-	...(await importOriginal<
-		typeof import("@dokploy/server/services/super-password")
-	>()),
-	checkSuperSessionAccess: vi.fn(async () => null),
-}));
-
 const { buildKnownSecretMatcher } = await import(
 	"@dokploy/server/utils/security/secret-scrub"
 );
@@ -33,9 +26,7 @@ const { createTRPCRouter, protectedProcedure } = await import(
 const { isProcedureDeniedForApiKey } = await import(
 	"@/server/api/utils/api-key-output-guard"
 );
-const { PROCEDURE_ACCESS } = await import(
-	"@/server/api/utils/procedure-access"
-);
+const { appRouter } = await import("@/server/api/root");
 
 const handled = vi.fn();
 
@@ -288,9 +279,10 @@ describe("procedures that return raw secrets", () => {
 	});
 
 	it("cover every reveal procedure of the app router", () => {
-		const reveals = Object.keys(PROCEDURE_ACCESS).filter((path) =>
-			/reveal/i.test(path),
-		);
+		const reveals = Object.keys(
+			(appRouter as unknown as { _def: { procedures: object } })._def
+				.procedures,
+		).filter((path) => /reveal/i.test(path));
 
 		expect(reveals.length).toBeGreaterThan(0);
 		for (const path of reveals) {

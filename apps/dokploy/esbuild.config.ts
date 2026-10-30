@@ -28,8 +28,6 @@ try {
 				"wait-for-postgres": "wait-for-postgres.ts",
 				"reset-password": "reset-password.ts",
 				"reset-2fa": "reset-2fa.ts",
-				"reset-super-password": "reset-super-password.ts",
-				"lock-super-session": "lock-super-session.ts",
 				"migrate-auth-secret": "scripts/migrate-auth-secret.ts",
 			},
 			bundle: true,

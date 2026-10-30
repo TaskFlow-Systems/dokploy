@@ -294,8 +294,8 @@ export const apikeyRelations = relations(apikey, ({ one }) => ({
 }));
 
 // better-auth keeps only a hash of each key; this encrypted copy lets the
-// owner reveal it again behind an open super session. Kept outside the
-// apikey table so better-auth's schema stays untouched.
+// owner reveal it again from a browser session. Kept outside the apikey table
+// so better-auth's schema stays untouched.
 export const apikeySecret = pgTable("apikey_secret", {
 	apikeyId: text("apikey_id")
 		.primaryKey()

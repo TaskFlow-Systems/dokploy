@@ -64,7 +64,6 @@ export * from "./services/server";
 export * from "./services/server-health";
 export * from "./services/settings";
 export * from "./services/ssh-key";
-export * from "./services/super-password";
 export * from "./services/transfer";
 export * from "./services/user";
 export * from "./services/vault-provider";

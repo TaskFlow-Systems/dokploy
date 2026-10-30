@@ -44,23 +44,15 @@ import {
 	resolvePermissions,
 } from "@dokploy/server/services/permission";
 import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
-import {
-	checkProtectedResourceAccess,
-	matchesSuperPassword,
-} from "@dokploy/server/services/super-password";
 import { fetchWithPublicEgress } from "@dokploy/server/utils/url/network";
 import { TRPCError } from "@trpc/server";
 import * as bcrypt from "bcrypt";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
 import { z } from "zod";
 import { apiKeyNameSchema } from "@/lib/api-keys";
+import { assertBrowserSession } from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
 import { assertContainerMetricsServiceAccess } from "@/server/api/utils/monitoring-access";
-import {
-	assertBrowserSession,
-	isApiKeySession,
-	superSessionError,
-} from "@/server/api/utils/super-session";
 import { deleteAccount } from "@/server/utils/account-deletion";
 import {
 	adminProcedure,
@@ -543,13 +535,6 @@ export const userRouter = createTRPCRouter({
 					throw new TRPCError({
 						code: "BAD_REQUEST",
 						message: "New password is required",
-					});
-				}
-
-				if (await matchesSuperPassword(ctx.user.id, password)) {
-					throw new TRPCError({
-						code: "BAD_REQUEST",
-						message: "The login password must differ from your super password",
 					});
 				}
 				await db
@@ -1050,16 +1035,6 @@ export const userRouter = createTRPCRouter({
 		.input(z.object({ apiKeyId: z.string() }))
 		.mutation(async ({ input, ctx }) => {
 			assertBrowserSession(ctx);
-			// Unlike other dangerous procedures this one needs an open super
-			// session even when no super password is set: the key alone is
-			// enough to act as the user.
-			const denial = await checkProtectedResourceAccess({
-				userId: ctx.user.id,
-				viaApiKey: isApiKeySession(ctx.session),
-			});
-			if (denial) {
-				throw superSessionError(denial);
-			}
 			await checkPermission(ctx, { api: ["read"] });
 			const found = await findOwnApiKey(ctx, input.apiKeyId);
 

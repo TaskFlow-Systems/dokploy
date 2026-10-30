@@ -1,8 +1,8 @@
 import { vi } from "vitest";
 
-// Production hashes use bcrypt cost 12 (~0.25 s each on an idle core), and the
-// super password suites hash dozens of times; on a busy CI host that blows the
-// 5 s test timeout. Cost 4 keeps the real algorithm and hash format.
+// bcrypt is slow by design, and on a busy CI host a suite that hashes many
+// times can blow the 5 s test timeout. Cost 4 keeps the real algorithm and hash
+// format.
 vi.mock("bcrypt", async (importOriginal) => {
 	type Bcrypt = typeof import("bcrypt");
 	// The CJS module also exposes itself as `default` at runtime.

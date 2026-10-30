@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
+import { isApiKeySession } from "@/server/api/utils/api-key-session";
 import { getRequestMeta } from "@/server/api/utils/request-meta";
-import { isApiKeySession } from "@/server/api/utils/super-session";
 
 type PanelRestartRequester = {
 	req?: IncomingMessage;

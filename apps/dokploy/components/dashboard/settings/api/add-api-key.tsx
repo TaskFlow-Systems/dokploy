@@ -448,7 +448,7 @@ export const AddApiKey = () => {
 						<DialogTitle>API Key Generated Successfully</DialogTitle>
 						<DialogDescription>
 							Copy your API key now. You can reveal it again later from this
-							page with your super password.
+							page.
 						</DialogDescription>
 					</DialogHeader>
 					<div className="mt-4 space-y-4">

@@ -104,7 +104,7 @@ import { logPanelRestart } from "@/server/api/utils/panel-restart-log";
 import {
 	assertProtectedResourceAccess,
 	hasProtectedResourceAccess,
-} from "@/server/api/utils/super-session";
+} from "@/server/api/utils/protected-resource-access";
 import {
 	assertSettingsServerAccess,
 	assertTraefikFilesHostAccess,

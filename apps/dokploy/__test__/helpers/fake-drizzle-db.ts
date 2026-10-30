@@ -21,8 +21,8 @@ const comparable = (value: unknown) =>
 	value instanceof Date ? value.getTime() : value;
 
 /**
- * In-memory stand-in for the subset of drizzle used by the super password
- * service: relational findFirst/findMany, insert (with onConflictDoUpdate),
+ * In-memory stand-in for the subset of drizzle that services under test use:
+ * relational findFirst/findMany, insert (with onConflictDoUpdate),
  * select ... where (optionally for update), update ... returning and delete,
  * with eq/ne/gt/lt/isNull/isNotNull/and/or conditions evaluated against stored
  * rows.

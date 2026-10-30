@@ -11,7 +11,6 @@ import { canAccessDockerOverWss } from "./authorize";
 import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
-import { rejectTerminalWithoutSuperSession } from "./super-session";
 import {
 	getTerminalHangupArgs,
 	isValidContainerId,
@@ -107,9 +106,6 @@ export const setupDockerContainerTerminalWebSocketServer = (
 			return;
 		}
 
-		if (await rejectTerminalWithoutSuperSession(ws, user, session)) {
-			return;
-		}
 		if (rejectApiKeySession(ws, session)) {
 			return;
 		}

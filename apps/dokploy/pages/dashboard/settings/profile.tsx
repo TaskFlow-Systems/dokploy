@@ -7,7 +7,6 @@ import { ShowApiKeys } from "@/components/dashboard/settings/api/show-api-keys";
 import { LinkingAccount } from "@/components/dashboard/settings/linking-account/linking-account";
 import { DeleteAccount } from "@/components/dashboard/settings/profile/delete-account";
 import { ProfileForm } from "@/components/dashboard/settings/profile/profile-form";
-import { SuperPasswordCard } from "@/components/dashboard/settings/profile/super-password";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
@@ -20,7 +19,6 @@ const Page = () => {
 		<div className="w-full">
 			<div className="h-full rounded-xl max-w-5xl mx-auto flex flex-col gap-4">
 				<ProfileForm />
-				<SuperPasswordCard />
 				{isCloud && <LinkingAccount />}
 				{permissions?.api.read && <ShowApiKeys />}
 				<DeleteAccount />
