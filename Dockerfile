@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM node:26.13.0-bookworm-slim AS base
+# Debian 13: Debian 12 leaves the critical zlib1g CVE-2023-45853 and dozens of
+# high findings unfixed. The tag is pinned to its multi-arch index digest, the
+# same in every Dockerfile (component-versions-sync.test.ts).
+FROM node:26.13.0-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS base
 ENV BUN_INSTALL="/root/.bun"
 ENV PATH="$BUN_INSTALL/bin:$PATH"
 RUN apt-get update \
