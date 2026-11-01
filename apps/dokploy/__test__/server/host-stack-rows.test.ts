@@ -210,7 +210,7 @@ describe("buildHostStackRows", () => {
 			rowNamed(rowsFor({ redisImage: "redis:8.9.9" }), "redis").outdated,
 		).toBe(true);
 		expect(
-			rowNamed(rowsFor({ redisImage: "redis:8.10.2" }), "redis").outdated,
+			rowNamed(rowsFor({ redisImage: "redis:8.10.3" }), "redis").outdated,
 		).toBe(false);
 	});
 

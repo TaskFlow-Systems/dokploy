@@ -50,7 +50,7 @@ Installer сам определяет систему:
 Dokploy: ghcr.io/agenthits/dokploy:agenthits-dev
 Traefik: traefik:v3.7.16
 Postgres: postgres:18.6
-Redis: redis:8.10.2
+Redis: redis:8.10.3
 ```
 
 Для `postgres:18+` installer автоматически монтирует volume в
