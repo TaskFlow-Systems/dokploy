@@ -2,14 +2,21 @@ name: Image audit
 
 # bun audit sees only the npm dependencies. This scan reads the published panel
 # image: its Debian packages, the Go binaries of the bundled tools (Docker CLI,
-# rclone, Railpack, pack) and the npm packages inside it. It also reads the
-# pinned Traefik, Postgres and Redis images that run next to the panel and on
-# servers. It fails on critical and high findings that already have a fix;
-# .trivyignore.yaml lists the ones still waiting for a release. GitHub notifies
-# the person who last changed the cron line when a scheduled run fails.
+# rclone, Railpack, pack) and the npm packages inside it. Every Monday it also
+# reads the pinned Traefik, Postgres and Redis images that run next to the
+# panel and on servers. It fails on critical and high findings that already
+# have a fix; .trivyignore.yaml lists the ones still waiting for a release.
+# The findings go to the job summary. GitHub notifies the person who last
+# changed the cron line when a scheduled run fails.
 on:
   schedule:
     - cron: "53 5 * * 1"
+  # Each push to AgentHits-Dev builds agenthits-dev-<sha12> in the release
+  # workflow; the panel job scans that build once it is pushed.
+  workflow_run:
+    workflows: [AgentHits Release]
+    types: [completed]
+    branches: [AgentHits-Dev]
   workflow_dispatch:
     inputs:
       image:
@@ -27,8 +34,30 @@ env:
   TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
 
 jobs:
-  scan:
+  panel:
+    name: image audit (panel)
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Scan image
+        env:
+          INPUT_IMAGE: ${{ inputs.image }}
+          BUILT_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          image="${INPUT_IMAGE:-ghcr.io/agenthits/dokploy:agenthits-dev}"
+          if [ -n "$BUILT_SHA" ]; then
+            image="ghcr.io/agenthits/dokploy:agenthits-dev-${BUILT_SHA:0:12}"
+          fi
+          .github/scripts/trivy-image-scan.sh "$image" \
+            --image-src remote --platform linux/amd64
+
+  pinned:
     name: image audit (${{ matrix.name }})
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -37,17 +66,16 @@ jobs:
         # component-versions-sync.test.ts keeps the Traefik, Postgres and Redis
         # tags equal to PINNED_VERSIONS.
         include:
-          - name: panel
-            image: ghcr.io/agenthits/dokploy:agenthits-dev
           - name: traefik
             image: traefik:v3.7.17
           - name: postgres
             image: postgres:18.6
             # gosu only switches to the postgres user when the container
-            # starts. postgres:18.6 still ships gosu 1.19, built with Go 1.24.6;
-            # its 26 Go stdlib advisories would each need an entry in
-            # .trivyignore.yaml. gosu 1.20 came out on 2026-10-25, so the skip
-            # ends with the date below and the scan reports gosu again.
+            # starts. postgres:18.6, rebuilt on 2026-10-31, still ships gosu
+            # 1.19, built with Go 1.24.6; its 26 Go stdlib advisories would
+            # each need an entry in .trivyignore.yaml. gosu 1.20 came out on
+            # 2026-10-25, so the skip ends with the date below and the scan
+            # reports gosu again.
             skip-files: usr/local/bin/gosu
             skip-until: "2026-11-27"
           - name: redis
@@ -58,7 +86,7 @@ jobs:
           persist-credentials: false
       - name: Scan image
         env:
-          IMAGE: ${{ matrix.name == 'panel' && inputs.image || matrix.image }}
+          IMAGE: ${{ matrix.image }}
           SKIP_FILES: ${{ matrix.skip-files }}
           SKIP_UNTIL: ${{ matrix.skip-until }}
         run: |
@@ -66,8 +94,5 @@ jobs:
           if [ -n "$SKIP_FILES" ] && [[ "$(date -u +%F)" < "$SKIP_UNTIL" ]]; then
             skip=(--skip-files "$SKIP_FILES")
           fi
-          docker run --rm -v "$PWD:/src:ro" -w /src "$TRIVY_IMAGE" image \
-            --image-src remote --platform linux/amd64 --scanners vuln \
-            --severity CRITICAL,HIGH --ignore-unfixed \
-            --ignorefile .trivyignore.yaml --exit-code 1 --no-progress \
-            "${skip[@]}" "$IMAGE"
+          .github/scripts/trivy-image-scan.sh "$IMAGE" \
+            --image-src remote --platform linux/amd64 "${skip[@]}"
