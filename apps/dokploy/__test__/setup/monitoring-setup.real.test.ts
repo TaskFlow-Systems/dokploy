@@ -30,10 +30,6 @@ vi.mock("@dokploy/server/services/server", () => ({
 	}),
 }));
 
-vi.mock("@dokploy/server/services/settings", () => ({
-	getDokployImageTag: vi.fn(() => "latest"),
-}));
-
 vi.mock("@dokploy/server/utils/docker/utils", () => ({
 	pullImage: vi.fn().mockResolvedValue(undefined),
 	pullRemoteImage: vi.fn().mockResolvedValue(undefined),

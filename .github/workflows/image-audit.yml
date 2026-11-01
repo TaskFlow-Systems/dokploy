@@ -4,7 +4,8 @@ name: Image audit
 # image: its Debian packages, the Go binaries of the bundled tools (Docker CLI,
 # rclone, Railpack, pack) and the npm packages inside it. Every Monday it also
 # reads the pinned Traefik, Postgres and Redis images that run next to the
-# panel and on servers. It fails on critical and high findings that already
+# panel and on servers, and the fork's monitoring image (a build of it is
+# scanned by agenthits-monitoring-image.yml as well). It fails on critical and high findings that already
 # have a fix; .trivyignore.yaml lists the ones still waiting for a release.
 # The findings go to the job summary. GitHub notifies the person who last
 # changed the cron line when a scheduled run fails.
@@ -55,7 +56,7 @@ jobs:
           .github/scripts/trivy-image-scan.sh "$image" \
             --image-src remote --platform linux/amd64
 
-  pinned:
+  images:
     name: image audit (${{ matrix.name }})
     if: github.event_name != 'workflow_run'
     runs-on: ubuntu-24.04
@@ -80,6 +81,8 @@ jobs:
             skip-until: "2026-11-27"
           - name: redis
             image: redis:8.10.3
+          - name: monitoring
+            image: ghcr.io/agenthits/dokploy-monitoring:agenthits-dev
     steps:
       - uses: actions/checkout@v7
         with:
