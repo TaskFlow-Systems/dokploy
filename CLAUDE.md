@@ -23,6 +23,7 @@ One GitHub release `agenthits-vX.Y.Z` covers a batch of work, not a single PR (o
 
 - Held packages stay pinned to exact versions (`better-auth`, `@better-auth/*`, `better-call`, `@better-fetch/fetch`, `stripe`, `@stepperize/react`, `@dokploy/trpc-openapi`) or `~` (`ssh2`), in their `package.json` and in the root `overrides`, so the workflow does not move them. Keep new holds pinned the same way.
 - Every other root override is a range `>=<fixed version> <next major>` (for `0.x`, `<next minor>`), so the override keeps the fixed floor and the workflow still moves the package. A security override follows the same form; an exact version there freezes the package and can silently override a newer direct dependency.
+- A package that `packages/server` and an app both declare takes the same range in both (`@trpc/server`, `undici`). With an exact version on one side and a range on the other, the daily update moves only the range and the lockfile keeps two copies; `instanceof` across them then fails, as a `TRPCError` thrown in `packages/server` did in the router tests.
 - Major updates are done by hand, one PR each (the `dokploy-upgrader` agent), with `bun add <pkg>@<ver> --minimum-release-age=86400`.
 - The one-day age is `minimumReleaseAge` in `bunfig.toml` and `MIN_RELEASE_AGE` in the workflow; change both together.
 - A commit pushed to the branch of the open PR stops its daily rebuild until the PR is merged or closed.
