@@ -1,25 +1,19 @@
 import { findServerById } from "@dokploy/server/services/server";
 import { getWebServerSettings } from "@dokploy/server/services/web-server-settings";
 import type { CreateServiceOptions } from "dockerode";
-import { IS_CLOUD } from "../constants";
-import { getDokployImageTag } from "../services/settings";
 import { pullImage, pullRemoteImage } from "../utils/docker/utils";
 import { execAsync, execAsyncRemote } from "../utils/process/execAsync";
 import { getRemoteDocker } from "../utils/servers/remote-docker";
 
-const getMonitoringImage = () => {
-	let imageName = "dokploy/monitoring:latest";
+// Built from Dockerfile.monitoring by agenthits-monitoring-image.yml; upstream's
+// dokploy/monitoring lags behind on Go and Alpine fixes. Setting
+// DOKPLOY_MONITORING_IMAGE on the panel's service picks another image, for
+// example dokploy/monitoring:canary to go back to upstream.
+export const FORK_MONITORING_IMAGE =
+	"ghcr.io/agenthits/dokploy-monitoring:agenthits-dev";
 
-	if (
-		(getDokployImageTag() !== "latest" ||
-			process.env.NODE_ENV === "development") &&
-		!IS_CLOUD
-	) {
-		imageName = "dokploy/monitoring:canary";
-	}
-
-	return imageName;
-};
+export const getMonitoringImage = () =>
+	process.env.DOKPLOY_MONITORING_IMAGE?.trim() || FORK_MONITORING_IMAGE;
 
 // Swarm tasks are dokploy-monitoring.<slot>.<id>, so this only matches the
 // pre-v0.30.0 standalone container. A cleanup failure must not block the deploy.

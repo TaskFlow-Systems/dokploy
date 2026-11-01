@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Deletes old GHCR versions of the AgentHits image. Kept: every version tagged
-# agenthits-vX.Y.Z, agenthits-dev, agenthits-stable or buildcache, the newest KEEP_RECENT other
+# Deletes old GHCR versions of one AgentHits image package (PACKAGE_NAME: the
+# panel or monitoring). Kept: every version tagged agenthits-vX.Y.Z,
+# agenthits-dev, agenthits-stable or buildcache, the newest KEEP_RECENT other
 # versions, and every manifest a kept image index points at (GHCR lists the
 # platform manifests of an index as separate untagged versions, and deleting
 # them breaks the tagged image).
