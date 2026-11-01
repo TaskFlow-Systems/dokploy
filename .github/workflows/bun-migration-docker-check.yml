@@ -11,6 +11,7 @@ on:
     branches: [AgentHits-Dev]
     paths:
       - ".github/workflows/bun-migration-docker-check.yml"
+      - ".github/scripts/trivy-image-scan.sh"
       - ".trivyignore.yaml"
       - "Dockerfile"
       - "Dockerfile.cloud"
@@ -110,11 +111,7 @@ jobs:
       - name: Scan main image
         env:
           TRIVY_IMAGE: aquasec/trivy:0.76.1@sha256:790fd66d1697395d8693d1acaa1ea702406a20f109b6fc7bac8db623eca6c06c
-        run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/src:ro" -w /src "$TRIVY_IMAGE" image \
-            --image-src docker --scanners vuln --severity CRITICAL,HIGH \
-            --ignore-unfixed --ignorefile .trivyignore.yaml --exit-code 1 \
-            --no-progress dokploy-bun-check:main
+        run: .github/scripts/trivy-image-scan.sh dokploy-bun-check:main --image-src docker
 
   service-image-builds:
     runs-on: ubuntu-24.04

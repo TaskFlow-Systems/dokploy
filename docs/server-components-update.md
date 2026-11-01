@@ -15,9 +15,9 @@
 
 | Компонент | Версия | Где проверено наличие |
 |---|---|---|
-| Node.js (базовый образ панели и CI) | 26.13.0 | `node:26.13.0-bookworm-slim`, первый LTS-релиз ветки 26 (Lithium, 2026-10-28) |
-| Docker Engine | 29.9.2 | docker-ce для noble и resolute, amd64 и arm64; в образе панели только docker-ce-cli для bookworm |
-| Traefik | 3.7.16 | последний стабильный релиз (GitHub), образ `traefik:v3.7.16` |
+| Node.js (базовый образ панели и CI) | 26.13.0 | `node:26.13.0-trixie-slim` (Debian 13), закреплён по digest; первый LTS-релиз ветки 26 (Lithium, 2026-10-28) |
+| Docker Engine | 29.9.2 | docker-ce для noble и resolute, amd64 и arm64; в образе панели только docker-ce-cli для trixie |
+| Traefik | 3.7.17 | последний стабильный релиз (GitHub), образ `traefik:v3.7.17`; с этой версии собран на Go 1.27 |
 | Postgres (база панели) | 18.6 | `postgres:18.6`, более новых тегов 18.x нет |
 | Redis (база панели) | 8.10.3 | `redis:8.10.3`, более новых тегов 8.10.x нет |
 | Nixpacks | 1.41.0 | последний релиз |
@@ -41,6 +41,7 @@ Postgres и Redis относятся к базе панели. На сервер
 
 1. Поменять значение в `PINNED_VERSIONS` (`component-versions.ts`). Для Traefik также можно переопределить переменной окружения `TRAEFIK_VERSION`, но для одинаковой установки этого делать не стоит.
 2. Поменять то же значение в `install-agenthits.sh` (значения по умолчанию), `Dockerfile` (ARG), `.github/workflows/pull-request.yml` и `.github/workflows/image-audit.yml`. Если тест не проходит, какой-то файл остался со старым значением.
+   Node.js: тег и digest `node:<версия>-trixie-slim@sha256:…` меняются вместе во всех `Dockerfile*` и в `.devcontainer/Dockerfile`. Digest — у индекса тега (все архитектуры): `docker buildx imagetools inspect node:<версия>-trixie-slim`. Официальный образ пересобирают под тем же тегом, когда Debian выпускает исправления, а закреплённый digest этих пересборок не получает. Если аудит образа краснеет из-за пакета базового образа, поднять digest того же тега.
 3. Выпустить панель обычным путём: PR, merge, образ.
 4. На каждом сервере нажать Components → Update.
 

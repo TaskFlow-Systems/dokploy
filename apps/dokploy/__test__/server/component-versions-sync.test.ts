@@ -169,10 +169,16 @@ describe("Node.js image and CI version", () => {
 		"Dockerfile.server",
 	];
 
+	const nodeImage =
+		/FROM node:([\d.]+)-trixie-slim@(sha256:[0-9a-f]{64}) AS base/;
+
 	it.each(dockerfiles)("%s builds on the pinned Node image", (file) => {
-		expect(pinIn(read(file), /FROM node:([\d.]+)-bookworm-slim AS base/)).toBe(
-			PINNED_VERSIONS.node,
-		);
+		expect(pinIn(read(file), nodeImage)).toBe(PINNED_VERSIONS.node);
+	});
+
+	it("pins the same Node image digest in every Dockerfile", () => {
+		const digests = dockerfiles.map((file) => read(file).match(nodeImage)?.[2]);
+		expect(new Set(digests).size).toBe(1);
 	});
 
 	it.each([
