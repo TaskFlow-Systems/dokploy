@@ -31,7 +31,7 @@ describe("updateOutcome", () => {
 	it("reports a success marker split across two chunks", () => {
 		expect(
 			outcomesFor([
-				"Redis version 8.10.2 installed ✅\nComponents update fin",
+				"Redis version 8.10.3 installed ✅\nComponents update fin",
 				"ished ✅\n",
 			]),
 		).toEqual(["done"]);
@@ -52,7 +52,7 @@ describe("updateOutcome", () => {
 	it("reports nothing while no marker has arrived", () => {
 		expect(
 			outcomesFor([
-				"Pulling redis:8.10.2\n",
+				"Pulling redis:8.10.3\n",
 				"Traefik version 3.6.1 installed ✅\n",
 			]),
 		).toEqual([]);

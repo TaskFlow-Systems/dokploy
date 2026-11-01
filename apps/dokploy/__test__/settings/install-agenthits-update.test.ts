@@ -364,11 +364,11 @@ const runInstaller = (
 				DOKPLOY_HEALTH_TIMEOUT: "2",
 				DOKPLOY_DOCKER_VERIFY_TIMEOUT: "2",
 				DOKPLOY_TRAEFIK_SETTLE: scenario.settleSeconds ?? "0",
-				REDIS_IMAGE: "redis:8.10.2",
+				REDIS_IMAGE: "redis:8.10.3",
 				POSTGRES_IMAGE: "postgres:18.6",
 				TRAEFIK_IMAGE: "traefik:v3.7.14",
 				DOCKER_VERSION: "29.8.2",
-				FAKE_REDIS_IMAGE: scenario.redisImage ?? "redis:8.10.2",
+				FAKE_REDIS_IMAGE: scenario.redisImage ?? "redis:8.10.3",
 				FAKE_POSTGRES_IMAGE: scenario.postgresImage ?? "postgres:18.6",
 				FAKE_TRAEFIK_IMAGE: scenario.traefikImage ?? "traefik:v3.7.14",
 				FAKE_PANEL_IMAGE:
@@ -511,7 +511,7 @@ describe("install-agenthits.sh update", () => {
 			const backup = firstIndex(calls, "ps -q");
 			const redis = firstIndex(
 				calls,
-				"service update --detach --update-order stop-first --update-failure-action rollback --image redis:8.10.2 dokploy-redis",
+				"service update --detach --update-order stop-first --update-failure-action rollback --image redis:8.10.3 dokploy-redis",
 			);
 			const traefikStop = firstIndex(calls, "stop dokploy-traefik");
 			const traefikRemove = firstIndex(calls, "rm dokploy-traefik");
@@ -716,7 +716,7 @@ describe("install-agenthits.sh update", () => {
 
 			const redis = firstIndex(
 				calls,
-				"service update --detach --update-order stop-first --update-failure-action rollback --image redis:8.10.2 dokploy-redis",
+				"service update --detach --update-order stop-first --update-failure-action rollback --image redis:8.10.3 dokploy-redis",
 			);
 			const traefikStop = firstIndex(calls, "stop dokploy-traefik");
 			const traefikStart = firstIndex(calls, "start dokploy-traefik");

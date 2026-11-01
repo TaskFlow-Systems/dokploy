@@ -51,7 +51,7 @@ jobs:
             skip-files: usr/local/bin/gosu
             skip-until: "2026-11-27"
           - name: redis
-            image: redis:8.10.2
+            image: redis:8.10.3
     steps:
       - uses: actions/checkout@v7
         with:
