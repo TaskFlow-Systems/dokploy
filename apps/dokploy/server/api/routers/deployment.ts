@@ -48,6 +48,7 @@ import {
 	fetchDeployApiJobsResult,
 	type QueueJobRow,
 } from "@/server/utils/deploy";
+import { getDeploymentLogServerId } from "@/server/utils/deployment-log-server";
 import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
 
 type DeploymentPermissionAction = "cancel" | "read";
@@ -519,8 +520,7 @@ export const deploymentRouter = createTRPCRouter({
 		)
 		.query(async ({ input, ctx }) => {
 			const deployment = await findDeploymentById(input.deploymentId);
-			const deploymentServerId =
-				deployment.serverId || deployment.schedule?.serverId;
+			const deploymentServerId = getDeploymentLogServerId(deployment);
 			await assertDeploymentActionAccess(ctx, deployment, "read");
 
 			if (!deployment.logPath) {
