@@ -141,6 +141,12 @@ const createMockDeployment = () => ({
 	logPath: "/tmp/test-deployment.log",
 });
 
+const buildCommand = () =>
+	vi
+		.mocked(execProcess.execAsync)
+		.mock.calls.map(([command]) => command)
+		.find((command) => command.includes(": dokploy-build:"));
+
 describe("deployApplication - Command Generation Tests", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -219,6 +225,7 @@ describe("deployApplication - Command Generation Tests", () => {
 
 		expect(execProcess.execAsync).toHaveBeenCalledWith(
 			expect.stringContaining("nixpacks build"),
+			{ timeoutMs: expect.any(Number) },
 		);
 	});
 
@@ -248,6 +255,7 @@ describe("deployApplication - Command Generation Tests", () => {
 
 		expect(execProcess.execAsync).toHaveBeenCalledWith(
 			expect.stringContaining("railpack prepare"),
+			{ timeoutMs: expect.any(Number) },
 		);
 	});
 
@@ -261,10 +269,7 @@ describe("deployApplication - Command Generation Tests", () => {
 			descriptionLog: "",
 		});
 
-		const execCalls = vi.mocked(execProcess.execAsync).mock.calls;
-		expect(execCalls.length).toBeGreaterThan(0);
-
-		const fullCommand = execCalls[0]?.[0];
+		const fullCommand = buildCommand();
 		expect(fullCommand).toContain("set -e");
 		expect(fullCommand).toMatch(/git .*clone/);
 		expect(fullCommand).toContain("nixpacks build");
@@ -280,9 +285,6 @@ describe("deployApplication - Command Generation Tests", () => {
 			descriptionLog: "",
 		});
 
-		const execCalls = vi.mocked(execProcess.execAsync).mock.calls;
-		const fullCommand = execCalls[0]?.[0];
-
-		expect(fullCommand).toContain(">> /tmp/test-deployment.log 2>&1");
+		expect(buildCommand()).toContain(">> /tmp/test-deployment.log 2>&1");
 	});
 });

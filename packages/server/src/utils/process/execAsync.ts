@@ -4,6 +4,7 @@ import { findServerById } from "@dokploy/server/services/server";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
 import { Client } from "ssh2";
 import { ExecError } from "./ExecError";
+import { SSH_KEEPALIVE } from "./ssh-keepalive";
 
 export class WriteFileRemoteError extends Error {
 	constructor(
@@ -301,6 +302,7 @@ export const execAsyncRemote = async (
 				conn.exec(command, (err, stream) => {
 					if (err) {
 						clearTimeout(timer);
+						conn.end();
 						onData?.(err.message);
 						reject(
 							new ExecError(`Remote command execution failed: ${err.message}`, {
@@ -397,6 +399,7 @@ export const execAsyncRemote = async (
 				username: server.username,
 				privateKey: server.sshKey?.privateKey,
 				timeout: 99999,
+				...SSH_KEEPALIVE,
 			});
 	});
 };
@@ -456,6 +459,7 @@ export const writeFileRemote = async (
 				username: server.username,
 				privateKey: server.sshKey?.privateKey,
 				timeout: 99999,
+				...SSH_KEEPALIVE,
 			});
 	});
 };

@@ -1218,7 +1218,7 @@ export const applicationRouter = createTRPCRouter({
 			const application = await findApplicationById(input.applicationId);
 			await killDockerBuild(
 				"application",
-				application.serverId,
+				application.buildServerId || application.serverId,
 				application.appName,
 			);
 			await audit(ctx, {

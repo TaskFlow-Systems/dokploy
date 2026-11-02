@@ -1,6 +1,14 @@
 import { pgEnum } from "drizzle-orm/pg-core";
 import { z } from "zod";
 
+export const DEFAULT_BUILD_TIMEOUT_MINUTES = 60;
+export const MAX_BUILD_TIMEOUT_MINUTES = 1440;
+export const buildTimeoutMinutesSchema = z
+	.number()
+	.int()
+	.min(1)
+	.max(MAX_BUILD_TIMEOUT_MINUTES);
+
 export const applicationStatus = pgEnum("applicationStatus", [
 	"idle",
 	"running",
