@@ -81,10 +81,27 @@ describe("getBuildErrorMessage", () => {
 		);
 	});
 
-	it("falls back to a generic message when the log cannot be read", async () => {
+	it("reports the command error when the log cannot be read", async () => {
+		mockExecAsyncRemote.mockRejectedValue(new Error("No route to host"));
+
+		const message = await getBuildErrorMessage(
+			new ExecError("SSH connection error: Keepalive timeout", {
+				command: SCRIPT,
+			}),
+			LOG_PATH,
+			"server-1",
+		);
+
+		expect(message).toBe("SSH connection error: Keepalive timeout");
+	});
+
+	it("falls back to a generic message without any details", async () => {
 		mockExecAsync.mockRejectedValue(new Error("No such file"));
 
-		const message = await getBuildErrorMessage(buildFailure(), LOG_PATH);
+		const message = await getBuildErrorMessage(
+			new ExecError("", { command: SCRIPT }),
+			LOG_PATH,
+		);
 
 		expect(message).toBe("Error building");
 	});

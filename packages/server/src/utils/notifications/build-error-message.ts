@@ -25,6 +25,6 @@ export const getBuildErrorMessage = async (
 			: await execAsync(command);
 		return formatBuildLogTail(stdout) || FALLBACK_MESSAGE;
 	} catch {
-		return FALLBACK_MESSAGE;
+		return error.message || FALLBACK_MESSAGE;
 	}
 };

@@ -457,6 +457,69 @@ describe("server router assigned-server boundary", () => {
 		});
 	});
 
+	it("saves the build timeout and redacts the response", async () => {
+		mocks.updateServerById.mockResolvedValue({
+			serverId: "server-1",
+			name: "primary",
+			organizationId: "org-1",
+			buildTimeoutMinutes: 90,
+			metricsConfig: {
+				server: {
+					port: 4500,
+					token: "stored-monitoring-token",
+				},
+			},
+		});
+
+		await expect(
+			createCaller().updateBuildTimeout({
+				serverId: "server-1",
+				buildTimeoutMinutes: 90,
+			}),
+		).resolves.toMatchObject({
+			metricsConfig: {
+				server: {
+					token: "__DOKPLOY_REDACTED_SECRET__",
+				},
+			},
+		});
+
+		expect(mocks.updateServerById).toHaveBeenCalledWith("server-1", {
+			buildTimeoutMinutes: 90,
+		});
+	});
+
+	it("requires server update permission before changing the build timeout", async () => {
+		mocks.checkPermission.mockImplementation(async (_ctx, permissions) => {
+			if (
+				JSON.stringify(permissions) === JSON.stringify({ server: ["update"] })
+			) {
+				throw new Error("missing server update");
+			}
+		});
+
+		await expect(
+			createCaller().updateBuildTimeout({
+				serverId: "server-1",
+				buildTimeoutMinutes: 90,
+			}),
+		).rejects.toThrow("missing server update");
+		expect(mocks.updateServerById).not.toHaveBeenCalled();
+	});
+
+	it.each([0, -5, 1441, 1.5])(
+		"rejects a build timeout of %s minutes",
+		async (buildTimeoutMinutes) => {
+			await expect(
+				createCaller().updateBuildTimeout({
+					serverId: "server-1",
+					buildTimeoutMinutes,
+				}),
+			).rejects.toThrow();
+			expect(mocks.updateServerById).not.toHaveBeenCalled();
+		},
+	);
+
 	it("requires server update permission before changing build concurrency", async () => {
 		mocks.checkPermission.mockImplementation(async (_ctx, permissions) => {
 			if (

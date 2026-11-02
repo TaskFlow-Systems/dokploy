@@ -12,7 +12,11 @@ import { nanoid } from "nanoid";
 import { z } from "zod";
 import { domainHostSchema } from "../validations/domain";
 import { organization } from "./account";
-import { certificateType } from "./shared";
+import {
+	buildTimeoutMinutesSchema,
+	certificateType,
+	DEFAULT_BUILD_TIMEOUT_MINUTES,
+} from "./shared";
 
 export const webServerSettings = pgTable("webServerSettings", {
 	id: text("id")
@@ -129,6 +133,9 @@ export const webServerSettings = pgTable("webServerSettings", {
 	remoteServersOnly: boolean("remoteServersOnly").notNull().default(false),
 	// Concurrent builds on the local web server
 	buildsConcurrency: integer("buildsConcurrency").notNull().default(1),
+	buildTimeoutMinutes: integer("buildTimeoutMinutes")
+		.notNull()
+		.default(DEFAULT_BUILD_TIMEOUT_MINUTES),
 	// Auth Configuration (self-hosted only)
 	enforceSSO: boolean("enforceSSO").notNull().default(false),
 	// Cache Cleanup Configuration
@@ -195,6 +202,7 @@ export const apiUpdateWebServerSettings = createSchema
 		remoteServersOnly: z.boolean().optional(),
 		enforceSSO: z.boolean().optional(),
 		buildsConcurrency: z.number().int().min(1).max(100).optional(),
+		buildTimeoutMinutes: buildTimeoutMinutesSchema.optional(),
 	})
 	.omit({
 		telemetryProviderIds: true,
@@ -203,6 +211,10 @@ export const apiUpdateWebServerSettings = createSchema
 
 export const apiUpdateWebServerBuildsConcurrency = z.object({
 	buildsConcurrency: z.number().int().min(1).max(100),
+});
+
+export const apiUpdateWebServerBuildTimeout = z.object({
+	buildTimeoutMinutes: buildTimeoutMinutesSchema,
 });
 
 export const apiAssignDomain = z

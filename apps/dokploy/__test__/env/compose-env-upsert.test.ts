@@ -256,6 +256,7 @@ describe("deployCompose exact revision guard", () => {
 		});
 		exactMocks.execAsync
 			.mockResolvedValueOnce({ stdout: "" })
+			.mockResolvedValueOnce({ stdout: "" })
 			.mockResolvedValueOnce({ stdout: `${"f".repeat(40)}\n` });
 	});
 
@@ -297,9 +298,9 @@ describe("deployCompose exact revision guard", () => {
 		expect(exactMocks.cloneGitRepository).toHaveBeenCalledWith(
 			expect.objectContaining({ checkoutRevision: requestedRevision }),
 		);
-		const [, verifyCommand] = exactMocks.execAsync.mock.calls.map(([command]) =>
-			String(command),
-		);
+		const verifyCommand = exactMocks.execAsync.mock.calls
+			.map(([command]) => String(command))
+			.at(-1);
 		// The stored remote carries no credentials, so a separate fetch would
 		// fail for private repositories.
 		expect(verifyCommand).not.toContain("fetch");
@@ -318,6 +319,7 @@ describe("deployCompose exact revision guard", () => {
 			envRevision: getComposeEnvRevision("compose_1", "A=one"),
 		});
 		exactMocks.execAsync
+			.mockResolvedValueOnce({ stdout: "" })
 			.mockResolvedValueOnce({ stdout: "" })
 			.mockResolvedValueOnce({ stdout: `${requestedRevision}\n` })
 			.mockResolvedValueOnce({ stdout: "" })

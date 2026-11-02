@@ -3,6 +3,7 @@ import { createServerSideHelpers } from "@trpc/react-query/server";
 import type { GetServerSidePropsContext } from "next";
 import type { ReactElement } from "react";
 import superjson from "superjson";
+import { BuildTimeout } from "@/components/dashboard/settings/servers/actions/build-timeout";
 import { BuildsConcurrency } from "@/components/dashboard/settings/servers/actions/builds-concurrency";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AlertBlock } from "@/components/shared/alert-block";
@@ -54,6 +55,48 @@ const Page = () => {
 									<div className="flex flex-col gap-3">
 										{servers.map((server) => (
 											<BuildsConcurrency
+												key={server.serverId}
+												serverId={server.serverId}
+												label={server.name}
+											/>
+										))}
+									</div>
+								) : (
+									<p className="text-sm text-muted-foreground rounded-lg border border-dashed p-4 text-center">
+										No remote servers added yet.
+									</p>
+								)}
+							</div>
+						</CardContent>
+					</div>
+				</Card>
+				<Card className="h-full bg-sidebar p-2.5 rounded-xl mx-auto w-full">
+					<div className="rounded-xl bg-background shadow-md">
+						<CardHeader>
+							<CardTitle className="text-xl">Build Timeout</CardTitle>
+							<CardDescription>
+								A build that runs longer is stopped on its server and marked as
+								failed, so it cannot hold the deployment queue. The setting of
+								the server that runs the build applies: the build server when an
+								application has one.
+							</CardDescription>
+						</CardHeader>
+						<CardContent className="flex flex-col gap-6">
+							<div className="flex flex-col gap-2">
+								<p className="text-sm font-medium text-muted-foreground">
+									Dokploy Server
+								</p>
+								<BuildTimeout />
+							</div>
+
+							<div className="flex flex-col gap-2">
+								<p className="text-sm font-medium text-muted-foreground">
+									Remote Servers
+								</p>
+								{servers && servers.length > 0 ? (
+									<div className="flex flex-col gap-3">
+										{servers.map((server) => (
+											<BuildTimeout
 												key={server.serverId}
 												serverId={server.serverId}
 												label={server.name}

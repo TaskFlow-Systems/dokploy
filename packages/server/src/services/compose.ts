@@ -25,7 +25,10 @@ import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications
 import { getBuildErrorMessage } from "@dokploy/server/utils/notifications/build-error-message";
 import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
 import {
-	ExecError,
+	createBuildRunner,
+	recordBuildFailure,
+} from "@dokploy/server/utils/process/build-process";
+import {
 	execAsync,
 	execAsyncRemote,
 } from "@dokploy/server/utils/process/execAsync";
@@ -42,7 +45,6 @@ import { quoteShellArgs } from "@dokploy/server/utils/shell";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import type { z } from "zod";
-import { encodeBase64 } from "../utils/docker/utils";
 import {
 	assertNoRedactedSecretPlaceholders,
 	getComposeEnvRevision,
@@ -446,6 +448,11 @@ export const deployCompose = async ({
 	}
 
 	try {
+		const runBuildCommand = await createBuildRunner(
+			"compose",
+			compose.serverId,
+			compose.appName,
+		);
 		const entity = {
 			...compose,
 			type: "compose" as const,
@@ -469,11 +476,7 @@ export const deployCompose = async ({
 		let commandWithLog = deployment
 			? `(${command}) >> ${deployment.logPath} 2>&1`
 			: command;
-		if (compose.serverId) {
-			await execAsyncRemote(compose.serverId, commandWithLog);
-		} else {
-			await execAsync(commandWithLog);
-		}
+		await runBuildCommand(commandWithLog);
 
 		if (operationId && expectedRevision && operation) {
 			const { COMPOSE_PATH } = paths(!!compose.serverId);
@@ -536,21 +539,13 @@ export const deployCompose = async ({
 				serverId: compose.serverId,
 			});
 			commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
-			if (compose.serverId) {
-				await execAsyncRemote(compose.serverId, commandWithLog);
-			} else {
-				await execAsync(commandWithLog);
-			}
+			await runBuildCommand(commandWithLog);
 		}
 
 		if (freshVolumes && compose.composeType === "docker-compose") {
 			const downCommand = `set -e; env -i PATH="$PATH" docker compose -p ${compose.appName} down --volumes 2>&1 || true;`;
 			const downWithLog = `(${downCommand}) >> ${deployment.logPath} 2>&1`;
-			if (compose.serverId) {
-				await execAsyncRemote(compose.serverId, downWithLog);
-			} else {
-				await execAsync(downWithLog);
-			}
+			await runBuildCommand(downWithLog);
 		}
 
 		command = "set -e;";
@@ -568,11 +563,7 @@ export const deployCompose = async ({
 		}
 		command += await getBuildComposeCommand(entity);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
-		if (compose.serverId) {
-			await execAsyncRemote(compose.serverId, commandWithLog);
-		} else {
-			await execAsync(commandWithLog);
-		}
+		await runBuildCommand(commandWithLog);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateCompose(composeId, {
@@ -608,22 +599,13 @@ export const deployCompose = async ({
 		const errorMessage = deployment
 			? await getBuildErrorMessage(error, deployment.logPath, compose.serverId)
 			: (error instanceof Error && error.message) || "Error building";
-		let command = "";
-
-		// Only log details for non-ExecError errors when a deployment log exists.
-		if (deployment && !(error instanceof ExecError)) {
-			const message = error instanceof Error ? error.message : String(error);
-			const encodedMessage = encodeBase64(message);
-			command += `echo "${encodedMessage}" | base64 -d >> "${deployment.logPath}";`;
-		}
-
 		if (deployment) {
-			command += `echo "\nError occurred ❌, check the logs for details." >> ${deployment.logPath};`;
-			if (compose.serverId) {
-				await execAsyncRemote(compose.serverId, command);
-			} else {
-				await execAsync(command);
-			}
+			await recordBuildFailure({
+				deploymentId: deployment.deploymentId,
+				logPath: deployment.logPath,
+				serverId: compose.serverId,
+				error,
+			});
 			await updateDeploymentStatus(deployment.deploymentId, "error");
 		}
 		await updateCompose(composeId, {
@@ -677,17 +659,18 @@ export const rebuildCompose = async ({
 	});
 
 	try {
+		const runBuildCommand = await createBuildRunner(
+			"compose",
+			compose.serverId,
+			compose.appName,
+		);
 		let command = "set -e;";
 		if (compose.sourceType === "raw") {
 			command += getCreateComposeFileCommand(compose);
 		}
 
 		let commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
-		if (compose.serverId) {
-			await execAsyncRemote(compose.serverId, commandWithLog);
-		} else {
-			await execAsync(commandWithLog);
-		}
+		await runBuildCommand(commandWithLog);
 
 		if (compose.sourceType !== "raw") {
 			command = "set -e;";
@@ -697,52 +680,31 @@ export const rebuildCompose = async ({
 				serverId: compose.serverId,
 			});
 			commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
-			if (compose.serverId) {
-				await execAsyncRemote(compose.serverId, commandWithLog);
-			} else {
-				await execAsync(commandWithLog);
-			}
+			await runBuildCommand(commandWithLog);
 		}
 
 		if (freshVolumes && compose.composeType === "docker-compose") {
 			const downCommand = `set -e; env -i PATH="$PATH" docker compose -p ${compose.appName} down --volumes 2>&1 || true;`;
 			const downWithLog = `(${downCommand}) >> ${deployment.logPath} 2>&1`;
-			if (compose.serverId) {
-				await execAsyncRemote(compose.serverId, downWithLog);
-			} else {
-				await execAsync(downWithLog);
-			}
+			await runBuildCommand(downWithLog);
 		}
 
 		command = "set -e;";
 		command += await getBuildComposeCommand(compose);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
-		if (compose.serverId) {
-			await execAsyncRemote(compose.serverId, commandWithLog);
-		} else {
-			await execAsync(commandWithLog);
-		}
+		await runBuildCommand(commandWithLog);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateCompose(composeId, {
 			composeStatus: "done",
 		});
 	} catch (error) {
-		let command = "";
-
-		// Only log details for non-ExecError errors
-		if (!(error instanceof ExecError)) {
-			const message = error instanceof Error ? error.message : String(error);
-			const encodedMessage = encodeBase64(message);
-			command += `echo "${encodedMessage}" | base64 -d >> "${deployment.logPath}";`;
-		}
-
-		command += `echo "\nError occurred ❌, check the logs for details." >> ${deployment.logPath};`;
-		if (compose.serverId) {
-			await execAsyncRemote(compose.serverId, command);
-		} else {
-			await execAsync(command);
-		}
+		await recordBuildFailure({
+			deploymentId: deployment.deploymentId,
+			logPath: deployment.logPath,
+			serverId: compose.serverId,
+			error,
+		});
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updateCompose(composeId, {
 			composeStatus: "error",

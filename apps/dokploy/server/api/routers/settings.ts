@@ -120,6 +120,7 @@ import {
 	apiTraefikConfig,
 	apiUpdateDockerCleanup,
 	apiUpdateWebServerBuildsConcurrency,
+	apiUpdateWebServerBuildTimeout,
 	projects,
 	server,
 } from "@/server/db/schema";
@@ -748,6 +749,28 @@ export const settingsRouter = createTRPCRouter({
 				action: "update",
 				resourceType: "settings",
 				resourceName: "builds-concurrency",
+			});
+			return true;
+		}),
+
+	updateBuildTimeout: adminProcedure
+		.input(apiUpdateWebServerBuildTimeout)
+		.mutation(async ({ input, ctx }) => {
+			if (IS_CLOUD) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "This feature is only available for self-hosted instances",
+				});
+			}
+
+			await updateWebServerSettings({
+				buildTimeoutMinutes: input.buildTimeoutMinutes,
+			});
+
+			await audit(ctx, {
+				action: "update",
+				resourceType: "settings",
+				resourceName: "build-timeout",
 			});
 			return true;
 		}),
