@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 const BASE = "/base";
+const SERVER_LOG_LINE = "line from the log on the server";
 
 const mocks = vi.hoisted(() => ({
 	checkPermission: vi.fn(),
@@ -12,14 +13,40 @@ const mocks = vi.hoisted(() => ({
 	findDeploymentById: vi.fn(),
 	findServerById: vi.fn(),
 	spawn: vi.fn(),
+	hasValidLicense: vi.fn(),
+	memberFindFirst: vi.fn(),
+	serverFindMany: vi.fn(),
+	sshConnect: vi.fn(),
+	sshExec: vi.fn(),
 	validateRequest: vi.fn(),
 }));
 
-vi.mock("@dokploy/server", () => ({
-	IS_CLOUD: false,
-	findDeploymentById: mocks.findDeploymentById,
-	findServerById: mocks.findServerById,
-	validateRequest: mocks.validateRequest,
+// The real getAccessibleServerIds over a fake database, so that roles and the
+// license decide here exactly as they decide for deployment.readLogs.
+vi.mock("@dokploy/server", async () => {
+	const { getAccessibleServerIds } = await vi.importActual<
+		typeof import("@dokploy/server/services/server")
+	>("@dokploy/server/services/server");
+	return {
+		IS_CLOUD: false,
+		findDeploymentById: mocks.findDeploymentById,
+		findServerById: mocks.findServerById,
+		getAccessibleServerIds,
+		validateRequest: mocks.validateRequest,
+	};
+});
+
+vi.mock("@dokploy/server/db", () => ({
+	db: {
+		query: {
+			member: { findFirst: mocks.memberFindFirst },
+			server: { findMany: mocks.serverFindMany },
+		},
+	},
+}));
+
+vi.mock("@dokploy/server/services/proprietary/license-key", () => ({
+	hasValidLicense: mocks.hasValidLicense,
 }));
 
 vi.mock("@dokploy/server/constants", async (importOriginal) => {
@@ -52,12 +79,37 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 vi.mock("ssh2", () => ({
-	Client: vi.fn(() => ({
-		on: vi.fn().mockReturnThis(),
-		connect: vi.fn().mockReturnThis(),
-		end: vi.fn(),
-		exec: vi.fn(),
-	})),
+	Client: class {
+		private handlers: Record<string, () => void> = {};
+
+		on(event: string, handler: () => void) {
+			this.handlers[event] = handler;
+			return this;
+		}
+
+		connect(options: unknown) {
+			mocks.sshConnect(options);
+			this.handlers.ready?.();
+			return this;
+		}
+
+		exec(
+			command: string,
+			callback: (error: undefined, stream: EventEmitter) => void,
+		) {
+			mocks.sshExec(command);
+			const stream = Object.assign(new EventEmitter(), {
+				stderr: new EventEmitter(),
+			});
+			callback(undefined, stream);
+			setTimeout(() => {
+				stream.emit("data", SERVER_LOG_LINE);
+				stream.emit("close");
+			}, 0);
+		}
+
+		end() {}
+	},
 }));
 
 const { setupDeploymentLogsWebSocketServer } = await import(
@@ -134,6 +186,15 @@ describe("deployment log WebSocket boundary", () => {
 			volumeBackupId: null,
 		});
 		mocks.spawn.mockReturnValue(createTailProcess());
+		mocks.hasValidLicense.mockResolvedValue(true);
+		mocks.memberFindFirst.mockResolvedValue({
+			accessedServers: [],
+			role: "owner",
+		});
+		mocks.serverFindMany.mockResolvedValue([
+			{ serverId: "server-1" },
+			{ serverId: "server-2" },
+		]);
 	});
 
 	afterEach(async () => {
@@ -232,6 +293,204 @@ describe("deployment log WebSocket boundary", () => {
 			"-f",
 			`${BASE}/logs/app/app-2026-06-22.log`,
 		]);
+	});
+
+	describe("log bound to a server", () => {
+		const serverSetupDeployment = {
+			deploymentId: "deployment-1",
+			logPath: `${BASE}/logs/server-1/server-1-2026-06-22.log`,
+			schedule: null,
+			scheduleId: null,
+			serverId: "server-1",
+		};
+		const serverScheduleDeployment = {
+			deploymentId: "deployment-1",
+			logPath: `${BASE}/schedules/host/host-2026-06-22.log`,
+			schedule: { scheduleType: "server", serverId: "server-1" },
+			scheduleId: "schedule-1",
+			serverId: null,
+		};
+
+		const readDeploymentLog = async (
+			query = "deploymentId=deployment-1",
+		): Promise<string[]> => {
+			server = http.createServer();
+			setupDeploymentLogsWebSocketServer(server);
+			const port = await listen(server);
+
+			return new Promise((resolve, reject) => {
+				const received: string[] = [];
+				const timeout = setTimeout(() => {
+					reject(new Error("WebSocket close timeout"));
+				}, 2000);
+				const ws = new WebSocket(
+					`ws://127.0.0.1:${port}/listen-deployment?${query}`,
+				);
+
+				ws.on("message", (data) => {
+					received.push(data.toString());
+				});
+				ws.on("close", () => {
+					clearTimeout(timeout);
+					resolve(received);
+				});
+				ws.on("error", reject);
+			});
+		};
+
+		const expectLogNotOpened = () => {
+			expect(mocks.sshConnect).not.toHaveBeenCalled();
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		};
+
+		// Who may open the log does not depend on where it is read from.
+		const expectLogOpened = () => {
+			expect(
+				mocks.sshConnect.mock.calls.length + mocks.spawn.mock.calls.length,
+			).toBe(1);
+		};
+
+		beforeEach(() => {
+			mocks.findServerById.mockResolvedValue({
+				ipAddress: "203.0.113.10",
+				organizationId: "org-1",
+				port: 2222,
+				sshKey: { privateKey: "private-key" },
+				sshKeyId: "key-1",
+				username: "deployer",
+			});
+		});
+
+		describe.each([
+			{ binding: "deployment.serverId", deployment: serverSetupDeployment },
+			{ binding: "schedule.serverId", deployment: serverScheduleDeployment },
+		])("through $binding", ({ deployment }) => {
+			beforeEach(() => {
+				mocks.findDeploymentById.mockResolvedValue(deployment);
+			});
+
+			it("refuses a member who is not assigned to the server", async () => {
+				mocks.memberFindFirst.mockResolvedValue({
+					accessedServers: ["server-2"],
+					role: "member",
+				});
+
+				await expect(readDeploymentLog()).resolves.toEqual([]);
+
+				expectLogNotOpened();
+			});
+
+			it("opens the log for a member assigned to the server", async () => {
+				mocks.memberFindFirst.mockResolvedValue({
+					accessedServers: ["server-1"],
+					role: "member",
+				});
+
+				await readDeploymentLog();
+
+				expectLogOpened();
+			});
+
+			it.each(["owner", "admin"])(
+				"opens the log for an %s with no assigned servers",
+				async (role) => {
+					mocks.memberFindFirst.mockResolvedValue({
+						accessedServers: [],
+						role,
+					});
+
+					await readDeploymentLog();
+
+					expectLogOpened();
+				},
+			);
+
+			it("does not require an assignment without a valid license", async () => {
+				mocks.hasValidLicense.mockResolvedValue(false);
+				mocks.memberFindFirst.mockResolvedValue({
+					accessedServers: [],
+					role: "member",
+				});
+
+				await readDeploymentLog();
+
+				expectLogOpened();
+			});
+
+			it("refuses an owner when the server is in another organization", async () => {
+				mocks.serverFindMany.mockResolvedValue([{ serverId: "server-2" }]);
+				mocks.findServerById.mockResolvedValue({
+					organizationId: "org-2",
+					sshKeyId: "key-1",
+				});
+
+				await expect(readDeploymentLog()).resolves.toEqual([]);
+
+				expectLogNotOpened();
+			});
+
+			it("refuses an assigned member without deployment read permission", async () => {
+				mocks.checkPermission.mockRejectedValue(new Error("Permission denied"));
+				mocks.memberFindFirst.mockResolvedValue({
+					accessedServers: ["server-1"],
+					role: "member",
+				});
+
+				await expect(readDeploymentLog()).resolves.toEqual([]);
+
+				expect(mocks.checkPermission).toHaveBeenCalledWith(
+					{
+						user: { id: "user-1" },
+						session: { activeOrganizationId: "org-1" },
+					},
+					{ deployment: ["read"] },
+				);
+				expectLogNotOpened();
+			});
+		});
+
+		it("reads the log over SSH from the server of the deployment", async () => {
+			mocks.findDeploymentById.mockResolvedValue(serverScheduleDeployment);
+			mocks.memberFindFirst.mockResolvedValue({
+				accessedServers: ["server-1"],
+				role: "member",
+			});
+
+			await expect(
+				readDeploymentLog("deploymentId=deployment-1&serverId=server-2"),
+			).resolves.toEqual([SERVER_LOG_LINE]);
+
+			expect(mocks.findServerById.mock.calls).toEqual([["server-1"]]);
+			expect(mocks.sshConnect).toHaveBeenCalledWith(
+				expect.objectContaining({
+					host: "203.0.113.10",
+					port: 2222,
+					privateKey: "private-key",
+					username: "deployer",
+				}),
+			);
+			const encodedLogPath = Buffer.from(
+				serverScheduleDeployment.logPath,
+			).toString("base64");
+			expect(mocks.sshExec).toHaveBeenCalledWith(
+				`tail -n +1 -f "$(echo '${encodedLogPath}' | base64 -d)"`,
+			);
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("does not let the server named in the request stand in for the server of the deployment", async () => {
+			mocks.findDeploymentById.mockResolvedValue(serverScheduleDeployment);
+			mocks.memberFindFirst.mockResolvedValue({
+				accessedServers: ["server-2"],
+				role: "member",
+			});
+
+			await expect(
+				readDeploymentLog("deploymentId=deployment-1&serverId=server-2"),
+			).resolves.toEqual([]);
+
+			expectLogNotOpened();
+		});
 	});
 
 	it("tails authorized schedule deployment logs from the schedules root", async () => {
