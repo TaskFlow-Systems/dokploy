@@ -1,11 +1,14 @@
 import { docker } from "@dokploy/server/constants";
 import { findServerById } from "@dokploy/server/services/server";
 import Dockerode from "dockerode";
+import { SSH_KEEPALIVE } from "../process/ssh-keepalive";
 import { resolveServerDestinationHost } from "./destination";
 
 type DockerSshOptions = Dockerode.DockerOptions & {
 	sshOptions?: {
 		privateKey?: string | Buffer;
+		keepaliveInterval?: number;
+		keepaliveCountMax?: number;
 	};
 };
 
@@ -21,6 +24,7 @@ export const getRemoteDocker = async (serverId?: string | null) => {
 		protocol: "ssh",
 		sshOptions: {
 			privateKey: server.sshKey?.privateKey ?? undefined,
+			...SSH_KEEPALIVE,
 		},
 	};
 	const dockerode = new Dockerode(dockerOptions);
