@@ -318,6 +318,66 @@ describe("deployment log WebSocket boundary", () => {
 		);
 	});
 
+	describe("server setup deployment", () => {
+		const logPath = `${BASE}/logs/server-app/server-app-2026-06-22.log`;
+
+		beforeEach(() => {
+			mocks.findDeploymentById.mockResolvedValue({
+				applicationId: null,
+				composeId: null,
+				deploymentId: "setup-deployment-1",
+				logPath,
+				scheduleId: null,
+				schedule: null,
+				serverId: "set-up-server",
+				volumeBackupId: null,
+			});
+		});
+
+		it("tails the log on the panel, where it is written", async () => {
+			mocks.findServerById.mockResolvedValue({
+				organizationId: "org-1",
+				sshKeyId: "key-1",
+			});
+			server = http.createServer();
+			setupDeploymentLogsWebSocketServer(server);
+			const port = await listen(server);
+
+			await expect(
+				openAndWaitForClose(
+					port,
+					"/listen-deployment?deploymentId=setup-deployment-1",
+				),
+			).resolves.toEqual({ code: 1005, reason: "" });
+
+			expect(mocks.checkPermission).toHaveBeenCalled();
+			expect(mocks.findServerById).toHaveBeenCalledWith("set-up-server");
+			expect(mocks.spawn).toHaveBeenCalledWith("tail", [
+				"-n",
+				"+1",
+				"-f",
+				logPath,
+			]);
+		});
+
+		it("does not tail the log of another organization's server", async () => {
+			mocks.findServerById.mockResolvedValue({
+				organizationId: "org-2",
+				sshKeyId: "key-1",
+			});
+			server = http.createServer();
+			setupDeploymentLogsWebSocketServer(server);
+			const port = await listen(server);
+
+			await openAndWaitForClose(
+				port,
+				"/listen-deployment?deploymentId=setup-deployment-1",
+			);
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+	});
+
 	it("uses volume backup service server binding instead of caller-supplied server ids", async () => {
 		mocks.findDeploymentById.mockResolvedValue({
 			applicationId: null,

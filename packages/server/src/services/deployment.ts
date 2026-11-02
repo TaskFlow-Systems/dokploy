@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { existsSync, promises as fsPromises } from "node:fs";
+import { promises as fsPromises } from "node:fs";
 import path from "node:path";
 import { paths } from "@dokploy/server/constants";
 import { db } from "@dokploy/server/db";
@@ -19,6 +19,7 @@ import {
 	projects,
 } from "@dokploy/server/db/schema";
 import { isBackupScheduleTargetBound } from "@dokploy/server/utils/backups/invariant";
+import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { removeDirectoryIfExistsContent } from "@dokploy/server/utils/filesystem/directory";
 import { quoteShellArg } from "@dokploy/server/utils/filesystem/safe-path";
 import {
@@ -47,6 +48,10 @@ import { removeRollbackById } from "./rollbacks";
 import { findScheduleById, getScheduleDeploymentLogPath } from "./schedule";
 import { findServerById, type Server } from "./server";
 import { findVolumeBackupById } from "./volume-backups";
+
+// Bounds a removal that a new deployment or a request waits on. ssh2 gives up on
+// an unreachable host after its own 20 s handshake timeout.
+const LOG_CLEANUP_TIMEOUT_MS = 30_000;
 
 export type ServicePath = { href: string | null; label: string };
 
@@ -893,30 +898,40 @@ export const createDeploymentVolumeBackup = async (
 	}
 };
 
+const removeLogFiles = async (serverId: string | null, logPaths: string[]) => {
+	const files = logPaths
+		.map((logPath) => path.join(logPath))
+		.filter((logPath) => logPath !== ".");
+	if (files.length === 0) {
+		return;
+	}
+	const command = `rm -f ${files.map(quoteShellArg).join(" ")}`;
+	if (serverId) {
+		await execAsyncRemote(serverId, command, undefined, {
+			timeoutMs: LOG_CLEANUP_TIMEOUT_MS,
+		});
+	} else {
+		await execAsync(command);
+	}
+};
+
 export const removeDeployment = async (deploymentId: string) => {
 	try {
-		const deployment = await db
+		const deployment = await findDeploymentById(deploymentId);
+
+		// The row is the only record of where the log lives, so it stays until the
+		// file is gone and a failed removal can be repeated.
+		await removeLogFiles(getDeploymentLogServerId(deployment), [
+			deployment.logPath,
+		]);
+
+		const removed = await db
 			.delete(deployments)
 			.where(eq(deployments.deploymentId, deploymentId))
 			.returning()
 			.then((result) => result[0]);
 
-		if (!deployment) {
-			return null;
-		}
-
-		const logPath = path.join(deployment.logPath);
-		if (logPath && logPath !== ".") {
-			const command = `rm -f ${logPath};`;
-			const logServerId = deployment.serverId || deployment.buildServerId;
-			if (logServerId) {
-				await execAsyncRemote(logServerId, command);
-			} else {
-				await execAsync(command);
-			}
-		}
-
-		return deployment;
+		return removed ?? null;
 	} catch (error) {
 		const message =
 			error instanceof Error ? error.message : "Error removing the deployment";
@@ -957,15 +972,40 @@ const getDeploymentsByType = async (
 	return deploymentList;
 };
 
-export const removeDeployments = async (application: Application) => {
-	const { appName, applicationId } = application;
-	const { LOGS_PATH } = paths(!!application.serverId);
-	const logsPath = path.join(LOGS_PATH, appName);
-	if (application.serverId) {
-		await execAsyncRemote(application.serverId, `rm -rf ${logsPath}`);
-	} else {
-		await removeDirectoryIfExistsContent(logsPath);
-	}
+export const removeDeployments = async (
+	application: Application & {
+		deployments: Pick<Deployment, "buildServerId">[];
+	},
+) => {
+	const { appName, applicationId, serverId, buildServerId } = application;
+	// Deleting the application has already cascaded to its deployment rows, so the
+	// build servers of past deployments come from the rows loaded before that.
+	const logServerIds = new Set([
+		serverId,
+		...[
+			buildServerId,
+			...application.deployments.map((deployment) => deployment.buildServerId),
+		].filter(Boolean),
+	]);
+	await Promise.all(
+		Array.from(logServerIds, async (logServerId) => {
+			const logsPath = path.join(paths(!!logServerId).LOGS_PATH, appName);
+			try {
+				if (logServerId) {
+					await execAsyncRemote(logServerId, `rm -rf ${logsPath}`, undefined, {
+						timeoutMs: LOG_CLEANUP_TIMEOUT_MS,
+					});
+				} else {
+					await removeDirectoryIfExistsContent(logsPath);
+				}
+			} catch (error) {
+				console.error(
+					`Failed to remove the logs of ${appName} on ${logServerId ?? "the panel"}:`,
+					error,
+				);
+			}
+		}),
+	);
 	await removeDeploymentsByApplicationId(applicationId);
 };
 
@@ -982,57 +1022,42 @@ const removeLastTenDeployments = async (
 	serverId?: string | null,
 ) => {
 	const deploymentList = await getDeploymentsByType(id, type);
-	if (deploymentList.length > 10) {
-		const deploymentsToDelete = deploymentList.slice(10);
-		if (serverId) {
-			let command = "";
-			for (const oldDeployment of deploymentsToDelete) {
-				try {
-					const logPath = path.join(oldDeployment.logPath);
-					if (oldDeployment.rollbackId) {
-						await removeRollbackById(oldDeployment.rollbackId);
-					}
-
-					if (logPath && logPath !== ".") {
-						command += `rm -rf ${logPath};`;
-					}
-					await removeDeployment(oldDeployment.deploymentId);
-				} catch (err) {
-					console.error(
-						`Failed to remove deployment ${oldDeployment.deploymentId} during cleanup:`,
-						err,
-					);
-				}
+	const logPathsByServer = new Map<string | null, string[]>();
+	for (const oldDeployment of deploymentList.slice(10)) {
+		try {
+			if (oldDeployment.rollbackId) {
+				await removeRollbackById(oldDeployment.rollbackId);
 			}
-
-			if (command) {
-				await execAsyncRemote(serverId, command);
-			}
-		} else {
-			for (const oldDeployment of deploymentsToDelete) {
-				try {
-					if (oldDeployment.rollbackId) {
-						await removeRollbackById(oldDeployment.rollbackId);
-					}
-					const logPath = path.join(oldDeployment.logPath);
-					if (
-						logPath &&
-						logPath !== "." &&
-						existsSync(logPath) &&
-						!oldDeployment.errorMessage
-					) {
-						await fsPromises.unlink(logPath);
-					}
-					await removeDeployment(oldDeployment.deploymentId);
-				} catch (err) {
-					console.error(
-						`Failed to remove deployment ${oldDeployment.deploymentId} during cleanup:`,
-						err,
-					);
-				}
-			}
+			await db
+				.delete(deployments)
+				.where(eq(deployments.deploymentId, oldDeployment.deploymentId));
+			const logServerId = oldDeployment.buildServerId || serverId || null;
+			logPathsByServer.set(logServerId, [
+				...(logPathsByServer.get(logServerId) ?? []),
+				oldDeployment.logPath,
+			]);
+		} catch (err) {
+			console.error(
+				`Failed to remove deployment ${oldDeployment.deploymentId} during cleanup:`,
+				err,
+			);
 		}
 	}
+
+	// Unlike removeDeployment, the rows are gone even if a server is out of reach:
+	// keeping them would make every later deployment wait for that server again.
+	await Promise.all(
+		Array.from(logPathsByServer, async ([logServerId, logPaths]) => {
+			try {
+				await removeLogFiles(logServerId, logPaths);
+			} catch (err) {
+				console.error(
+					`Failed to remove old deployment logs on ${logServerId ?? "the panel"}:`,
+					err,
+				);
+			}
+		}),
+	);
 };
 
 export const removeDeploymentsByPreviewDeploymentId = async (
@@ -1309,10 +1334,6 @@ export const removeLastFiveDeployments = async (serverId: string) => {
 	if (deploymentList.length >= 5) {
 		const deploymentsToDelete = deploymentList.slice(4);
 		for (const oldDeployment of deploymentsToDelete) {
-			const logPath = path.join(oldDeployment.logPath);
-			if (existsSync(logPath)) {
-				await fsPromises.unlink(logPath);
-			}
 			await removeDeployment(oldDeployment.deploymentId);
 		}
 	}

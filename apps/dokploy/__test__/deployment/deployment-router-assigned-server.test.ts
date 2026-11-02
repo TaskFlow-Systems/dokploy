@@ -555,6 +555,27 @@ describe("deployment router assigned-server boundary", () => {
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 	});
 
+	it("reads a server setup log on the panel, after checking access to that server", async () => {
+		mocks.isCloud = false;
+		mocks.execAsync.mockResolvedValue({ stdout: "setup logs" });
+		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
+		mocks.findDeploymentById.mockResolvedValue({
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+			serverId: "server-1",
+		});
+
+		await expect(
+			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+		).resolves.toBe("setup logs");
+
+		expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
+			expect.anything(),
+			"server-1",
+		);
+		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+	});
+
 	it("reads a deployment log from the build server, not the application server", async () => {
 		mocks.findDeploymentById.mockResolvedValue({
 			applicationId: "app-1",

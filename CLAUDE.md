@@ -13,6 +13,10 @@
 
 Build commands in `services/application.ts` and `services/compose.ts` go through `createBuildRunner` (`packages/server/src/utils/process/build-process.ts`), not `execAsyncRemote` directly. It adds the time budget (`buildTimeoutMinutes` on `server` and `webServerSettings`, default 60), `timeout` on the server that builds, so a build stops there even after the panel lost the connection, and the `dokploy-build:<appName>` marker that Kill Build and the next build of the service use to find its processes. `recordBuildFailure` in the same file writes the failure to the log and never stops the status update when that server is out of reach. Every ssh2 connection a deployment waits on takes `SSH_KEEPALIVE`.
 
+## Deployment logs
+
+A deployment's log stays where it was written. Reads and single removals find that place through `getDeploymentLogServerId` (`packages/server/src/utils/deployments/log-server.ts`): the row's build server, otherwise the owning service's server, otherwise the panel. `deployment.serverId` is the exception: it marks a server's setup or hardening run, whose log the panel keeps on its own disk, so nothing connects to that server for it. Deleting an application cascades to its deployment rows before `removeDeployments` runs, so past build servers come from the rows loaded with the application. `removeDeployment` keeps the row when the log could not be removed, so the removal can be repeated. The rotation of old deployments drops the row anyway and opens one connection per server, so a dead server neither stops a new deployment nor delays later ones again.
+
 ## Pull requests
 
 Every pull request targets `AgentHits-Dev`, including a PR that builds on another open PR. Checks run only for that base, so a PR stacked on another branch gets none. When one PR depends on another, say so in the description; do not change the base.
