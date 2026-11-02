@@ -10,7 +10,9 @@ const mocks = vi.hoisted(() => ({
 	checkPermission: vi.fn(),
 	checkServicePermissionAndAccess: vi.fn(),
 	findDeploymentById: vi.fn(),
+	findMemberByUserId: vi.fn(),
 	findServerById: vi.fn(),
+	isCloud: false,
 	spawn: vi.fn(),
 	validateRequest: vi.fn(),
 }));
@@ -27,6 +29,9 @@ vi.mock("@dokploy/server/constants", async (importOriginal) => {
 		await importOriginal<typeof import("@dokploy/server/constants")>();
 	return {
 		...actual,
+		get IS_CLOUD() {
+			return mocks.isCloud;
+		},
 		paths: () => ({
 			...actual.paths(),
 			BASE_PATH: BASE,
@@ -41,6 +46,7 @@ vi.mock("@dokploy/server/constants", async (importOriginal) => {
 vi.mock("@dokploy/server/services/permission", () => ({
 	checkPermission: mocks.checkPermission,
 	checkServicePermissionAndAccess: mocks.checkServicePermissionAndAccess,
+	findMemberByUserId: mocks.findMemberByUserId,
 }));
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -117,6 +123,7 @@ describe("deployment log WebSocket boundary", () => {
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mocks.isCloud = false;
 		mocks.validateRequest.mockResolvedValue({
 			user: { id: "user-1" },
 			session: { activeOrganizationId: "org-1" },
@@ -354,5 +361,245 @@ describe("deployment log WebSocket boundary", () => {
 		expect(mocks.findServerById).toHaveBeenCalledWith("allowed-server");
 		expect(mocks.findServerById).not.toHaveBeenCalledWith("foreign-server");
 		expect(mocks.spawn).not.toHaveBeenCalled();
+	});
+
+	describe("owner of the log", () => {
+		const logPath = `${BASE}/logs/preview-app/preview-app-2026-06-22.log`;
+		const scheduleLogPath = `${BASE}/schedules/panel/panel-2026-06-22.log`;
+		const panelSchedule = {
+			applicationId: null,
+			composeId: null,
+			organizationId: "org-1",
+			scheduleType: "dokploy-server",
+			serverId: null,
+		};
+
+		const openDeploymentLog = async () => {
+			server = http.createServer();
+			setupDeploymentLogsWebSocketServer(server);
+			const port = await listen(server);
+
+			return openAndWaitForClose(
+				port,
+				"/listen-deployment?deploymentId=deployment-1",
+			);
+		};
+
+		const expectTailOf = (path: string) => {
+			expect(mocks.spawn).toHaveBeenCalledWith("tail", [
+				"-n",
+				"+1",
+				"-f",
+				path,
+			]);
+		};
+
+		it("tails a preview log after checking the application of the preview", async () => {
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath,
+				previewDeployment: { applicationId: "app-1" },
+				previewDeploymentId: "preview-1",
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+				{
+					user: { id: "user-1" },
+					session: { activeOrganizationId: "org-1" },
+				},
+				"app-1",
+				{ deployment: ["read"] },
+			);
+			expectTailOf(logPath);
+		});
+
+		it("does not tail a preview log when access to its application is denied", async () => {
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath,
+				previewDeployment: { applicationId: "app-1" },
+				previewDeploymentId: "preview-1",
+			});
+			mocks.checkServicePermissionAndAccess.mockRejectedValue(
+				new Error("Permission denied"),
+			);
+
+			await openDeploymentLog();
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("checks a preview on a build server by its application, not by the server's organization", async () => {
+			mocks.findDeploymentById.mockResolvedValue({
+				buildServerId: "build-server",
+				deploymentId: "deployment-1",
+				logPath,
+				previewDeployment: { applicationId: "app-1" },
+				previewDeploymentId: "preview-1",
+			});
+			mocks.checkServicePermissionAndAccess.mockRejectedValue(
+				new Error("Permission denied"),
+			);
+			mocks.findServerById.mockResolvedValue({
+				organizationId: "org-1",
+				sshKeyId: null,
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+				expect.anything(),
+				"app-1",
+				{ deployment: ["read"] },
+			);
+			expect(mocks.findServerById).not.toHaveBeenCalled();
+		});
+
+		it("refuses a build server log with no owning service", async () => {
+			mocks.findDeploymentById.mockResolvedValue({
+				buildServerId: "build-server",
+				deploymentId: "deployment-1",
+				logPath,
+			});
+			mocks.findServerById.mockResolvedValue({
+				organizationId: "org-1",
+				sshKeyId: null,
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.findServerById).not.toHaveBeenCalled();
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("refuses a log with no owner at all", async () => {
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath,
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("refuses a schedule log with no service, server or panel binding", async () => {
+			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: scheduleLogPath,
+				scheduleId: "schedule-1",
+				schedule: { ...panelSchedule, scheduleType: "application" },
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it.each(["owner", "admin"])(
+			"tails a panel schedule log for an %s of the organization",
+			async (role) => {
+				mocks.findMemberByUserId.mockResolvedValue({ role });
+				mocks.findDeploymentById.mockResolvedValue({
+					deploymentId: "deployment-1",
+					logPath: scheduleLogPath,
+					scheduleId: "schedule-1",
+					schedule: panelSchedule,
+				});
+
+				await openDeploymentLog();
+
+				expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
+					deployment: ["read"],
+				});
+				expectTailOf(scheduleLogPath);
+			},
+		);
+
+		it("keeps panel schedule logs away from a plain member", async () => {
+			mocks.findMemberByUserId.mockResolvedValue({ role: "member" });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: scheduleLogPath,
+				scheduleId: "schedule-1",
+				schedule: panelSchedule,
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("keeps a panel schedule log of another organization away from an owner", async () => {
+			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: scheduleLogPath,
+				scheduleId: "schedule-1",
+				schedule: { ...panelSchedule, organizationId: "org-2" },
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("does not downgrade a panel schedule to a service check when it carries a service id", async () => {
+			mocks.findMemberByUserId.mockResolvedValue({ role: "member" });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: scheduleLogPath,
+				scheduleId: "schedule-1",
+				schedule: { ...panelSchedule, applicationId: "app-1" },
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("refuses a panel schedule log on the cloud version", async () => {
+			mocks.isCloud = true;
+			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: scheduleLogPath,
+				scheduleId: "schedule-1",
+				schedule: panelSchedule,
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("checks a server schedule by its server when it carries a service id", async () => {
+			mocks.findServerById.mockResolvedValue({
+				organizationId: "org-2",
+				sshKeyId: null,
+			});
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: scheduleLogPath,
+				scheduleId: "schedule-1",
+				schedule: {
+					...panelSchedule,
+					applicationId: "app-1",
+					organizationId: null,
+					scheduleType: "server",
+					serverId: "server-1",
+				},
+			});
+
+			await openDeploymentLog();
+
+			expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+			expect(mocks.findServerById).toHaveBeenCalledWith("server-1");
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
 	});
 });

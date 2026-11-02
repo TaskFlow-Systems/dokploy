@@ -6,10 +6,8 @@ import {
 	IS_CLOUD,
 	validateRequest,
 } from "@dokploy/server";
-import {
-	checkPermission,
-	checkServicePermissionAndAccess,
-} from "@dokploy/server/services/permission";
+import { checkDeploymentLogOwnerAccess } from "@dokploy/server/services/deployment-log-access";
+import { checkPermission } from "@dokploy/server/services/permission";
 import { encodeBase64 } from "@dokploy/server/utils/docker/utils";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
 import {
@@ -41,28 +39,6 @@ type DeploymentLogAccessCtx = {
 	session: { activeOrganizationId: string | null | undefined };
 };
 
-type ServiceOwnerFields = {
-	applicationId?: string | null;
-	composeId?: string | null;
-	libsqlId?: string | null;
-	mariadbId?: string | null;
-	mongoId?: string | null;
-	mysqlId?: string | null;
-	postgresId?: string | null;
-	redisId?: string | null;
-};
-
-const getDatabaseOrComposeServiceId = (owner?: ServiceOwnerFields | null) =>
-	owner?.applicationId ||
-	owner?.composeId ||
-	owner?.postgresId ||
-	owner?.mysqlId ||
-	owner?.mariadbId ||
-	owner?.mongoId ||
-	owner?.redisId ||
-	owner?.libsqlId ||
-	null;
-
 const assertServerDeploymentLogAccess = async (
 	ctx: DeploymentLogAccessCtx,
 	serverId: string,
@@ -81,23 +57,6 @@ const assertServerDeploymentLogAccess = async (
 	}
 };
 
-const assertOrganizationDeploymentLogAccess = async (
-	ctx: DeploymentLogAccessCtx,
-	organizationId?: string | null,
-) => {
-	if (!ctx.session.activeOrganizationId) {
-		throw new Error("Unauthorized deployment log organization");
-	}
-	const permissionCtx = {
-		user: ctx.user,
-		session: { activeOrganizationId: ctx.session.activeOrganizationId },
-	};
-	await checkPermission(permissionCtx, { deployment: ["read"] });
-	if (organizationId !== ctx.session.activeOrganizationId) {
-		throw new Error("Unauthorized deployment log organization");
-	}
-};
-
 const assertDeploymentLogAccess = async (
 	ctx: DeploymentLogAccessCtx,
 	deployment: Awaited<ReturnType<typeof findDeploymentById>>,
@@ -109,34 +68,13 @@ const assertDeploymentLogAccess = async (
 		user: ctx.user,
 		session: { activeOrganizationId: ctx.session.activeOrganizationId },
 	};
-	const serviceId =
-		deployment.applicationId ||
-		deployment.composeId ||
-		getDatabaseOrComposeServiceId(deployment.backup) ||
-		getDatabaseOrComposeServiceId(deployment.volumeBackup) ||
-		getDatabaseOrComposeServiceId(deployment.schedule);
-
-	if (serviceId) {
-		await checkServicePermissionAndAccess(permissionCtx, serviceId, {
-			deployment: ["read"],
-		});
+	if (await checkDeploymentLogOwnerAccess(permissionCtx, deployment)) {
 		return;
 	}
 
-	const serverId =
-		deployment.serverId ||
-		deployment.buildServerId ||
-		deployment.schedule?.serverId;
+	const serverId = deployment.serverId || deployment.schedule?.serverId;
 	if (serverId) {
 		await assertServerDeploymentLogAccess(ctx, serverId);
-		return;
-	}
-
-	if (deployment.scheduleId) {
-		await assertOrganizationDeploymentLogAccess(
-			ctx,
-			deployment.schedule?.organizationId,
-		);
 		return;
 	}
 
