@@ -49,16 +49,6 @@ Postgres и Redis относятся к базе панели. На сервер
 
 Вернуть значение в `PINNED_VERSIONS` и остальных файлах, выпустить панель и нажать Update на сервере. Кнопка установит прежнюю версию.
 
-## Мониторинг (сервис dokploy-monitoring)
-
-Сервис `dokploy-monitoring` на серверах и на хосте панели работает из образа форка `ghcr.io/agenthits/dokploy-monitoring:agenthits-dev`. Раньше панель ставила upstream-образ `dokploy/monitoring:canary`: он собран на Go 1.24 и Alpine 3.19, и на 2026-11-01 в нём было 25 исправимых high.
-
-- Образ собирает `.github/workflows/agenthits-monitoring-image.yml` из `Dockerfile.monitoring` для amd64 и arm64. Сборка идёт при push в `AgentHits-Dev`, если он меняет `apps/monitoring/**`, `Dockerfile.monitoring` или сам workflow, и при ручном запуске. Каждая сборка получает тег `agenthits-dev-<sha12>`, а `agenthits-dev` переходит на неё только со сборки ветки `AgentHits-Dev`. Затем задание `scan` проверяет, что образ скачивается без логина, и сканирует его Trivy. PR с такими изменениями собирает обе платформы и сканирует amd64, ничего не публикуя. Каждый понедельник `image-audit.yml` сканирует `agenthits-dev`.
-- Новый пакет GHCR создаётся приватным. После первой публикации владелец делает пакет `dokploy-monitoring` аккаунта agentHits публичным: Package settings → Change visibility → Public. Пока пакет приватный, серверы не скачают образ, а задание `scan` будет красным.
-- На сервере образ меняется только при настройке мониторинга этого сервера: Remote Servers → сервер → Setup Server → вкладка Monitoring → **Save changes**. Панель скачивает образ и обновляет сервис. База `/etc/dokploy/monitoring/monitoring.db` подключена с хоста и сохраняется. Для хоста панели то же делает вызов API `admin.setupMonitoring`.
-- Канал один: панель на `agenthits-stable` при следующей настройке тоже получит последнюю сборку monitoring из `AgentHits-Dev`.
-- Откат: переменная `DOKPLOY_MONITORING_IMAGE` на сервисе панели, например `ghcr.io/agenthits/dokploy-monitoring:agenthits-dev-<sha12>` или прежний `dokploy/monitoring:canary`. После этого снова сохранить настройки мониторинга на нужных серверах.
-
 ## Ограничения
 
 - Railpack 0.15.4 → 0.40.1 и pack 0.39.1 → 0.40.9 — большие скачки. Перед широким выкатом проверьте сборку реального приложения.

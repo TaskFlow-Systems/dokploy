@@ -3,13 +3,12 @@ import type http from "node:http";
 import {
 	findDeploymentById,
 	findServerById,
+	getAccessibleServerIds,
 	IS_CLOUD,
 	validateRequest,
 } from "@dokploy/server";
-import {
-	checkPermission,
-	checkServicePermissionAndAccess,
-} from "@dokploy/server/services/permission";
+import { checkDeploymentLogOwnerAccess } from "@dokploy/server/services/deployment-log-access";
+import { checkPermission } from "@dokploy/server/services/permission";
 import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { encodeBase64 } from "@dokploy/server/utils/docker/utils";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
@@ -41,28 +40,6 @@ type DeploymentLogAccessCtx = {
 	session: { activeOrganizationId: string | null | undefined };
 };
 
-type ServiceOwnerFields = {
-	applicationId?: string | null;
-	composeId?: string | null;
-	libsqlId?: string | null;
-	mariadbId?: string | null;
-	mongoId?: string | null;
-	mysqlId?: string | null;
-	postgresId?: string | null;
-	redisId?: string | null;
-};
-
-const getDatabaseOrComposeServiceId = (owner?: ServiceOwnerFields | null) =>
-	owner?.applicationId ||
-	owner?.composeId ||
-	owner?.postgresId ||
-	owner?.mysqlId ||
-	owner?.mariadbId ||
-	owner?.mongoId ||
-	owner?.redisId ||
-	owner?.libsqlId ||
-	null;
-
 const assertServerDeploymentLogAccess = async (
 	ctx: DeploymentLogAccessCtx,
 	serverId: string,
@@ -75,26 +52,12 @@ const assertServerDeploymentLogAccess = async (
 		session: { activeOrganizationId: ctx.session.activeOrganizationId },
 	};
 	await checkPermission(permissionCtx, { deployment: ["read"] });
-	const server = await findServerById(serverId);
-	if (server.organizationId !== ctx.session.activeOrganizationId) {
+	const accessibleServerIds = await getAccessibleServerIds({
+		userId: ctx.user.id,
+		activeOrganizationId: ctx.session.activeOrganizationId,
+	});
+	if (!accessibleServerIds.has(serverId)) {
 		throw new Error("Unauthorized deployment log server");
-	}
-};
-
-const assertOrganizationDeploymentLogAccess = async (
-	ctx: DeploymentLogAccessCtx,
-	organizationId?: string | null,
-) => {
-	if (!ctx.session.activeOrganizationId) {
-		throw new Error("Unauthorized deployment log organization");
-	}
-	const permissionCtx = {
-		user: ctx.user,
-		session: { activeOrganizationId: ctx.session.activeOrganizationId },
-	};
-	await checkPermission(permissionCtx, { deployment: ["read"] });
-	if (organizationId !== ctx.session.activeOrganizationId) {
-		throw new Error("Unauthorized deployment log organization");
 	}
 };
 
@@ -109,34 +72,15 @@ const assertDeploymentLogAccess = async (
 		user: ctx.user,
 		session: { activeOrganizationId: ctx.session.activeOrganizationId },
 	};
-	const serviceId =
-		deployment.applicationId ||
-		deployment.composeId ||
-		getDatabaseOrComposeServiceId(deployment.backup) ||
-		getDatabaseOrComposeServiceId(deployment.volumeBackup) ||
-		getDatabaseOrComposeServiceId(deployment.schedule);
-
-	if (serviceId) {
-		await checkServicePermissionAndAccess(permissionCtx, serviceId, {
-			deployment: ["read"],
-		});
+	if (await checkDeploymentLogOwnerAccess(permissionCtx, deployment)) {
 		return;
 	}
 
-	const serverId =
-		deployment.serverId ||
-		deployment.buildServerId ||
-		deployment.schedule?.serverId;
+	// For a server's setup log this is the only organization check: that log is
+	// read from the panel, so the connection path below never looks the server up.
+	const serverId = deployment.serverId || deployment.schedule?.serverId;
 	if (serverId) {
 		await assertServerDeploymentLogAccess(ctx, serverId);
-		return;
-	}
-
-	if (deployment.scheduleId) {
-		await assertOrganizationDeploymentLogAccess(
-			ctx,
-			deployment.schedule?.organizationId,
-		);
 		return;
 	}
 
