@@ -339,7 +339,11 @@ export const findDeploymentById = async (deploymentId: string) => {
 				},
 			},
 			compose: true,
-			previewDeployment: true,
+			previewDeployment: {
+				with: {
+					application: { columns: { serverId: true } },
+				},
+			},
 			schedule: {
 				with: {
 					application: { columns: { serverId: true } },
@@ -904,8 +908,9 @@ export const removeDeployment = async (deploymentId: string) => {
 		const logPath = path.join(deployment.logPath);
 		if (logPath && logPath !== ".") {
 			const command = `rm -f ${logPath};`;
-			if (deployment.serverId) {
-				await execAsyncRemote(deployment.serverId, command);
+			const logServerId = deployment.serverId || deployment.buildServerId;
+			if (logServerId) {
+				await execAsyncRemote(logServerId, command);
 			} else {
 				await execAsync(command);
 			}
