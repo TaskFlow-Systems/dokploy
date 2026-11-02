@@ -817,6 +817,381 @@ describe("deployment router assigned-server boundary", () => {
 		expect(mocks.removeDeployment).not.toHaveBeenCalled();
 	});
 
+	describe("schedule run actions", () => {
+		const scheduleRun = (schedule: Record<string, unknown>) => ({
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+			pid: "1234",
+			status: "running",
+			schedule: {
+				applicationId: null,
+				application: null,
+				composeId: null,
+				compose: null,
+				organizationId: null,
+				serverId: null,
+				...schedule,
+			},
+		});
+
+		const serviceSchedule = (
+			scheduleType: "application" | "compose",
+			serverId: string | null,
+		) =>
+			scheduleType === "application"
+				? {
+						scheduleType,
+						applicationId: "service-1",
+						application: { serverId },
+					}
+				: { scheduleType, composeId: "service-1", compose: { serverId } };
+
+		const panelSchedule = {
+			scheduleType: "dokploy-server",
+			organizationId: "org-1",
+		};
+		const serverSchedule = { scheduleType: "server", serverId: "server-1" };
+
+		const expectNoProcessSideEffects = () => {
+			expect(mocks.execAsync).not.toHaveBeenCalled();
+			expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+			expect(mocks.updateDeploymentStatus).not.toHaveBeenCalled();
+			expect(mocks.audit).not.toHaveBeenCalled();
+		};
+
+		const killRun = () =>
+			createCaller().killProcess({ deploymentId: "deployment-1" });
+		const removeRun = () =>
+			createCaller().removeDeployment({ deploymentId: "deployment-1" });
+
+		describe.each(["application", "compose"] as const)(
+			"%s schedule",
+			(scheduleType) => {
+				it("kills a run on the service's remote server, never on the panel", async () => {
+					mocks.isCloud = false;
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(serviceSchedule(scheduleType, "server-1")),
+					);
+
+					await killRun();
+
+					expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+						expect.anything(),
+						"service-1",
+						{ deployment: ["cancel"] },
+					);
+					expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+						"server-1",
+						"kill -9 1234",
+					);
+					expect(mocks.execAsync).not.toHaveBeenCalled();
+					expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith(
+						"deployment-1",
+						"error",
+					);
+					expect(mocks.audit).toHaveBeenCalledWith(
+						expect.anything(),
+						expect.objectContaining({
+							action: "cancel",
+							resourceId: "deployment-1",
+						}),
+					);
+				});
+
+				it("kills a run on the panel when the service lives there", async () => {
+					mocks.isCloud = false;
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(serviceSchedule(scheduleType, null)),
+					);
+
+					await killRun();
+
+					expect(mocks.execAsync).toHaveBeenCalledWith("kill -9 1234");
+					expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+				});
+
+				it("sends the kill to the service's server, not to a server left on the schedule row", async () => {
+					mocks.isCloud = false;
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun({
+							...serviceSchedule(scheduleType, "server-1"),
+							serverId: "server-2",
+						}),
+					);
+
+					await killRun();
+
+					expect(mocks.execAsyncRemote).toHaveBeenCalledTimes(1);
+					expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+						"server-1",
+						"kill -9 1234",
+					);
+				});
+
+				it("refuses to kill a panel process on cloud", async () => {
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(serviceSchedule(scheduleType, null)),
+					);
+
+					await expect(killRun()).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+					expectNoProcessSideEffects();
+				});
+
+				it("refuses both actions without the service's cancel permission", async () => {
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(serviceSchedule(scheduleType, "server-1")),
+					);
+					mocks.checkServicePermissionAndAccess.mockRejectedValue(
+						new Error("service denied"),
+					);
+
+					await expect(killRun()).rejects.toThrow("service denied");
+					await expect(removeRun()).rejects.toThrow("service denied");
+
+					expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+						expect.anything(),
+						"service-1",
+						{ deployment: ["cancel"] },
+					);
+					expectNoProcessSideEffects();
+					expect(mocks.removeDeployment).not.toHaveBeenCalled();
+				});
+
+				it("removes a run through the service's cancel permission", async () => {
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(serviceSchedule(scheduleType, "server-1")),
+					);
+					mocks.removeDeployment.mockResolvedValue({
+						deploymentId: "deployment-1",
+					});
+
+					await expect(removeRun()).resolves.toEqual({
+						deploymentId: "deployment-1",
+					});
+
+					expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+						expect.anything(),
+						"service-1",
+						{ deployment: ["cancel"] },
+					);
+					expect(mocks.removeDeployment).toHaveBeenCalledWith("deployment-1");
+					expect(mocks.audit).toHaveBeenCalledWith(
+						expect.anything(),
+						expect.objectContaining({
+							action: "delete",
+							resourceId: "deployment-1",
+						}),
+					);
+				});
+			},
+		);
+
+		it("refuses a service schedule whose row lost its service", async () => {
+			mocks.isCloud = false;
+			mocks.findDeploymentById.mockResolvedValue(
+				scheduleRun({ scheduleType: "application", serverId: "server-1" }),
+			);
+
+			await expect(killRun()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+			expectNoProcessSideEffects();
+		});
+
+		describe("panel schedule", () => {
+			it.each(["owner", "admin"])(
+				"lets an %s of its organization kill a run on the panel",
+				async (role) => {
+					mocks.isCloud = false;
+					mocks.findMemberByUserId.mockResolvedValue({ role });
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(panelSchedule),
+					);
+
+					await killRun();
+
+					expect(mocks.checkPermission).toHaveBeenCalledWith(
+						expect.anything(),
+						{ deployment: ["cancel"] },
+					);
+					expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+					expect(mocks.execAsync).toHaveBeenCalledWith("kill -9 1234");
+					expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+				},
+			);
+
+			it.each(["owner", "admin"])(
+				"lets an %s of its organization remove a run",
+				async (role) => {
+					mocks.isCloud = false;
+					mocks.findMemberByUserId.mockResolvedValue({ role });
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(panelSchedule),
+					);
+
+					await removeRun();
+
+					expect(mocks.checkPermission).toHaveBeenCalledWith(
+						expect.anything(),
+						{ deployment: ["cancel"] },
+					);
+					expect(mocks.removeDeployment).toHaveBeenCalledWith("deployment-1");
+				},
+			);
+
+			it("kills on the panel even when the row names a server", async () => {
+				mocks.isCloud = false;
+				mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+				mocks.findDeploymentById.mockResolvedValue(
+					scheduleRun({ ...panelSchedule, serverId: "server-1" }),
+				);
+
+				await killRun();
+
+				expect(mocks.execAsync).toHaveBeenCalledWith("kill -9 1234");
+				expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+			});
+
+			it.each([
+				{
+					denied: "a plain member",
+					code: "FORBIDDEN",
+					isCloud: false,
+					role: "member",
+					schedule: panelSchedule,
+				},
+				{
+					denied: "a member with access to a service left on the row",
+					code: "FORBIDDEN",
+					isCloud: false,
+					role: "member",
+					schedule: { ...panelSchedule, applicationId: "service-1" },
+				},
+				{
+					denied: "an owner on cloud",
+					code: "FORBIDDEN",
+					isCloud: true,
+					role: "owner",
+					schedule: panelSchedule,
+				},
+				{
+					denied: "an owner of another organization",
+					code: "UNAUTHORIZED",
+					isCloud: false,
+					role: "owner",
+					schedule: { ...panelSchedule, organizationId: "org-2" },
+				},
+				{
+					denied: "an owner when the schedule has no organization",
+					code: "UNAUTHORIZED",
+					isCloud: false,
+					role: "owner",
+					schedule: { ...panelSchedule, organizationId: null },
+				},
+			])("refuses both actions for $denied", async (testCase) => {
+				mocks.isCloud = testCase.isCloud;
+				mocks.findMemberByUserId.mockResolvedValue({ role: testCase.role });
+				mocks.findDeploymentById.mockResolvedValue(
+					scheduleRun(testCase.schedule),
+				);
+
+				await expect(killRun()).rejects.toMatchObject({ code: testCase.code });
+				await expect(removeRun()).rejects.toMatchObject({
+					code: testCase.code,
+				});
+
+				expectNoProcessSideEffects();
+				expect(mocks.removeDeployment).not.toHaveBeenCalled();
+				expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+			});
+		});
+
+		describe("server schedule", () => {
+			it("kills a run on the schedule's server", async () => {
+				mocks.findDeploymentById.mockResolvedValue(scheduleRun(serverSchedule));
+
+				await killRun();
+
+				expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
+					deployment: ["cancel"],
+				});
+				expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
+					expect.anything(),
+					"server-1",
+				);
+				expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+					"server-1",
+					"kill -9 1234",
+				);
+				expect(mocks.execAsync).not.toHaveBeenCalled();
+			});
+
+			it("does not let a service left on the row replace the server check", async () => {
+				mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-2"]));
+				mocks.findDeploymentById.mockResolvedValue(
+					scheduleRun({ ...serverSchedule, applicationId: "service-1" }),
+				);
+
+				await expect(killRun()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+				await expect(removeRun()).rejects.toMatchObject({
+					code: "UNAUTHORIZED",
+				});
+
+				expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+				expectNoProcessSideEffects();
+				expect(mocks.removeDeployment).not.toHaveBeenCalled();
+			});
+		});
+
+		it("refuses both actions for a schedule with no owner", async () => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+			mocks.findDeploymentById.mockResolvedValue(
+				scheduleRun({ scheduleType: "server" }),
+			);
+
+			await expect(killRun()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+			await expect(removeRun()).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+			expectNoProcessSideEffects();
+			expect(mocks.removeDeployment).not.toHaveBeenCalled();
+		});
+
+		it.each(["done", "error"])(
+			"does not kill the stale PID of a %s run",
+			async (status) => {
+				mocks.isCloud = false;
+				mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+				mocks.findDeploymentById.mockResolvedValue({
+					...scheduleRun(panelSchedule),
+					status,
+				});
+
+				await expect(killRun()).rejects.toMatchObject({ code: "BAD_REQUEST" });
+
+				expectNoProcessSideEffects();
+			},
+		);
+	});
+
+	it("kills a server-bound run on its server, never on the panel", async () => {
+		mocks.isCloud = false;
+		mocks.findDeploymentById.mockResolvedValue({
+			deploymentId: "deployment-1",
+			pid: "1234",
+			serverId: "server-1",
+			status: "running",
+		});
+
+		await createCaller().killProcess({ deploymentId: "deployment-1" });
+
+		expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+			"server-1",
+			"kill -9 1234",
+		);
+		expect(mocks.execAsync).not.toHaveBeenCalled();
+	});
+
 	it("denies backup deployment logs through the owning backup service before log reads", async () => {
 		mocks.findDeploymentById.mockResolvedValue({
 			backupId: "backup-1",
