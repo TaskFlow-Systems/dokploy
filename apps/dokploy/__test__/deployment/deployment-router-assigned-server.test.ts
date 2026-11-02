@@ -72,6 +72,14 @@ vi.mock("@dokploy/server", () => ({
 	updateDeploymentStatus: mocks.updateDeploymentStatus,
 }));
 
+// assertHostScheduleAccess reads IS_CLOUD from constants, not from the package index.
+vi.mock("@dokploy/server/constants", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/constants")>()),
+	get IS_CLOUD() {
+		return mocks.isCloud;
+	},
+}));
+
 vi.mock("@dokploy/server/db", () => ({
 	db: {
 		query: {
@@ -498,6 +506,93 @@ describe("deployment router assigned-server boundary", () => {
 			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
 		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
+		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+	});
+
+	const panelScheduleRow = {
+		scheduleId: "schedule-1",
+		applicationId: null,
+		composeId: null,
+		organizationId: "org-1",
+		scheduleType: "dokploy-server",
+		serverId: null,
+	};
+
+	it.each(["owner", "admin"])(
+		"lists panel schedule runs for an %s of the schedule's organization",
+		async (role) => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role });
+			mocks.findScheduleById.mockResolvedValue(panelScheduleRow);
+
+			await expect(
+				createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+			).resolves.toEqual([{ deploymentId: "deployment-1", rollback: null }]);
+
+			expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
+				deployment: ["read"],
+			});
+			expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+			expect(mocks.assertTargetServerAccess).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps panel schedule runs away from a plain member", async () => {
+		mocks.isCloud = false;
+		mocks.findScheduleById.mockResolvedValue(panelScheduleRow);
+
+		await expect(
+			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ organization: "another organization", organizationId: "org-2" },
+		{ organization: "no organization", organizationId: null },
+	])(
+		"keeps runs of a panel schedule of $organization away from an owner",
+		async ({ organizationId }) => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+			mocks.findScheduleById.mockResolvedValue({
+				...panelScheduleRow,
+				organizationId,
+			});
+
+			await expect(
+				createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+			).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+			expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps panel schedule runs closed on cloud even for an owner", async () => {
+		mocks.isCloud = true;
+		mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+		mocks.findScheduleById.mockResolvedValue(panelScheduleRow);
+
+		await expect(
+			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+	});
+
+	it("does not downgrade panel schedule runs to a service check when the row carries a service id", async () => {
+		mocks.isCloud = false;
+		mocks.findScheduleById.mockResolvedValue({
+			...panelScheduleRow,
+			applicationId: "app-1",
+		});
+
+		await expect(
+			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
 		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
 	});
 
