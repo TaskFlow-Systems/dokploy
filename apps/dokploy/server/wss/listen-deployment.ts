@@ -3,6 +3,7 @@ import type http from "node:http";
 import {
 	findDeploymentById,
 	findServerById,
+	getAccessibleServerIds,
 	IS_CLOUD,
 	validateRequest,
 } from "@dokploy/server";
@@ -51,8 +52,11 @@ const assertServerDeploymentLogAccess = async (
 		session: { activeOrganizationId: ctx.session.activeOrganizationId },
 	};
 	await checkPermission(permissionCtx, { deployment: ["read"] });
-	const server = await findServerById(serverId);
-	if (server.organizationId !== ctx.session.activeOrganizationId) {
+	const accessibleServerIds = await getAccessibleServerIds({
+		userId: ctx.user.id,
+		activeOrganizationId: ctx.session.activeOrganizationId,
+	});
+	if (!accessibleServerIds.has(serverId)) {
 		throw new Error("Unauthorized deployment log server");
 	}
 };
