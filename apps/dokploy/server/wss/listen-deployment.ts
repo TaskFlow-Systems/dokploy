@@ -16,6 +16,7 @@ import {
 } from "@dokploy/server/wss/utils";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
+import { getDeploymentLogServerId } from "../utils/deployment-log-server";
 import { rejectApiKeySession } from "./api-key";
 import { verifyWebSocketOrigin } from "./origin";
 
@@ -37,53 +38,6 @@ type DeploymentLogAccessCtx = {
 	user: { id: string };
 	session: { activeOrganizationId: string | null | undefined };
 };
-
-type ServiceOwnerFields = {
-	applicationId?: string | null;
-	composeId?: string | null;
-	libsqlId?: string | null;
-	mariadbId?: string | null;
-	mongoId?: string | null;
-	mysqlId?: string | null;
-	postgresId?: string | null;
-	redisId?: string | null;
-};
-
-type ServiceServerFields = ServiceOwnerFields & {
-	application?: { serverId?: string | null } | null;
-	compose?: { serverId?: string | null } | null;
-	libsql?: { serverId?: string | null } | null;
-	mariadb?: { serverId?: string | null } | null;
-	mongo?: { serverId?: string | null } | null;
-	mysql?: { serverId?: string | null } | null;
-	postgres?: { serverId?: string | null } | null;
-	redis?: { serverId?: string | null } | null;
-	serverId?: string | null;
-};
-
-const getServiceServerId = (owner?: ServiceServerFields | null) =>
-	owner?.serverId ||
-	owner?.application?.serverId ||
-	owner?.compose?.serverId ||
-	owner?.postgres?.serverId ||
-	owner?.mysql?.serverId ||
-	owner?.mariadb?.serverId ||
-	owner?.mongo?.serverId ||
-	owner?.redis?.serverId ||
-	owner?.libsql?.serverId ||
-	null;
-
-const getDeploymentLogServerId = (
-	deployment: Awaited<ReturnType<typeof findDeploymentById>>,
-) =>
-	deployment.serverId ||
-	deployment.buildServerId ||
-	deployment.application?.serverId ||
-	deployment.compose?.serverId ||
-	getServiceServerId(deployment.backup) ||
-	getServiceServerId(deployment.volumeBackup) ||
-	getServiceServerId(deployment.schedule) ||
-	null;
 
 const assertServerDeploymentLogAccess = async (
 	ctx: DeploymentLogAccessCtx,

@@ -72,6 +72,14 @@ vi.mock("@dokploy/server", () => ({
 	updateDeploymentStatus: mocks.updateDeploymentStatus,
 }));
 
+// assertHostScheduleAccess reads IS_CLOUD from constants, not from the package index.
+vi.mock("@dokploy/server/constants", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/constants")>()),
+	get IS_CLOUD() {
+		return mocks.isCloud;
+	},
+}));
+
 vi.mock("@dokploy/server/db", () => ({
 	db: {
 		query: {
@@ -509,6 +517,93 @@ describe("deployment router assigned-server boundary", () => {
 		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
 	});
 
+	const panelScheduleRow = {
+		scheduleId: "schedule-1",
+		applicationId: null,
+		composeId: null,
+		organizationId: "org-1",
+		scheduleType: "dokploy-server",
+		serverId: null,
+	};
+
+	it.each(["owner", "admin"])(
+		"lists panel schedule runs for an %s of the schedule's organization",
+		async (role) => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role });
+			mocks.findScheduleById.mockResolvedValue(panelScheduleRow);
+
+			await expect(
+				createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+			).resolves.toEqual([{ deploymentId: "deployment-1", rollback: null }]);
+
+			expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
+				deployment: ["read"],
+			});
+			expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+			expect(mocks.assertTargetServerAccess).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps panel schedule runs away from a plain member", async () => {
+		mocks.isCloud = false;
+		mocks.findScheduleById.mockResolvedValue(panelScheduleRow);
+
+		await expect(
+			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{ organization: "another organization", organizationId: "org-2" },
+		{ organization: "no organization", organizationId: null },
+	])(
+		"keeps runs of a panel schedule of $organization away from an owner",
+		async ({ organizationId }) => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+			mocks.findScheduleById.mockResolvedValue({
+				...panelScheduleRow,
+				organizationId,
+			});
+
+			await expect(
+				createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+			).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+			expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps panel schedule runs closed on cloud even for an owner", async () => {
+		mocks.isCloud = true;
+		mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
+		mocks.findScheduleById.mockResolvedValue(panelScheduleRow);
+
+		await expect(
+			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+	});
+
+	it("does not downgrade panel schedule runs to a service check when the row carries a service id", async () => {
+		mocks.isCloud = false;
+		mocks.findScheduleById.mockResolvedValue({
+			...panelScheduleRow,
+			applicationId: "app-1",
+		});
+
+		await expect(
+			createCaller().allByType({ id: "schedule-1", type: "schedule" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
+		expect(mocks.deploymentsFindMany).not.toHaveBeenCalled();
+	});
+
 	it("checks deployment permission and target server access for server schedule deployments", async () => {
 		mocks.findScheduleById.mockResolvedValue({
 			scheduleId: "schedule-1",
@@ -773,6 +868,143 @@ describe("deployment router assigned-server boundary", () => {
 				tail: 100,
 			}),
 		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+	});
+
+	it("reads a deployment log from the build server, not the application server", async () => {
+		mocks.findDeploymentById.mockResolvedValue({
+			applicationId: "app-1",
+			application: { serverId: "app-server" },
+			buildServerId: "build-server",
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+		});
+
+		await expect(
+			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+		).resolves.toBe("logs");
+
+		expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+			expect.anything(),
+			"app-1",
+			{ deployment: ["read"] },
+		);
+		expect(mocks.execAsyncRemote).toHaveBeenCalledTimes(1);
+		expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+			"build-server",
+			'tail -n 100 "/tmp/deployment.log" 2>/dev/null || echo ""',
+		);
+		expect(mocks.execAsync).not.toHaveBeenCalled();
+	});
+
+	it("does not touch the build server when service access to its deployment log is denied", async () => {
+		mocks.findDeploymentById.mockResolvedValue({
+			applicationId: "app-1",
+			buildServerId: "build-server",
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+		});
+		mocks.checkServicePermissionAndAccess.mockRejectedValue(
+			new Error("service denied"),
+		);
+
+		await expect(
+			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+		).rejects.toThrow("service denied");
+
+		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+	});
+
+	it("fails closed for a build-server deployment log with no owning service", async () => {
+		mocks.findDeploymentById.mockResolvedValue({
+			buildServerId: "build-server",
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+		});
+
+		await expect(
+			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		{
+			owner: "application",
+			deployment: {
+				applicationId: "app-1",
+				application: { serverId: "server-1" },
+			},
+		},
+		{
+			owner: "compose",
+			deployment: { composeId: "compose-1", compose: { serverId: "server-1" } },
+		},
+		{
+			owner: "preview",
+			deployment: {
+				previewDeployment: {
+					applicationId: "app-1",
+					application: { serverId: "server-1" },
+				},
+			},
+		},
+		{
+			owner: "backup",
+			deployment: {
+				backup: { postgresId: "pg-1", postgres: { serverId: "server-1" } },
+			},
+		},
+		{
+			owner: "volume backup",
+			deployment: {
+				volumeBackup: {
+					applicationId: "app-1",
+					application: { serverId: "server-1" },
+				},
+			},
+		},
+		{
+			owner: "server schedule",
+			deployment: { schedule: { serverId: "server-1" } },
+		},
+	])(
+		"reads the $owner deployment log from the server that holds it",
+		async ({ deployment }) => {
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: "/tmp/deployment.log",
+				...deployment,
+			});
+
+			await expect(
+				createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+			).resolves.toBe("logs");
+
+			expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+				"server-1",
+				expect.stringContaining('tail -n 100 "/tmp/deployment.log"'),
+			);
+			expect(mocks.execAsync).not.toHaveBeenCalled();
+		},
+	);
+
+	it("reads a deployment log locally when the service runs on the panel", async () => {
+		mocks.isCloud = false;
+		mocks.execAsync.mockResolvedValue({ stdout: "local logs" });
+		mocks.findDeploymentById.mockResolvedValue({
+			applicationId: "app-1",
+			application: { serverId: null },
+			buildServerId: null,
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+		});
+
+		await expect(
+			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+		).resolves.toBe("local logs");
 
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 	});

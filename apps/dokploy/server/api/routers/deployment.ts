@@ -30,6 +30,7 @@ import {
 	checkServicePermissionAndAccess,
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
+import { assertHostScheduleAccess } from "@dokploy/server/services/schedule";
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -53,6 +54,7 @@ import {
 	fetchDeployApiJobsResult,
 	type QueueJobRow,
 } from "@/server/utils/deploy";
+import { getDeploymentLogServerId } from "@/server/utils/deployment-log-server";
 import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
 
 type DeploymentPermissionAction = "cancel" | "read";
@@ -97,6 +99,24 @@ const assertScheduleDeploymentReadAccess = async (
 	ctx: Parameters<typeof assertTargetServerAccess>[0],
 	schedule: Awaited<ReturnType<typeof findScheduleById>>,
 ) => {
+	// A panel schedule runs as root on the host, so a service id on its row must
+	// not turn this into a service check (see assertHostScheduleAccess).
+	if (schedule.scheduleType === "dokploy-server") {
+		if (schedule.organizationId !== ctx.session.activeOrganizationId) {
+			throw new TRPCError({
+				code: "UNAUTHORIZED",
+				message: "You are not authorized to access this schedule deployment",
+			});
+		}
+		await checkPermission(ctx, { deployment: ["read"] });
+		await assertHostScheduleAccess(
+			ctx,
+			schedule.scheduleType,
+			schedule.serverId,
+		);
+		return;
+	}
+
 	const serviceId = schedule.applicationId || schedule.composeId;
 	if (serviceId) {
 		await checkServicePermissionAndAccess(ctx, serviceId, {
@@ -475,8 +495,7 @@ export const deploymentRouter = createTRPCRouter({
 		)
 		.query(async ({ input, ctx }) => {
 			const deployment = await findDeploymentById(input.deploymentId);
-			const deploymentServerId =
-				deployment.serverId || deployment.schedule?.serverId;
+			const deploymentServerId = getDeploymentLogServerId(deployment);
 			await assertDeploymentActionAccess(ctx, deployment, "read");
 
 			if (!deployment.logPath) {
