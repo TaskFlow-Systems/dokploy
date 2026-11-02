@@ -9,6 +9,7 @@ import {
 } from "@dokploy/server";
 import { checkDeploymentLogOwnerAccess } from "@dokploy/server/services/deployment-log-access";
 import { checkPermission } from "@dokploy/server/services/permission";
+import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { encodeBase64 } from "@dokploy/server/utils/docker/utils";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
 import {
@@ -17,7 +18,6 @@ import {
 } from "@dokploy/server/wss/utils";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
-import { getDeploymentLogServerId } from "../utils/deployment-log-server";
 import { rejectApiKeySession } from "./api-key";
 import { verifyWebSocketOrigin } from "./origin";
 
@@ -76,6 +76,8 @@ const assertDeploymentLogAccess = async (
 		return;
 	}
 
+	// For a server's setup log this is the only organization check: that log is
+	// read from the panel, so the connection path below never looks the server up.
 	const serverId = deployment.serverId || deployment.schedule?.serverId;
 	if (serverId) {
 		await assertServerDeploymentLogAccess(ctx, serverId);

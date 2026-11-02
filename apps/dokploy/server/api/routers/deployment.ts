@@ -31,6 +31,7 @@ import {
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
 import { assertHostScheduleAccess } from "@dokploy/server/services/schedule";
+import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -54,7 +55,6 @@ import {
 	fetchDeployApiJobsResult,
 	type QueueJobRow,
 } from "@/server/utils/deploy";
-import { getDeploymentLogServerId } from "@/server/utils/deployment-log-server";
 import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
 
 type DeploymentPermissionAction = "cancel" | "read";
