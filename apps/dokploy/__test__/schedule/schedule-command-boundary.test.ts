@@ -115,9 +115,9 @@ describe("schedule command boundary", () => {
 
 		const command = mocks.execAsyncRemote.mock.calls[0]?.[1] as string;
 		expect(command).toContain(
-			"bash '/remote schedules/schedule-one/script.sh'",
+			"_ '/remote schedules/schedule-one/script.sh' '/tmp/deployment log;id.log' ||",
 		);
-		expect(command).toContain("tee -a '/tmp/deployment log;id.log'");
+		expect(command).toContain("set -o pipefail");
 	});
 
 	it("runs dokploy-server schedule scripts from the local schedule directory", async () => {
