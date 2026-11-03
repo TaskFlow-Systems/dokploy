@@ -43,10 +43,6 @@
 			"biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
 		]
 	},
-	"resolutions": {
-		"@types/react": "18.3.5",
-		"@types/react-dom": "18.3.0"
-	},
 	"overrides": {
 		"better-auth": "1.7.12",
 		"next": ">=16.4.3 <17.0.0",
