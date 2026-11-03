@@ -323,12 +323,29 @@ describe("recordBuildFailure", () => {
 			...failure,
 			error: new ExecError("Remote command failed with exit code 1", {
 				command: "build",
+				exitCode: 1,
 			}),
 		});
 
 		expect(String(mocks.execAsyncRemote.mock.calls[0]?.[1])).not.toContain(
 			"base64",
 		);
+	});
+
+	it("writes the reason of a lost connection to the build log", async () => {
+		const error = new ExecError("SSH connection error: Keepalive timeout", {
+			command: "build",
+			serverId: "build-server",
+			originalError: new Error("Keepalive timeout"),
+		});
+
+		await recordBuildFailure({ ...failure, error });
+
+		const command = String(mocks.execAsyncRemote.mock.calls[0]?.[1]);
+		const encoded = Buffer.from(error.message).toString("base64");
+		expect(command).toContain(`echo "${encoded}" | base64 -d`);
+		expect(command).toContain("Error occurred");
+		expect(mocks.updateSet).not.toHaveBeenCalled();
 	});
 
 	it("keeps the reason on the deployment when the server is out of reach", async () => {

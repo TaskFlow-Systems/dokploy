@@ -161,8 +161,9 @@ export const recordBuildFailure = async ({
 	const message = error instanceof Error ? error.message : String(error);
 	let command = "";
 
-	// Only log details for non-ExecError errors
-	if (!(error instanceof ExecError)) {
+	// A command that finished wrote its output to the log. After a lost connection
+	// the log may end with a healthy build, so the reason has to go there as well.
+	if (!(error instanceof ExecError) || !error.didCommandFinish()) {
 		command += `echo "${encodeBase64(message)}" | base64 -d >> "${logPath}";`;
 	}
 	command += `echo "\nError occurred ❌, check the logs for details." >> ${logPath};`;

@@ -66,4 +66,12 @@ export class ExecError extends Error {
 	isRemote(): boolean {
 		return !!this.serverId;
 	}
+
+	/**
+	 * Check if the command reported an exit code. Without one it could not start,
+	 * was killed or lost its connection, so its output does not explain the failure
+	 */
+	didCommandFinish(): boolean {
+		return this.exitCode !== undefined;
+	}
 }

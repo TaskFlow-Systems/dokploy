@@ -10,6 +10,7 @@ vi.mock("@dokploy/server/utils/servers/destination", () => ({
 	resolveServerDestinationHost: vi.fn(async () => "127.0.0.1"),
 }));
 
+import type { ExecError } from "@dokploy/server/utils/process/ExecError";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { getRemoteDocker } from "@dokploy/server/utils/servers/remote-docker";
 import { type ServerChannel, Server as SshServer, utils } from "ssh2";
@@ -183,6 +184,52 @@ describe("execAsyncRemote over a lost connection", () => {
 		}
 
 		expect(await outcome).toBe("rejected");
+	});
+
+	const failureOf = (running: Promise<unknown>) =>
+		running.then(
+			() => {
+				throw new Error("The command should have failed");
+			},
+			(error: ExecError) => error,
+		);
+
+	it("reports that the command did not finish when the network dies", async () => {
+		const failure = failureOf(execAsyncRemote("build-server", "bun install"));
+		await waitUntil(() => ssh.channels.length === 1);
+
+		await loseNetwork();
+		await advanceKeepalive(KEEPALIVE_TICKS_UNTIL_LOSS);
+
+		expect((await failure).didCommandFinish()).toBe(false);
+	});
+
+	it("reports that the command did not finish when the connection closes", async () => {
+		const failure = failureOf(execAsyncRemote("build-server", "bun install"));
+		await waitUntil(() => ssh.channels.length === 1);
+
+		for (const socket of ssh.sockets) {
+			socket.destroy();
+		}
+
+		const error = await failure;
+		expect(error.didCommandFinish()).toBe(false);
+		expect(error.message).not.toContain("undefined");
+	});
+
+	it("reports that the command finished when it exits with an error", async () => {
+		const failure = failureOf(
+			execAsyncRemote("build-server", "docker build ."),
+		);
+		await waitUntil(() => ssh.channels.length === 1);
+
+		const channel = ssh.channels[0] as ServerChannel;
+		channel.exit(1);
+		channel.close();
+
+		const error = await failure;
+		expect(error.didCommandFinish()).toBe(true);
+		expect(error.exitCode).toBe(1);
 	});
 });
 

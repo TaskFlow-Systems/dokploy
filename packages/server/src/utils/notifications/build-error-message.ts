@@ -8,13 +8,14 @@ const FALLBACK_MESSAGE = "Error building";
 export const formatBuildLogTail = (log: string, maxLines = LOG_TAIL_LINES) =>
 	log.trim().split("\n").slice(-maxLines).join("\n").trim();
 
-// ExecError.message no longer carries the build output; the log tail does.
+// ExecError.message no longer carries the build output; the log tail does. The
+// tail of a command that did not finish says nothing about the failure.
 export const getBuildErrorMessage = async (
 	error: unknown,
 	logPath: string,
 	serverId?: string | null,
 ): Promise<string> => {
-	if (!(error instanceof ExecError)) {
+	if (!(error instanceof ExecError) || !error.didCommandFinish()) {
 		return (error instanceof Error && error.message) || FALLBACK_MESSAGE;
 	}
 
