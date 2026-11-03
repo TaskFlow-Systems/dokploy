@@ -121,6 +121,13 @@ describe("execAsyncRemote over a lost connection", () => {
 		await ssh.close();
 	});
 
+	// The reply to exec may already be past the proxy. ssh2 restarts its keepalive
+	// count when it reads that reply, so the first tick has to come after it.
+	const loseNetwork = async () => {
+		ssh.proxyState.blackhole = true;
+		await flushIo();
+	};
+
 	it("rejects when the network dies, so the queue job ends", async () => {
 		const running = execAsyncRemote("build-server", "bun install");
 		const outcome = running.then(
@@ -129,7 +136,7 @@ describe("execAsyncRemote over a lost connection", () => {
 		);
 		await waitUntil(() => ssh.channels.length === 1);
 
-		ssh.proxyState.blackhole = true;
+		await loseNetwork();
 		await advanceKeepalive(KEEPALIVE_TICKS_UNTIL_LOSS);
 
 		expect(await outcome).toBe("SSH connection error: Keepalive timeout");
@@ -140,7 +147,7 @@ describe("execAsyncRemote over a lost connection", () => {
 		execAsyncRemote("build-server", "bun install").then(settled, settled);
 		await waitUntil(() => ssh.channels.length === 1);
 
-		ssh.proxyState.blackhole = true;
+		await loseNetwork();
 		await advanceKeepalive(KEEPALIVE_TICKS_UNTIL_LOSS - 1);
 
 		expect(settled).not.toHaveBeenCalled();
