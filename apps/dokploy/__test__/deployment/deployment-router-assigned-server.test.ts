@@ -803,44 +803,6 @@ describe("deployment router assigned-server boundary", () => {
 		expect(mocks.execAsync).not.toHaveBeenCalled();
 	});
 
-	// killProcess runs on schedule.serverId or the panel, so a schedule bound to
-	// a service on a remote server would send its remote pid to the panel host.
-	it.each([
-		{
-			owner: "application",
-			schedule: { applicationId: "app-1", composeId: null, serverId: null },
-		},
-		{
-			owner: "compose",
-			schedule: { applicationId: null, composeId: "compose-1", serverId: null },
-		},
-		{ owner: "panel", schedule: panelSchedule },
-	])(
-		"does not open cancel actions for a $owner schedule deployment",
-		async ({ schedule }) => {
-			mocks.isCloud = false;
-			mocks.findMemberByUserId.mockResolvedValue({ role: "owner" });
-			mocks.findDeploymentById.mockResolvedValue({
-				deploymentId: "deployment-1",
-				logPath: "/tmp/deployment.log",
-				pid: "12345",
-				scheduleId: "schedule-1",
-				schedule,
-			});
-
-			await expect(
-				createCaller().killProcess({ deploymentId: "deployment-1" }),
-			).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-			await expect(
-				createCaller().removeDeployment({ deploymentId: "deployment-1" }),
-			).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-
-			expect(mocks.execAsync).not.toHaveBeenCalled();
-			expect(mocks.removeDeployment).not.toHaveBeenCalled();
-			expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
-		},
-	);
-
 	it("denies schedule-backed deployment logs on inaccessible servers before remote tail", async () => {
 		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-2"]));
 

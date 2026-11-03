@@ -64,8 +64,6 @@ const assertDeploymentActionAccess = async (
 	deployment: DeploymentOwnerCandidate,
 	action: DeploymentPermissionAction,
 ) => {
-	// Schedules count only for reading: killProcess runs on schedule.serverId or
-	// the panel, so a service schedule on a remote server would kill a panel pid.
 	if (
 		action === "read" &&
 		(await checkDeploymentLogOwnerAccess(ctx, deployment))
