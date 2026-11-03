@@ -81,6 +81,21 @@ describe("getBuildErrorMessage", () => {
 		);
 	});
 
+	it("names a lost connection instead of a log that may look healthy", async () => {
+		const message = await getBuildErrorMessage(
+			new ExecError("SSH connection error: Keepalive timeout", {
+				command: SCRIPT,
+				serverId: "server-1",
+				originalError: new Error("Keepalive timeout"),
+			}),
+			LOG_PATH,
+			"server-1",
+		);
+
+		expect(message).toBe("SSH connection error: Keepalive timeout");
+		expect(mockExecAsyncRemote).not.toHaveBeenCalled();
+	});
+
 	it("reports the command error when the log cannot be read", async () => {
 		mockExecAsyncRemote.mockRejectedValue(new Error("No route to host"));
 

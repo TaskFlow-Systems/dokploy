@@ -314,20 +314,23 @@ export const execAsyncRemote = async (
 						return;
 					}
 					stream
-						.on("close", (code: number, _signal: string) => {
+						.on("close", (code: number | null | undefined, _signal: string) => {
 							clearTimeout(timer);
 							conn.end();
 							if (code === 0) {
 								resolve({ stdout, stderr });
 							} else {
+								const exitCode = code ?? undefined;
 								reject(
 									new ExecError(
-										`Remote command failed with exit code ${code}`,
+										exitCode === undefined
+											? "Remote command ended without an exit code: the connection closed or the command was killed"
+											: `Remote command failed with exit code ${exitCode}`,
 										{
 											command,
 											stdout,
 											stderr,
-											exitCode: code,
+											exitCode,
 											serverId,
 										},
 									),
