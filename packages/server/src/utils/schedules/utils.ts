@@ -18,6 +18,7 @@ import { quoteShellArg } from "../filesystem/safe-path";
 import { execAsyncRemote } from "../process/execAsync";
 import { spawnAsync } from "../process/spawnAsync";
 import { quoteShellArgs } from "../shell";
+import { buildServerScheduleCommand } from "./run-process";
 
 export const scheduleJob = (schedule: Schedule) => {
 	const { cronExpression, scheduleId, timezone } = schedule;
@@ -194,17 +195,10 @@ export const runCommand = async (scheduleId: string) => {
 		} else if (scheduleType === "server") {
 			const { SCHEDULES_PATH } = paths(true);
 			const scriptPath = getScheduleScriptPath(SCHEDULES_PATH, appName);
-			const quotedLogPath = quoteShellArg(deployment.logPath);
-			const scriptCommand = quoteShellArgs(["bash", scriptPath]);
-			const command = `
-				set -e
-				echo "Running script" >> ${quotedLogPath};
-				${scriptCommand} 2>&1 | tee -a ${quotedLogPath} || { 
-					echo "❌ Command failed" >> ${quotedLogPath};
-					exit 1;
-				  }
-				echo "✅ Command executed successfully" >> ${quotedLogPath};
-			`;
+			const command = buildServerScheduleCommand(
+				scriptPath,
+				deployment.logPath,
+			);
 			await execAsyncRemote(serverId, command, async (data) => {
 				// we need to extract the PID and Schedule ID from the data
 				const pid = data?.match(/PID: (\d+)/)?.[1];

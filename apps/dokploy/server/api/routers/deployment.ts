@@ -32,6 +32,7 @@ import {
 } from "@dokploy/server/services/permission";
 import { assertHostScheduleAccess } from "@dokploy/server/services/schedule";
 import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
+import { buildKillScheduleRunCommand } from "@dokploy/server/utils/schedules/run-process";
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -534,7 +535,7 @@ export const deploymentRouter = createTRPCRouter({
 				});
 			}
 
-			const command = `kill -9 ${deployment.pid}`;
+			const command = buildKillScheduleRunCommand(deployment.pid);
 			if (serverId) {
 				await execAsyncRemote(serverId, command);
 			} else {

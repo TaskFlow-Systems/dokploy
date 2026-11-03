@@ -1,5 +1,8 @@
+import { buildKillScheduleRunCommand } from "@dokploy/server/utils/schedules/run-process";
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const KILL_RUN = buildKillScheduleRunCommand("1234");
 
 const mocks = vi.hoisted(() => ({
 	audit: vi.fn(),
@@ -1087,7 +1090,7 @@ describe("deployment router assigned-server boundary", () => {
 					);
 					expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
 						"server-1",
-						"kill -9 1234",
+						KILL_RUN,
 					);
 					expect(mocks.execAsync).not.toHaveBeenCalled();
 					expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith(
@@ -1111,7 +1114,7 @@ describe("deployment router assigned-server boundary", () => {
 
 					await killRun();
 
-					expect(mocks.execAsync).toHaveBeenCalledWith("kill -9 1234");
+					expect(mocks.execAsync).toHaveBeenCalledWith(KILL_RUN);
 					expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 				});
 
@@ -1129,7 +1132,7 @@ describe("deployment router assigned-server boundary", () => {
 					expect(mocks.execAsyncRemote).toHaveBeenCalledTimes(1);
 					expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
 						"server-1",
-						"kill -9 1234",
+						KILL_RUN,
 					);
 				});
 
@@ -1220,7 +1223,7 @@ describe("deployment router assigned-server boundary", () => {
 						{ deployment: ["cancel"] },
 					);
 					expect(mocks.checkServicePermissionAndAccess).not.toHaveBeenCalled();
-					expect(mocks.execAsync).toHaveBeenCalledWith("kill -9 1234");
+					expect(mocks.execAsync).toHaveBeenCalledWith(KILL_RUN);
 					expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 				},
 			);
@@ -1253,7 +1256,7 @@ describe("deployment router assigned-server boundary", () => {
 
 				await killRun();
 
-				expect(mocks.execAsync).toHaveBeenCalledWith("kill -9 1234");
+				expect(mocks.execAsync).toHaveBeenCalledWith(KILL_RUN);
 				expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 			});
 
@@ -1326,7 +1329,7 @@ describe("deployment router assigned-server boundary", () => {
 				);
 				expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
 					"server-1",
-					"kill -9 1234",
+					KILL_RUN,
 				);
 				expect(mocks.execAsync).not.toHaveBeenCalled();
 			});
@@ -1390,10 +1393,7 @@ describe("deployment router assigned-server boundary", () => {
 
 		await createCaller().killProcess({ deploymentId: "deployment-1" });
 
-		expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
-			"server-1",
-			"kill -9 1234",
-		);
+		expect(mocks.execAsyncRemote).toHaveBeenCalledWith("server-1", KILL_RUN);
 		expect(mocks.execAsync).not.toHaveBeenCalled();
 	});
 
