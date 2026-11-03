@@ -152,7 +152,6 @@
         "undici": "^8.12.3",
         "use-resize-observer": "^10.0.0",
         "ws": "^8.22.1",
-        "xterm-addon-fit": "^0.8.0",
         "yaml": "^2.9.1",
         "zod": "^4.6.7",
         "zod-form-data": "^3.0.4",
@@ -192,11 +191,10 @@
         "@dokploy/server": "workspace:*",
         "@hono/node-server": "^2.1.6",
         "@hono/zod-validator": "^0.9.1",
-        "bullmq": "5.81.5",
+        "bullmq": "^5.81.5",
         "dotenv": "^18.0.9",
         "drizzle-orm": "^0.45.4",
         "hono": "^4.13.16",
-        "ioredis": "5.11.1",
         "pino": "^10.4.0",
         "pino-pretty": "^13.2.0",
         "react": "^19.3.1",
@@ -235,8 +233,6 @@
         "@better-auth/utils": "0.5.0",
         "@faker-js/faker": "^10.6.0",
         "@octokit/auth-app": "^8.3.1",
-        "@oslojs/crypto": "1.0.1",
-        "@oslojs/encoding": "^1.1.0",
         "@react-email/components": "^1.0.12",
         "@trpc/server": "^11.22.1",
         "adm-zip": "^0.6.1",
@@ -1066,14 +1062,6 @@
     "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.44.0", "", {}, "sha512-E3JkOlMBi3N8OGGkbl7tFyqk2MAS6/lySRZBK3Mu7AzjF1fT8oIChH9ChE48SUWzDn9Kdwta+G/p5LJ4xW4CLQ=="],
 
     "@opentelemetry/sql-common": ["@opentelemetry/sql-common@0.43.0", "", { "dependencies": { "@opentelemetry/core": "^3.0.0" }, "peerDependencies": { "@opentelemetry/api": "^1.1.0" } }, "sha512-r5FfJFAbRIW+7YkXkD8XBEuExf1RyesrLrzyB1If/hTqxEAUaGPZihgrPLPX+UFq4b20YtHDmFBptNffPAJXjQ=="],
-
-    "@oslojs/asn1": ["@oslojs/asn1@1.0.0", "", { "dependencies": { "@oslojs/binary": "1.0.0" } }, "sha512-zw/wn0sj0j0QKbIXfIlnEcTviaCzYOY3V5rAyjR6YtOByFtJiT574+8p9Wlach0lZH9fddD4yb9laEAIl4vXQA=="],
-
-    "@oslojs/binary": ["@oslojs/binary@1.0.0", "", {}, "sha512-9RCU6OwXU6p67H4NODbuxv2S3eenuQ4/WFLrsq+K/k682xrznH5EVWA7N4VFk9VYVcbFtKqur5YQQZc0ySGhsQ=="],
-
-    "@oslojs/crypto": ["@oslojs/crypto@1.0.1", "", { "dependencies": { "@oslojs/asn1": "1.0.0", "@oslojs/binary": "1.0.0" } }, "sha512-7n08G8nWjAr/Yu3vu9zzrd0L9XnrJfpMioQcvCMxBIiF5orECHe5/3J0jmXRVvgfqMm/+4oxlQ+Sq39COYLcNQ=="],
-
-    "@oslojs/encoding": ["@oslojs/encoding@1.1.0", "", {}, "sha512-70wQhgYmndg4GCPxPPxPGevRKqTIJ2Nh4OkiMWmDAVYsTQ+Ta7Sq+rPevXyXGdzr30/qZBnyOalCszoMxlyldQ=="],
 
     "@oxc-project/types": ["@oxc-project/types@0.156.0", "", {}, "sha512-1Duyg48TdJNdyhEB8Xn1L36bT9Pv6GUtlKjHxOys8xkaF/rQq3XJE+bAurSK/AgIz5mGFsb77cn9Pb20+WCScw=="],
 
@@ -3152,10 +3140,6 @@
     "xpath": ["xpath@0.0.35", "", {}, "sha512-8O+m2N04SwLpGw/1Grz2HD8ejnWDV7M1dMPgKKuOjhYh5W9H4pel/+06kInohIdpS2FeSbL4i8ID8c4tpxwq9Q=="],
 
     "xtend": ["xtend@4.0.2", "", {}, "sha512-LKYU1iAXJXUgAXn9URjiu+MWhyUXHsvfp7mcuYm9dSUKK0/CjtrUwFAxD82/mCWbtLsGjFIad0wIsod4zrTAEQ=="],
-
-    "xterm": ["xterm@5.3.0", "", {}, "sha512-8QqjlekLUFTrU6x7xck1MsPzPA571K5zNqWm0M0oroYEWVOptZ0+ubQSkQ3uxIEhcIHRujJy6emDWX4A7qyFzg=="],
-
-    "xterm-addon-fit": ["xterm-addon-fit@0.8.0", "", { "peerDependencies": { "xterm": "^5.0.0" } }, "sha512-yj3Np7XlvxxhYF/EJ7p3KHaMt6OdwQ+HDu573Vx1lRXsVxOcnVJs51RgjZOouIZOczTsskaS+CpXspK81/DLqw=="],
 
     "y18n": ["y18n@4.0.3", "", {}, "sha512-JKhqTOwSrqNA1NY5lSztJ1GrBiUodLMmIZuLiDaMRJ+itFd+ABVE8XBjOvIWL+rSqNDC74LCSFmlb/U4UZ4hJQ=="],
 
