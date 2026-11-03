@@ -21,11 +21,17 @@ import {
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
 import {
+	checkDeploymentLogOwnerAccess,
+	type DeploymentOwnerCandidate,
+	getDeploymentServiceId,
+} from "@dokploy/server/services/deployment-log-access";
+import {
 	checkPermission,
 	checkServicePermissionAndAccess,
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
 import { assertHostScheduleAccess } from "@dokploy/server/services/schedule";
+import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
@@ -49,74 +55,24 @@ import {
 	fetchDeployApiJobsResult,
 	type QueueJobRow,
 } from "@/server/utils/deploy";
-import { getDeploymentLogServerId } from "@/server/utils/deployment-log-server";
 import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
 
 type DeploymentPermissionAction = "cancel" | "read";
-type DeploymentOwnerCandidate = {
-	applicationId?: string | null;
-	backup?: {
-		composeId?: string | null;
-		libsqlId?: string | null;
-		mariadbId?: string | null;
-		mongoId?: string | null;
-		mysqlId?: string | null;
-		postgresId?: string | null;
-	} | null;
-	composeId?: string | null;
-	previewDeployment?: {
-		applicationId?: string | null;
-	} | null;
-	serverId?: string | null;
-	schedule?: {
-		serverId?: string | null;
-	} | null;
-	volumeBackup?: {
-		applicationId?: string | null;
-		composeId?: string | null;
-		libsqlId?: string | null;
-		mariadbId?: string | null;
-		mongoId?: string | null;
-		mysqlId?: string | null;
-		postgresId?: string | null;
-		redisId?: string | null;
-	} | null;
-};
-
-const getBackupServiceId = (backup: DeploymentOwnerCandidate["backup"]) =>
-	backup?.composeId ||
-	backup?.postgresId ||
-	backup?.mariadbId ||
-	backup?.mysqlId ||
-	backup?.mongoId ||
-	backup?.libsqlId ||
-	null;
-
-const getVolumeBackupServiceId = (
-	volumeBackup: DeploymentOwnerCandidate["volumeBackup"],
-) =>
-	volumeBackup?.applicationId ||
-	volumeBackup?.composeId ||
-	volumeBackup?.postgresId ||
-	volumeBackup?.mysqlId ||
-	volumeBackup?.mariadbId ||
-	volumeBackup?.mongoId ||
-	volumeBackup?.redisId ||
-	volumeBackup?.libsqlId ||
-	null;
-
-const getDeploymentServiceId = (deployment: DeploymentOwnerCandidate) =>
-	deployment.applicationId ||
-	deployment.composeId ||
-	deployment.previewDeployment?.applicationId ||
-	getBackupServiceId(deployment.backup) ||
-	getVolumeBackupServiceId(deployment.volumeBackup);
 
 const assertDeploymentActionAccess = async (
 	ctx: Parameters<typeof assertTargetServerAccess>[0],
 	deployment: DeploymentOwnerCandidate,
 	action: DeploymentPermissionAction,
 ) => {
+	// Schedules count only for reading: killProcess runs on schedule.serverId or
+	// the panel, so a service schedule on a remote server would kill a panel pid.
+	if (
+		action === "read" &&
+		(await checkDeploymentLogOwnerAccess(ctx, deployment))
+	) {
+		return;
+	}
+
 	const serviceId = getDeploymentServiceId(deployment);
 	if (serviceId) {
 		await checkServicePermissionAndAccess(ctx, serviceId, {

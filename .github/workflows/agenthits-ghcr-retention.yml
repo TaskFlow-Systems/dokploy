@@ -26,14 +26,7 @@ concurrency:
 
 jobs:
   prune:
-    name: prune (${{ matrix.package }})
     runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        # dokploy is the panel image; dokploy-monitoring is published by
-        # agenthits-monitoring-image.yml.
-        package: [dokploy, dokploy-monitoring]
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -51,8 +44,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GHCR_PUSH_TOKEN }}
           PACKAGE_OWNER: agentHits
-          PACKAGE_NAME: ${{ matrix.package }}
-          IMAGE: ghcr.io/agenthits/${{ matrix.package }}
+          PACKAGE_NAME: dokploy
+          IMAGE: ghcr.io/agenthits/dokploy
           KEEP_RECENT: ${{ inputs.keep-recent || 10 }}
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry-run || 'false' }}
         run: bash .github/scripts/agenthits-ghcr-retention.sh
