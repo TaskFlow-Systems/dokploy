@@ -79,6 +79,27 @@ jobs:
             ssh -V
             for tool in ssh-keyscan pkill htpasswd rsync jq zip unzip ip tini; do command -v "$tool"; done
           '
+          # The image compiles node-pty and the tests mock it, so only this runs it:
+          # on Node, as an ESM import from /app, the way the panel's server does. The
+          # sleep and read fail a child that dies after its first output, as under Bun.
+          docker run --rm --entrypoint node dokploy-bun-check:main --input-type=module -e '
+            import { spawn } from "node-pty";
+            setTimeout(() => {
+              console.error("node-pty: no exit in 30 s");
+              process.exit(1);
+            }, 30000);
+            const command = "echo first; sleep 1; read -r line; echo got $line; exit 7";
+            const pty = spawn("/bin/sh", ["-c", command], { name: "xterm-256color", cols: 80, rows: 30 });
+            let output = "";
+            pty.onData((data) => {
+              output += data;
+            });
+            pty.onExit(({ exitCode }) => {
+              console.log(`node-pty: exit ${exitCode}, output ${JSON.stringify(output)}`);
+              process.exit(exitCode === 7 && output.includes("first") && output.includes("got ping") ? 0 : 1);
+            });
+            pty.write("ping\n");
+          '
 
       # Repeats the panel's Railpack path (railpack prepare, then buildx with the
       # Railpack frontend on a docker-container builder) from inside the image,
