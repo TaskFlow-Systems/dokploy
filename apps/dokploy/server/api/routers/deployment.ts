@@ -64,8 +64,6 @@ const assertDeploymentActionAccess = async (
 	deployment: DeploymentOwnerCandidate,
 	action: DeploymentPermissionAction,
 ) => {
-	// Schedules count only for reading: killProcess runs on schedule.serverId or
-	// the panel, so a service schedule on a remote server would kill a panel pid.
 	if (
 		action === "read" &&
 		(await checkDeploymentLogOwnerAccess(ctx, deployment))
@@ -95,25 +93,32 @@ const assertDeploymentActionAccess = async (
 	});
 };
 
+// A panel schedule runs as root on the host, so a service id on its row must
+// not turn this into a service check (see assertHostScheduleAccess).
+const assertPanelScheduleDeploymentAccess = async (
+	ctx: Parameters<typeof assertTargetServerAccess>[0],
+	schedule: Pick<
+		Awaited<ReturnType<typeof findScheduleById>>,
+		"organizationId" | "scheduleType" | "serverId"
+	>,
+	action: DeploymentPermissionAction,
+) => {
+	if (schedule.organizationId !== ctx.session.activeOrganizationId) {
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: "You are not authorized to access this schedule deployment",
+		});
+	}
+	await checkPermission(ctx, { deployment: [action] });
+	await assertHostScheduleAccess(ctx, schedule.scheduleType, schedule.serverId);
+};
+
 const assertScheduleDeploymentReadAccess = async (
 	ctx: Parameters<typeof assertTargetServerAccess>[0],
 	schedule: Awaited<ReturnType<typeof findScheduleById>>,
 ) => {
-	// A panel schedule runs as root on the host, so a service id on its row must
-	// not turn this into a service check (see assertHostScheduleAccess).
 	if (schedule.scheduleType === "dokploy-server") {
-		if (schedule.organizationId !== ctx.session.activeOrganizationId) {
-			throw new TRPCError({
-				code: "UNAUTHORIZED",
-				message: "You are not authorized to access this schedule deployment",
-			});
-		}
-		await checkPermission(ctx, { deployment: ["read"] });
-		await assertHostScheduleAccess(
-			ctx,
-			schedule.scheduleType,
-			schedule.serverId,
-		);
+		await assertPanelScheduleDeploymentAccess(ctx, schedule, "read");
 		return;
 	}
 
@@ -135,6 +140,71 @@ const assertScheduleDeploymentReadAccess = async (
 		code: "UNAUTHORIZED",
 		message: "You are not authorized to access this schedule deployment",
 	});
+};
+
+type DeploymentRow = Awaited<ReturnType<typeof findDeploymentById>>;
+type ScheduleRunOwner = NonNullable<DeploymentRow["schedule"]>;
+
+// Follows runCommand by scheduleType, so the check and the kill always look at
+// the same owner, whatever else is left on the row.
+const assertScheduleRunCancelAccess = async (
+	ctx: Parameters<typeof assertTargetServerAccess>[0],
+	schedule: ScheduleRunOwner,
+) => {
+	if (schedule.scheduleType === "dokploy-server") {
+		await assertPanelScheduleDeploymentAccess(ctx, schedule, "cancel");
+		return;
+	}
+
+	const serviceId =
+		schedule.scheduleType === "application"
+			? schedule.applicationId
+			: schedule.scheduleType === "compose"
+				? schedule.composeId
+				: null;
+	if (serviceId) {
+		await checkServicePermissionAndAccess(ctx, serviceId, {
+			deployment: ["cancel"],
+		});
+		return;
+	}
+
+	if (schedule.scheduleType === "server" && schedule.serverId) {
+		await checkPermission(ctx, { deployment: ["cancel"] });
+		await assertTargetServerAccess(ctx, schedule.serverId);
+		return;
+	}
+
+	throw new TRPCError({
+		code: "UNAUTHORIZED",
+		message: "You are not authorized to access this deployment",
+	});
+};
+
+const assertDeploymentCancelAccess = async (
+	ctx: Parameters<typeof assertTargetServerAccess>[0],
+	deployment: DeploymentRow,
+) => {
+	if (deployment.schedule) {
+		await assertScheduleRunCancelAccess(ctx, deployment.schedule);
+		return;
+	}
+	await assertDeploymentActionAccess(ctx, deployment, "cancel");
+};
+
+// A service schedule has no serverId of its own: its command runs on the
+// service's server, and a PID from there means another process on the panel.
+const getScheduleRunServerId = (schedule: ScheduleRunOwner) => {
+	switch (schedule.scheduleType) {
+		case "application":
+			return schedule.application?.serverId;
+		case "compose":
+			return schedule.compose?.serverId;
+		case "server":
+			return schedule.serverId;
+		case "dokploy-server":
+			return null;
+	}
 };
 
 export const deploymentRouter = createTRPCRouter({
@@ -442,20 +512,31 @@ export const deploymentRouter = createTRPCRouter({
 		)
 		.mutation(async ({ input, ctx }) => {
 			const deployment = await findDeploymentById(input.deploymentId);
-			const deploymentServerId =
-				deployment.serverId || deployment.schedule?.serverId;
-			await assertDeploymentActionAccess(ctx, deployment, "cancel");
+			await assertDeploymentCancelAccess(ctx, deployment);
 
-			if (!deployment.pid) {
+			// The PID stays on the row after the run ends and may belong to another
+			// process by now.
+			if (!deployment.pid || deployment.status !== "running") {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: "Deployment is not running",
 				});
 			}
 
+			const serverId = deployment.schedule
+				? getScheduleRunServerId(deployment.schedule)
+				: deployment.serverId;
+			if (!serverId && IS_CLOUD) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message:
+						"Processes on the panel cannot be killed in the cloud version.",
+				});
+			}
+
 			const command = `kill -9 ${deployment.pid}`;
-			if (deployment.schedule?.serverId) {
-				await execAsyncRemote(deployment.schedule.serverId, command);
+			if (serverId) {
+				await execAsyncRemote(serverId, command);
 			} else {
 				await execAsync(command);
 			}
@@ -476,7 +557,7 @@ export const deploymentRouter = createTRPCRouter({
 		)
 		.mutation(async ({ input, ctx }) => {
 			const deployment = await findDeploymentById(input.deploymentId);
-			await assertDeploymentActionAccess(ctx, deployment, "cancel");
+			await assertDeploymentCancelAccess(ctx, deployment);
 			const result = await removeDeployment(input.deploymentId);
 			await audit(ctx, {
 				action: "delete",
