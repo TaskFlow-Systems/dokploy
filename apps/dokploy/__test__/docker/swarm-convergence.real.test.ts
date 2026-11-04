@@ -8,6 +8,7 @@ import {
 	buildLibsql,
 	type LibsqlNested,
 } from "@dokploy/server/utils/databases/libsql";
+import { rebuildDatabase } from "@dokploy/server/utils/databases/rebuild";
 import {
 	buildRedis,
 	type RedisNested,
@@ -20,6 +21,11 @@ const execFileAsync = promisify(execFile);
 const REDIS_IMAGE = "redis:8-alpine";
 const LIBSQL_IMAGE = "ghcr.io/tursodatabase/libsql-server:v0.24.32";
 const REAL_TEST_TIMEOUT = 180_000;
+// What a default spec gets from Swarm in an update, and from the wait otherwise.
+const MONITOR_MS = 5_000;
+const CRASH_LIMIT = { timeoutMs: 25_000 };
+// Often enough to catch a task in the moment it runs, which is when a crash looks fine.
+const CATCHES_EVERY_RUN = { ...CRASH_LIMIT, intervalMs: 50 };
 
 // Same id as application.real.test.ts: the PR workflow removes services named
 // real-<kind>-<id>* after a cancelled run, and Docker is shared by CI runners.
@@ -31,6 +37,7 @@ const RUN_ID = `${CHECKOUT_ID}-${Date.now()}`;
 const NETWORK = `real-swarm-net-${RUN_ID}`;
 
 const appNames: string[] = [];
+const volumeNames: string[] = [];
 
 const dockerCli = async (...args: string[]) => {
 	const { stdout } = await execFileAsync("docker", args, {
@@ -116,7 +123,15 @@ const libsqlFixture = (kind: string, overrides: Partial<LibsqlNested> = {}) => {
 	} as unknown as LibsqlNested;
 };
 
+const shellScript = (script: string) => ({
+	command: "/bin/sh",
+	args: ["-c", script],
+});
+
 const inspect = (appName: string) => docker.getService(appName).inspect();
+
+// A restart loop left running until afterAll slows every test after it.
+const removeCrashing = (appName: string) => docker.getService(appName).remove();
 
 const runningTasks = async (appName: string) =>
 	(
@@ -152,10 +167,29 @@ const waitForRollbackEnd = (appName: string) =>
 		);
 	});
 
+const recordStatuses = () => {
+	const statuses: unknown[] = [];
+	vi.mocked(db.update).mockImplementation((() => ({
+		set: (values: { applicationStatus?: string }) => {
+			statuses.push(values.applicationStatus);
+			return {
+				where: () => ({ returning: () => Promise.resolve([{}]) }),
+			};
+		},
+	})) as never);
+	return statuses;
+};
+
 const timedWait = async (appName: string) => {
 	const startedAt = Date.now();
 	await waitForSwarmServiceConvergence(appName);
 	return Date.now() - startedAt;
+};
+
+// The test and Docker share a machine, so here these clocks can be compared.
+const expectUpForMonitor = (task?: { Status?: { Timestamp?: string } }) => {
+	const upMs = Date.now() - Date.parse(task?.Status?.Timestamp ?? "");
+	expect(upMs).toBeGreaterThanOrEqual(MONITOR_MS - 500);
 };
 
 const expectOnNewSpec = async (appName: string, previousTaskId: string) => {
@@ -199,17 +233,78 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 				),
 			30_000,
 		).catch(() => undefined);
+		for (const volumeName of volumeNames) {
+			await waitUntil(
+				`the volume ${volumeName} to go`,
+				() =>
+					dockerCli("volume", "rm", volumeName).then(
+						() => true,
+						() => false,
+					),
+				30_000,
+			).catch(() => undefined);
+		}
 	}, REAL_TEST_TIMEOUT);
 
 	it(
-		"returns for a fresh service once its task runs",
+		"returns for a fresh service once its task has stayed up as long as Swarm would watch it",
 		async () => {
 			const redis = redisFixture("fresh");
 			await buildRedis(redis);
 			await timedWait(redis.appName);
 
-			expect(await runningTasks(redis.appName)).toHaveLength(1);
+			const tasks = await runningTasks(redis.appName);
+			expect(tasks).toHaveLength(1);
+			expectUpForMonitor(tasks[0]);
 			expect((await inspect(redis.appName)).UpdateStatus).toBeUndefined();
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it.each([
+		["a few seconds after it starts", "late", "sleep 3; exit 3", CRASH_LIMIT],
+		["soon after it starts", "soon", "sleep 0.3; exit 3", CATCHES_EVERY_RUN],
+		["at once", "at-once", "exit 3", CATCHES_EVERY_RUN],
+	])(
+		"fails for a fresh service that crashes %s",
+		async (_, kind, script, limit) => {
+			const redis = redisFixture(`crash-${kind}`, shellScript(script));
+			await buildRedis(redis);
+
+			await expect(
+				waitForSwarmServiceConvergence(redis.appName, null, limit),
+			).rejects.toThrow(
+				/did not converge within 25000ms: 0\/1 tasks stayed running for 5 s.*non-zero exit \(3\)/,
+			);
+			await removeCrashing(redis.appName);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"returns for a fresh service that fails once and then stays up",
+		async () => {
+			const volumeName = `real-swarm-${RUN_ID}-once`;
+			volumeNames.push(volumeName);
+			const redis = redisFixture("once", {
+				...shellScript(
+					"[ -f /marker/once ] || { touch /marker/once; exit 3; }; exec redis-server",
+				),
+				mounts: [{ type: "volume", volumeName, mountPath: "/marker" }] as never,
+			});
+			await buildRedis(redis);
+
+			await timedWait(redis.appName);
+
+			const tasks = await docker.listTasks({
+				filters: JSON.stringify({ service: [redis.appName] }),
+			});
+			expect(
+				tasks.filter((task) => task.Status?.Err?.includes("non-zero exit (3)")),
+			).toHaveLength(1);
+			const running = await runningTasks(redis.appName);
+			expect(running).toHaveLength(1);
+			expectUpForMonitor(running[0]);
 		},
 		REAL_TEST_TIMEOUT,
 	);
@@ -252,10 +347,55 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 
 			await buildLibsql(libsql);
 
-			expect(await timedWait(libsql.appName)).toBeLessThan(10_000);
+			expect(await timedWait(libsql.appName)).toBeLessThan(MONITOR_MS);
 			expect((await inspect(libsql.appName)).UpdateStatus).toBeUndefined();
 			const after = await runningTasks(libsql.appName);
 			expect(after.map((task) => task.ID)).toEqual([before?.ID]);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"fails when an update changes nothing and the service keeps crashing",
+		async () => {
+			const libsql = libsqlFixture("noop-crash", {
+				command: "sleep 1; exit 3",
+			});
+			await buildLibsql(libsql);
+			await waitUntil("the first crash", async () => {
+				const tasks = await docker.listTasks({
+					filters: JSON.stringify({ service: [libsql.appName] }),
+				});
+				return tasks.some((task) => task.Status?.Err);
+			});
+
+			await buildLibsql(libsql);
+
+			await expect(
+				waitForSwarmServiceConvergence(libsql.appName, null, CATCHES_EVERY_RUN),
+			).rejects.toThrow(/0\/1 tasks stayed running.*non-zero exit \(3\)/);
+			expect((await inspect(libsql.appName)).UpdateStatus).toBeUndefined();
+			await removeCrashing(libsql.appName);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"watches the new replica of a scale-up, and leaves the running one alone",
+		async () => {
+			const libsql = libsqlFixture("scale-up");
+			await buildLibsql(libsql);
+			await timedWait(libsql.appName);
+			const [before] = await runningTasks(libsql.appName);
+
+			await buildLibsql({ ...libsql, replicas: 2 });
+
+			await timedWait(libsql.appName);
+
+			const after = await runningTasks(libsql.appName);
+			expect(after).toHaveLength(2);
+			expect(after.map((task) => task.ID)).toContain(before?.ID);
+			expectUpForMonitor(after.find((task) => task.ID !== before?.ID));
 		},
 		REAL_TEST_TIMEOUT,
 	);
@@ -410,6 +550,32 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 	);
 
 	it(
+		"fails when FailureAction continue completes the update with its task restarting",
+		async () => {
+			const redis = redisFixture("continue", {
+				updateConfigSwarm: {
+					Parallelism: 1,
+					Order: "stop-first",
+					FailureAction: "continue",
+				},
+			});
+			await buildRedis(redis);
+			await timedWait(redis.appName);
+
+			await buildRedis({ ...redis, ...shellScript("sleep 1; exit 3") });
+
+			await expect(
+				waitForSwarmServiceConvergence(redis.appName, null, { intervalMs: 50 }),
+			).rejects.toThrow(/0\/1 tasks stayed running.*non-zero exit \(3\)/);
+			expect((await inspect(redis.appName)).UpdateStatus?.State).toBe(
+				"completed",
+			);
+			await removeCrashing(redis.appName);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
 		"gives up on a stuck update and says that Swarm is still at it",
 		async () => {
 			const redis = redisFixture("stuck");
@@ -438,17 +604,9 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 		"makes deployLibsql report a rolled-back update as a failed deployment",
 		async () => {
 			const libsql = libsqlFixture("deploy");
-			const statuses: unknown[] = [];
+			const statuses = recordStatuses();
 			const logs: string[] = [];
 			vi.mocked(db.query.libsql.findFirst).mockResolvedValue(libsql as never);
-			vi.mocked(db.update).mockImplementation((() => ({
-				set: (values: { applicationStatus?: string }) => {
-					statuses.push(values.applicationStatus);
-					return {
-						where: () => ({ returning: () => Promise.resolve([libsql]) }),
-					};
-				},
-			})) as never);
 
 			await deployLibsql(libsql.libsqlId, (line) => logs.push(line));
 			expect(statuses).toEqual(["running", "done"]);
@@ -468,6 +626,42 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 			expect(statuses).toEqual(["running", "error"]);
 			expect(logs).not.toContain("Deployment completed successfully!");
 			expect(logs.join("\n")).toMatch(/Swarm (rolled|is rolling) back/);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"reports a Rebuild on the task of the new service, and fails it when that task crashes",
+		async () => {
+			const redis = redisFixture("rebuild");
+			const statuses = recordStatuses();
+			vi.mocked(db.query.redis.findFirst).mockResolvedValue(redis as never);
+			await buildRedis(redis);
+			await timedWait(redis.appName);
+			const [before] = await runningTasks(redis.appName);
+
+			await rebuildDatabase(redis.redisId, "redis", 0);
+
+			expect(statuses).toEqual(["running", "done"]);
+			const rebuilt = await inspect(redis.appName);
+			expect(rebuilt.PreviousSpec).toBeUndefined();
+			const after = await runningTasks(redis.appName);
+			expect(after).toHaveLength(1);
+			expect(after[0]?.ID).not.toBe(before?.ID);
+			expectUpForMonitor(after[0]);
+
+			statuses.length = 0;
+			vi.mocked(db.query.redis.findFirst).mockResolvedValue({
+				...redis,
+				...shellScript("sleep 3; exit 3"),
+			} as never);
+
+			await expect(rebuildDatabase(redis.redisId, "redis", 0)).rejects.toThrow(
+				/did not converge within 45000ms: 0\/1 tasks stayed running for 5 s.*non-zero exit \(3\)/,
+			);
+
+			expect(statuses).toEqual(["running", "error"]);
+			await removeCrashing(redis.appName);
 		},
 		REAL_TEST_TIMEOUT,
 	);
