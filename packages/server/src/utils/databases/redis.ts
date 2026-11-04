@@ -13,6 +13,14 @@ import {
 import { getRemoteDocker } from "../servers/remote-docker";
 import { withResolvedVaultRefs } from "../vault";
 
+// The password stays out of the text so the shell never parses it. Redis takes an
+// empty one as no password at all, so `:?` stops the start instead. `--port` keeps
+// the password from being the last argument, where a lone `-` means "read the
+// config from stdin". Without `exec`, dash in the Debian image stays PID 1 and
+// never passes SIGTERM on, so a stop ends in SIGKILL with no final save.
+const REDIS_START_SCRIPT =
+	'exec redis-server --requirepass "${DOKPLOY_DB_PASSWORD:?no password to start Redis with}" --port 6379';
+
 export type RedisNested = InferResultType<
 	"redis",
 	{ mounts: true; environment: { with: { project: true } } }
@@ -37,6 +45,9 @@ export const buildRedis = async (rawRedis: RedisNested) => {
 	const defaultRedisEnv = `REDIS_PASSWORD="${databasePassword}"${
 		env ? `\n${env}` : ""
 	}`;
+	// The custom command form saves an empty string and an empty list when it is
+	// left empty, and neither is an override.
+	const usesDefaultStart = !command && !args?.length;
 
 	const resolvedNetworks = await resolveServiceNetworks(redis);
 
@@ -79,12 +90,20 @@ export const buildRedis = async (rawRedis: RedisNested) => {
 			ContainerSpec: {
 				HealthCheck,
 				Image: dockerImage,
-				Env: envVariables,
+				// Not REDIS_PASSWORD: the service env can set that name, and dotenv
+				// would change a password an old row holds.
+				Env: usesDefaultStart
+					? [...envVariables, `DOKPLOY_DB_PASSWORD=${databasePassword}`]
+					: envVariables,
 				Mounts: [...volumesMount, ...bindsMount, ...filesMount],
 				...(StopGracePeriod !== null &&
 					StopGracePeriod !== undefined && { StopGracePeriod }),
-				...(command || args
+				...(usesDefaultStart
 					? {
+							Command: ["/bin/sh"],
+							Args: ["-c", REDIS_START_SCRIPT],
+						}
+					: {
 							...(command && {
 								Command: command.split(" "),
 							}),
@@ -92,10 +111,6 @@ export const buildRedis = async (rawRedis: RedisNested) => {
 								args.length > 0 && {
 									Args: args,
 								}),
-						}
-					: {
-							Command: ["/bin/sh"],
-							Args: ["-c", `redis-server --requirepass ${databasePassword}`],
 						}),
 				...(Ulimits && { Ulimits }),
 				Labels: {

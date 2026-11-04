@@ -64,7 +64,9 @@ export const BreadcrumbSidebar = ({ list }: Props) => {
 										) : (
 											<BreadcrumbLink href={item?.href} asChild={!!item?.href}>
 												{item.href ? (
-													<Link href={item?.href}>{item?.name}</Link>
+													<Link href={item?.href} prefetch={false}>
+														{item?.name}
+													</Link>
 												) : (
 													<BreadcrumbPage>{item?.name}</BreadcrumbPage>
 												)}

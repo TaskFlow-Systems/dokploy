@@ -203,6 +203,11 @@ export const setupTerminalWebSocketServer = (
 			};
 		}
 
+		// Client may have disconnected during the awaits; a later close handler would never fire.
+		if (ws.readyState !== ws.OPEN) {
+			return;
+		}
+
 		const conn = new Client();
 		let _stdout = "";
 		let _stderr = "";
@@ -211,6 +216,11 @@ export const setupTerminalWebSocketServer = (
 
 		conn
 			.once("ready", () => {
+				if (ws.readyState !== ws.OPEN) {
+					conn.end();
+					return;
+				}
+
 				// Clear terminal content once connected
 				ws.send("\x1bc");
 
@@ -253,6 +263,12 @@ export const setupTerminalWebSocketServer = (
 							ws.send(errorMessage);
 						}
 					});
+
+					// The shell is already running if the client left while it was opening.
+					if (ws.readyState !== ws.OPEN) {
+						conn.end();
+						return;
+					}
 
 					ws.on("close", () => {
 						stream.end();

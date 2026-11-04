@@ -1,3 +1,8 @@
+import {
+	encodeCredentials,
+	formatUrlHost,
+} from "@/lib/database-connection-url";
+
 interface MongoCredentials {
 	databaseUser: string;
 	databasePassword: string;
@@ -12,12 +17,6 @@ interface ExternalMongoUrl extends MongoCredentials {
 	host: string;
 	port: number;
 }
-
-const encodeCredentials = ({
-	databaseUser,
-	databasePassword,
-}: MongoCredentials) =>
-	`${encodeURIComponent(databaseUser)}:${encodeURIComponent(databasePassword)}`;
 
 export const buildInternalMongoUrl = ({
 	databaseUser,
@@ -35,4 +34,4 @@ export const buildExternalMongoUrl = ({
 	host,
 	port,
 }: ExternalMongoUrl) =>
-	`mongodb://${encodeCredentials({ databaseUser, databasePassword })}@${host}:${port}/?authSource=admin&directConnection=true`;
+	`mongodb://${encodeCredentials({ databaseUser, databasePassword })}@${formatUrlHost(host)}:${port}/?authSource=admin&directConnection=true`;
