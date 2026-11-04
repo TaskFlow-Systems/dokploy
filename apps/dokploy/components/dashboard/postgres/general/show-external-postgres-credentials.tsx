@@ -1,6 +1,6 @@
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildPostgresUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 const DockerProviderSchema = z.object({
@@ -51,7 +52,6 @@ export const ShowExternalPostgresCredentials = ({ postgresId }: Props) => {
 	const { mutateAsync, isPending } =
 		api.postgres.saveExternalPort.useMutation();
 	const getIp = data?.server?.ipAddress || ip;
-	const [connectionUrl, setConnectionUrl] = useState("");
 
 	const form = useForm({
 		defaultValues: {},
@@ -80,22 +80,9 @@ export const ShowExternalPostgresCredentials = ({ postgresId }: Props) => {
 			});
 	};
 
-	useEffect(() => {
-		const buildConnectionUrl = () => {
-			const port = form.watch("externalPort") || data?.externalPort;
-
-			return `postgresql://${data?.databaseUser}:${data?.databasePassword}@${getIp}:${port}/${data?.databaseName}`;
-		};
-
-		setConnectionUrl(buildConnectionUrl());
-	}, [
-		data?.appName,
-		data?.externalPort,
-		data?.databasePassword,
-		form,
-		data?.databaseName,
-		getIp,
-	]);
+	const connectionUrl = data?.externalPort
+		? buildPostgresUrl(data, { host: getIp ?? "", port: data.externalPort })
+		: "";
 
 	return (
 		<>

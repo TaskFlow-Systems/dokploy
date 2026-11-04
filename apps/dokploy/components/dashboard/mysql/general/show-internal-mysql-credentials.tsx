@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildMysqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -86,7 +87,11 @@ export const ShowInternalMysqlCredentials = ({ mysqlId }: Props) => {
 								<Label>Internal Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={`mysql://${data?.databaseUser}:${data?.databasePassword}@${data?.appName}:3306/${data?.databaseName}`}
+									value={
+										data
+											? buildMysqlUrl(data, { host: data.appName, port: 3306 })
+											: ""
+									}
 								/>
 							</div>
 						</div>

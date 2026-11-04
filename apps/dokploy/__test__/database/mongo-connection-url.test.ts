@@ -98,6 +98,21 @@ describe("buildExternalMongoUrl", () => {
 	});
 });
 
+describe("buildExternalMongoUrl on a host with only IPv6", () => {
+	it("puts the address in brackets", () => {
+		const url = buildExternalMongoUrl({
+			...CREDENTIALS,
+			host: "2001:db8::1",
+			port: 27018,
+		});
+
+		expect(url).toBe(
+			"mongodb://panel_user:secret@[2001:db8::1]:27018/?authSource=admin&directConnection=true",
+		);
+		expect(decodedParts(url).host).toBe("[2001:db8::1]:27018");
+	});
+});
+
 describe.each([
 	[
 		"internal",

@@ -173,6 +173,10 @@ export const setupDeploymentLogsWebSocketServer = (
 			return;
 		}
 
+		if (ws.readyState !== ws.OPEN) {
+			return;
+		}
+
 		let tailProcess: ReturnType<typeof spawn> | null = null;
 		let sshClient: Client | null = null;
 
@@ -199,10 +203,6 @@ export const setupDeploymentLogsWebSocketServer = (
 			if (effectiveServerId) {
 				const server = await findServerById(effectiveServerId);
 
-				if (ws.readyState !== ws.OPEN) {
-					return;
-				}
-
 				if (server.organizationId !== session.activeOrganizationId) {
 					ws.close();
 					return;
@@ -214,9 +214,18 @@ export const setupDeploymentLogsWebSocketServer = (
 				}
 
 				const host = await resolveServerDestinationHost(server);
+
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				sshClient = new Client();
 				sshClient
 					.on("ready", () => {
+						// The close handler below ends this connection, and exec throws on an ended one.
+						if (ws.readyState !== ws.OPEN) {
+							return;
+						}
 						const encodedPath = encodeBase64(effectiveLogPath);
 						const command = `tail -n +1 -f "$(echo '${encodedPath}' | base64 -d)"`;
 

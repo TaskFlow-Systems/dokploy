@@ -122,11 +122,21 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					throw new Error("No SSH key available for this server");
 
 				const host = await resolveServerDestinationHost(server);
+
+				// Client may have disconnected during the awaits; a later close handler would never fire.
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				const conn = new Client();
 				let _stdout = "";
 				let _stderr = "";
 				conn
 					.once("ready", () => {
+						if (ws.readyState !== ws.OPEN) {
+							conn.end();
+							return;
+						}
 						// Use array-style arguments to prevent shell injection
 						const dockerCommand = [
 							"docker",
@@ -187,7 +197,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 								}
 							});
 
-							ws.on("close", () => {
+							const hangUp = () => {
 								hangingUp = true;
 								const endConnection = () => {
 									stream.end();
@@ -211,7 +221,14 @@ export const setupDockerContainerTerminalWebSocketServer = (
 										hangup.stderr.resume();
 									},
 								);
-							});
+							};
+
+							// The shell is already running if the client left while it was opening.
+							if (ws.readyState !== ws.OPEN) {
+								hangUp();
+								return;
+							}
+							ws.on("close", hangUp);
 						});
 					})
 					.on("error", (err) => {
@@ -234,6 +251,11 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					ws.close();
 					return;
 				}
+
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				const ptyProcess = spawn(
 					"docker",
 					["exec", "-it", "-e", sessionMarker, "-w", "/", containerId, shell],
