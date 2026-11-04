@@ -412,6 +412,8 @@ export async function getServerSideProps(
 				mariadbId: params?.mariadbId,
 			});
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
+			await helpers.settings.getIp.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),

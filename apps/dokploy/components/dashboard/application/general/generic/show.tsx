@@ -35,15 +35,33 @@ interface Props {
 	applicationId: string;
 }
 
+export const useGitProviders = () => {
+	const github = api.github.githubProviders.useQuery();
+	const gitlab = api.gitlab.gitlabProviders.useQuery();
+	const bitbucket = api.bitbucket.bitbucketProviders.useQuery();
+	const gitea = api.gitea.giteaProviders.useQuery();
+
+	return {
+		githubProviders: github.data,
+		gitlabProviders: gitlab.data,
+		bitbucketProviders: bitbucket.data,
+		giteaProviders: gitea.data,
+		isLoading:
+			github.isPending ||
+			gitlab.isPending ||
+			bitbucket.isPending ||
+			gitea.isPending,
+	};
+};
+
 export const ShowProviderForm = ({ applicationId }: Props) => {
-	const { data: githubProviders, isPending: isLoadingGithub } =
-		api.github.githubProviders.useQuery();
-	const { data: gitlabProviders, isPending: isLoadingGitlab } =
-		api.gitlab.gitlabProviders.useQuery();
-	const { data: bitbucketProviders, isPending: isLoadingBitbucket } =
-		api.bitbucket.bitbucketProviders.useQuery();
-	const { data: giteaProviders, isPending: isLoadingGitea } =
-		api.gitea.giteaProviders.useQuery();
+	const {
+		githubProviders,
+		gitlabProviders,
+		bitbucketProviders,
+		giteaProviders,
+		isLoading,
+	} = useGitProviders();
 
 	const { data: application, refetch } = api.application.one.useQuery({
 		applicationId,
@@ -52,9 +70,6 @@ export const ShowProviderForm = ({ applicationId }: Props) => {
 		api.application.disconnectGitProvider.useMutation();
 
 	const [tab, setSab] = useState<TabState>(application?.sourceType || "github");
-
-	const isLoading =
-		isLoadingGithub || isLoadingGitlab || isLoadingBitbucket || isLoadingGitea;
 
 	const handleDisconnect = async () => {
 		try {

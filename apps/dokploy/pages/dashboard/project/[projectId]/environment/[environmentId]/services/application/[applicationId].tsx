@@ -542,6 +542,7 @@ export async function getServerSideProps(
 			});
 
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
 
 			return {
 				props: {

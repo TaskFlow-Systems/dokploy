@@ -416,6 +416,8 @@ export async function getServerSideProps(
 				mongoId: params?.mongoId,
 			});
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
+			await helpers.settings.getIp.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),

@@ -399,6 +399,8 @@ export async function getServerSideProps(
 				redisId: params?.redisId,
 			});
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
+			await helpers.settings.getIp.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),
