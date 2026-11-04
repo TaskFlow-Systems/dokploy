@@ -12,6 +12,7 @@ import { WebSocketServer } from "ws";
 import { getDockerHost } from "../utils/docker";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessTerminalOverWss } from "./authorize";
+import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { verifyWebSocketOrigin } from "./origin";
 import { canAccessServerTerminalWebSocket } from "./server-permission";
 import {
@@ -82,7 +83,7 @@ export const setupTerminalWebSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 		if (pathname === "/_next/webpack-hmr") {
 			return;
 		}
@@ -93,7 +94,7 @@ export const setupTerminalWebSocketServer = (
 		}
 	});
 
-	wssTerm.on("connection", async (ws, req) => {
+	onWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const serverId = url.searchParams.get("serverId");
 		const { cols, rows } = parseTerminalSize(
@@ -191,7 +192,9 @@ export const setupTerminalWebSocketServer = (
 			const { ipAddress: host, port, username, sshKey, sshKeyId } = server;
 
 			if (!sshKeyId) {
-				throw new Error("No SSH key available for this server");
+				ws.send("No SSH key available for this server\n");
+				ws.close();
+				return;
 			}
 
 			const resolvedHost = await resolveServerDestinationHost(server);
@@ -225,7 +228,13 @@ export const setupTerminalWebSocketServer = (
 				ws.send("\x1bc");
 
 				conn.shell({ cols, rows }, (err, stream) => {
-					if (err) throw err;
+					if (err) {
+						console.error("SSH shell error:", err);
+						ws.send(`SSH connection error: ${err.message} ❌ `);
+						ws.close();
+						conn.end();
+						return;
+					}
 
 					stream
 						.on("close", (code: number, _signal: string) => {
@@ -289,6 +298,7 @@ export const setupTerminalWebSocketServer = (
 				} else {
 					ws.send(`SSH connection error: ${err.message} ❌ `);
 				}
+				ws.close();
 				conn.end();
 			})
 			.connect(connectionDetails);
