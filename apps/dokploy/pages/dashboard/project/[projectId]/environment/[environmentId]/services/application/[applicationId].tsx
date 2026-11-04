@@ -12,30 +12,20 @@ import { useRouter } from "next/router";
 import { type ReactElement, useEffect, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { ShowClusterSettings } from "@/components/dashboard/application/advanced/cluster/show-cluster-settings";
-import { AddCommand } from "@/components/dashboard/application/advanced/general/add-command";
-import { ShowPorts } from "@/components/dashboard/application/advanced/ports/show-port";
-import { ShowRedirects } from "@/components/dashboard/application/advanced/redirects/show-redirects";
-import { ShowSecurity } from "@/components/dashboard/application/advanced/security/show-security";
-import { ShowBuildServer } from "@/components/dashboard/application/advanced/show-build-server";
-import { ShowResources } from "@/components/dashboard/application/advanced/show-resources";
-import { ShowTraefikConfig } from "@/components/dashboard/application/advanced/traefik/show-traefik-config";
-import { ShowVolumes } from "@/components/dashboard/application/advanced/volumes/show-volumes";
-import { ShowDeployments } from "@/components/dashboard/application/deployments/show-deployments";
-import { ShowDomains } from "@/components/dashboard/application/domains/show-domains";
-import { ShowEnvironment } from "@/components/dashboard/application/environment/show";
-import { ShowGeneralApplication } from "@/components/dashboard/application/general/show";
 import { ShowIconSettings } from "@/components/dashboard/application/icon/show-icon-settings";
-import { ShowDockerLogs } from "@/components/dashboard/application/logs/show";
-import { ShowPatches } from "@/components/dashboard/application/patches/show-patches";
-import { ShowPreviewDeployments } from "@/components/dashboard/application/preview-deployments/show-preview-deployments";
-import { ShowSchedules } from "@/components/dashboard/application/schedules/show-schedules";
 import { UpdateApplication } from "@/components/dashboard/application/update-application";
-import { ShowVolumeBackups } from "@/components/dashboard/application/volume-backups/show-volume-backups";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
-import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
-import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/container/show-paid-container-monitoring";
-import { AssignNetworks } from "@/components/dashboard/networks/assign-networks";
+import {
+	ContainerFreeMonitoring,
+	ContainerPaidMonitoring,
+	lazyTab,
+	ShowDeployments,
+	ShowDockerLogs,
+	ShowDomains,
+	ShowPatches,
+	ShowSchedules,
+	ShowVolumeBackups,
+} from "@/components/dashboard/shared/lazy-service-tabs";
 import { TransferService } from "@/components/dashboard/shared/transfer-service";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AdvanceBreadcrumb } from "@/components/shared/advance-breadcrumb";
@@ -60,6 +50,30 @@ import { UseKeyboardNav } from "@/hooks/use-keyboard-nav";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
+
+const ShowApplicationAdvancedTab = lazyTab(() =>
+	import(
+		"@/components/dashboard/application/advanced/show-application-advanced-tab"
+	).then((m) => m.ShowApplicationAdvancedTab),
+);
+
+const ShowEnvironment = lazyTab(() =>
+	import("@/components/dashboard/application/environment/show").then(
+		(m) => m.ShowEnvironment,
+	),
+);
+
+const ShowGeneralApplication = lazyTab(() =>
+	import("@/components/dashboard/application/general/show").then(
+		(m) => m.ShowGeneralApplication,
+	),
+);
+
+const ShowPreviewDeployments = lazyTab(() =>
+	import(
+		"@/components/dashboard/application/preview-deployments/show-preview-deployments"
+	).then((m) => m.ShowPreviewDeployments),
+);
 
 type TabState =
 	| "projects"
@@ -247,47 +261,96 @@ const Service = (
 								>
 									<div className="flex flex-row items-center justify-between w-full overflow-auto">
 										<TabsList className="flex gap-8 max-md:gap-4 justify-start">
-											<TabsTrigger value="general">General</TabsTrigger>
+											<TabsTrigger
+												value="general"
+												onPointerEnter={ShowGeneralApplication.preload}
+											>
+												General
+											</TabsTrigger>
 											{permissions?.envVars.read && (
-												<TabsTrigger value="environment">
+												<TabsTrigger
+													value="environment"
+													onPointerEnter={ShowEnvironment.preload}
+												>
 													Environment
 												</TabsTrigger>
 											)}
 											{permissions?.domain.read && (
-												<TabsTrigger value="domains">Domains</TabsTrigger>
+												<TabsTrigger
+													value="domains"
+													onPointerEnter={ShowDomains.preload}
+												>
+													Domains
+												</TabsTrigger>
 											)}
 											{permissions?.deployment.read && (
-												<TabsTrigger value="deployments">
+												<TabsTrigger
+													value="deployments"
+													onPointerEnter={ShowDeployments.preload}
+												>
 													Deployments
 												</TabsTrigger>
 											)}
 											{permissions?.deployment.read && (
-												<TabsTrigger value="preview-deployments">
+												<TabsTrigger
+													value="preview-deployments"
+													onPointerEnter={ShowPreviewDeployments.preload}
+												>
 													Preview Deployments
 												</TabsTrigger>
 											)}
 											{permissions?.schedule.read && (
-												<TabsTrigger value="schedules">Schedules</TabsTrigger>
+												<TabsTrigger
+													value="schedules"
+													onPointerEnter={ShowSchedules.preload}
+												>
+													Schedules
+												</TabsTrigger>
 											)}
 											{permissions?.volumeBackup.read && (
-												<TabsTrigger value="volume-backups">
+												<TabsTrigger
+													value="volume-backups"
+													onPointerEnter={ShowVolumeBackups.preload}
+												>
 													Volume Backups
 												</TabsTrigger>
 											)}
 											{permissions?.logs.read && (
-												<TabsTrigger value="logs">Logs</TabsTrigger>
+												<TabsTrigger
+													value="logs"
+													onPointerEnter={ShowDockerLogs.preload}
+												>
+													Logs
+												</TabsTrigger>
 											)}
 											{data?.sourceType !== "docker" && (
-												<TabsTrigger value="patches">Patches</TabsTrigger>
+												<TabsTrigger
+													value="patches"
+													onPointerEnter={ShowPatches.preload}
+												>
+													Patches
+												</TabsTrigger>
 											)}
 											{permissions?.monitoring.read &&
 												((data?.serverId && isCloud) || !data?.server) && (
-													<TabsTrigger value="monitoring">
+													<TabsTrigger
+														value="monitoring"
+														onPointerEnter={
+															data?.serverId && isCloud
+																? ContainerPaidMonitoring.preload
+																: ContainerFreeMonitoring.preload
+														}
+													>
 														Monitoring
 													</TabsTrigger>
 												)}
 											{permissions?.service.create && (
-												<TabsTrigger value="advanced">Advanced</TabsTrigger>
+												<TabsTrigger
+													value="advanced"
+													onPointerEnter={ShowApplicationAdvancedTab.preload}
+												>
+													Advanced
+												</TabsTrigger>
 											)}
 										</TabsList>
 									</div>
@@ -418,19 +481,9 @@ const Service = (
 									{permissions?.service.create && (
 										<TabsContent value="advanced">
 											<div className="flex flex-col gap-4 pt-2.5">
-												<AddCommand applicationId={applicationId} />
-												<ShowClusterSettings
-													id={applicationId}
-													type="application"
+												<ShowApplicationAdvancedTab
+													applicationId={applicationId}
 												/>
-												<ShowBuildServer applicationId={applicationId} />
-												<ShowResources id={applicationId} type="application" />
-												<ShowVolumes id={applicationId} type="application" />
-												<AssignNetworks id={applicationId} type="application" />
-												<ShowRedirects applicationId={applicationId} />
-												<ShowSecurity applicationId={applicationId} />
-												<ShowPorts applicationId={applicationId} />
-												<ShowTraefikConfig applicationId={applicationId} />
 											</div>
 										</TabsContent>
 									)}

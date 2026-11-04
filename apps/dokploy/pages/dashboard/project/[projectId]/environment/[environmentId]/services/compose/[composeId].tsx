@@ -12,28 +12,19 @@ import { useRouter } from "next/router";
 import { type ReactElement, useEffect, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { ShowImport } from "@/components/dashboard/application/advanced/import/show-import";
-import { ShowVolumes } from "@/components/dashboard/application/advanced/volumes/show-volumes";
-import { ShowDeployments } from "@/components/dashboard/application/deployments/show-deployments";
-import { ShowDomains } from "@/components/dashboard/application/domains/show-domains";
-import { ShowEnvironment } from "@/components/dashboard/application/environment/show-environment";
 import { ShowIconSettings } from "@/components/dashboard/application/icon/show-icon-settings";
-import { ShowPatches } from "@/components/dashboard/application/patches/show-patches";
-import { ShowSchedules } from "@/components/dashboard/application/schedules/show-schedules";
-import { ShowVolumeBackups } from "@/components/dashboard/application/volume-backups/show-volume-backups";
-import { AddCommandCompose } from "@/components/dashboard/compose/advanced/add-command";
-import { IsolatedDeploymentTab } from "@/components/dashboard/compose/advanced/add-isolation";
-import { FreshVolumes } from "@/components/dashboard/compose/advanced/fresh-volumes";
-import { ShowComposeContainers } from "@/components/dashboard/compose/containers/show-compose-containers";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
-import { ShowGeneralCompose } from "@/components/dashboard/compose/general/show";
-import { ShowDockerLogsCompose } from "@/components/dashboard/compose/logs/show";
-import { ShowDockerLogsStack } from "@/components/dashboard/compose/logs/show-stack";
 import { UpdateCompose } from "@/components/dashboard/compose/update-compose";
-import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
-import { ComposeFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-compose-monitoring";
-import { ComposePaidMonitoring } from "@/components/dashboard/monitoring/paid/container/show-paid-compose-monitoring";
-import { AssignComposeNetworks } from "@/components/dashboard/networks/assign-compose-networks";
+import {
+	lazyTab,
+	ShowBackups,
+	ShowDeployments,
+	ShowDomains,
+	ShowEnvironment,
+	ShowPatches,
+	ShowSchedules,
+	ShowVolumeBackups,
+} from "@/components/dashboard/shared/lazy-service-tabs";
 import { TransferService } from "@/components/dashboard/shared/transfer-service";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
 import { AdvanceBreadcrumb } from "@/components/shared/advance-breadcrumb";
@@ -58,6 +49,48 @@ import { UseKeyboardNav } from "@/hooks/use-keyboard-nav";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
+
+const ComposeFreeMonitoring = lazyTab(() =>
+	import(
+		"@/components/dashboard/monitoring/free/container/show-free-compose-monitoring"
+	).then((m) => m.ComposeFreeMonitoring),
+);
+
+const ComposePaidMonitoring = lazyTab(() =>
+	import(
+		"@/components/dashboard/monitoring/paid/container/show-paid-compose-monitoring"
+	).then((m) => m.ComposePaidMonitoring),
+);
+
+const ShowComposeAdvancedTab = lazyTab(() =>
+	import(
+		"@/components/dashboard/compose/advanced/show-compose-advanced-tab"
+	).then((m) => m.ShowComposeAdvancedTab),
+);
+
+const ShowComposeContainers = lazyTab(() =>
+	import(
+		"@/components/dashboard/compose/containers/show-compose-containers"
+	).then((m) => m.ShowComposeContainers),
+);
+
+const ShowDockerLogsCompose = lazyTab(() =>
+	import("@/components/dashboard/compose/logs/show").then(
+		(m) => m.ShowDockerLogsCompose,
+	),
+);
+
+const ShowDockerLogsStack = lazyTab(() =>
+	import("@/components/dashboard/compose/logs/show-stack").then(
+		(m) => m.ShowDockerLogsStack,
+	),
+);
+
+const ShowGeneralCompose = lazyTab(() =>
+	import("@/components/dashboard/compose/general/show").then(
+		(m) => m.ShowGeneralCompose,
+	),
+);
 
 type TabState =
 	| "projects"
@@ -239,48 +272,108 @@ const Service = (
 								>
 									<div className="flex flex-row items-center w-full overflow-auto">
 										<TabsList className="flex gap-8 max-md:gap-4 justify-start">
-											<TabsTrigger value="general">General</TabsTrigger>
+											<TabsTrigger
+												value="general"
+												onPointerEnter={ShowGeneralCompose.preload}
+											>
+												General
+											</TabsTrigger>
 											{permissions?.envVars.read && (
-												<TabsTrigger value="environment">
+												<TabsTrigger
+													value="environment"
+													onPointerEnter={ShowEnvironment.preload}
+												>
 													Environment
 												</TabsTrigger>
 											)}
 											{permissions?.domain.read && (
-												<TabsTrigger value="domains">Domains</TabsTrigger>
+												<TabsTrigger
+													value="domains"
+													onPointerEnter={ShowDomains.preload}
+												>
+													Domains
+												</TabsTrigger>
 											)}
 											{permissions?.deployment.read && (
-												<TabsTrigger value="deployments">
+												<TabsTrigger
+													value="deployments"
+													onPointerEnter={ShowDeployments.preload}
+												>
 													Deployments
 												</TabsTrigger>
 											)}
 											{permissions?.service.read && (
-												<TabsTrigger value="containers">Containers</TabsTrigger>
+												<TabsTrigger
+													value="containers"
+													onPointerEnter={ShowComposeContainers.preload}
+												>
+													Containers
+												</TabsTrigger>
 											)}
 											{permissions?.service.create && (
-												<TabsTrigger value="backups">Backups</TabsTrigger>
+												<TabsTrigger
+													value="backups"
+													onPointerEnter={ShowBackups.preload}
+												>
+													Backups
+												</TabsTrigger>
 											)}
 											{permissions?.schedule.read && (
-												<TabsTrigger value="schedules">Schedules</TabsTrigger>
+												<TabsTrigger
+													value="schedules"
+													onPointerEnter={ShowSchedules.preload}
+												>
+													Schedules
+												</TabsTrigger>
 											)}
 											{permissions?.volumeBackup.read && (
-												<TabsTrigger value="volumeBackups">
+												<TabsTrigger
+													value="volumeBackups"
+													onPointerEnter={ShowVolumeBackups.preload}
+												>
 													Volume Backups
 												</TabsTrigger>
 											)}
 											{permissions?.logs.read && (
-												<TabsTrigger value="logs">Logs</TabsTrigger>
+												<TabsTrigger
+													value="logs"
+													onPointerEnter={
+														data?.composeType === "docker-compose"
+															? ShowDockerLogsCompose.preload
+															: ShowDockerLogsStack.preload
+													}
+												>
+													Logs
+												</TabsTrigger>
 											)}
 											{data?.sourceType !== "raw" && (
-												<TabsTrigger value="patches">Patches</TabsTrigger>
+												<TabsTrigger
+													value="patches"
+													onPointerEnter={ShowPatches.preload}
+												>
+													Patches
+												</TabsTrigger>
 											)}
 											{permissions?.monitoring.read &&
 												((data?.serverId && isCloud) || !data?.server) && (
-													<TabsTrigger value="monitoring">
+													<TabsTrigger
+														value="monitoring"
+														onPointerEnter={
+															data?.serverId && isCloud
+																? ComposePaidMonitoring.preload
+																: ComposeFreeMonitoring.preload
+														}
+													>
 														Monitoring
 													</TabsTrigger>
 												)}
 											{permissions?.service.create && (
-												<TabsTrigger value="advanced">Advanced</TabsTrigger>
+												<TabsTrigger
+													value="advanced"
+													onPointerEnter={ShowComposeAdvancedTab.preload}
+												>
+													Advanced
+												</TabsTrigger>
 											)}
 										</TabsList>
 									</div>
@@ -435,12 +528,7 @@ const Service = (
 									{permissions?.service.create && (
 										<TabsContent value="advanced">
 											<div className="flex flex-col gap-4 pt-2.5">
-												<AddCommandCompose composeId={composeId} />
-												<ShowVolumes id={composeId} type="compose" />
-												<ShowImport composeId={composeId} />
-												<AssignComposeNetworks composeId={composeId} />
-												<IsolatedDeploymentTab composeId={composeId} />
-												<FreshVolumes composeId={composeId} />
+												<ShowComposeAdvancedTab composeId={composeId} />
 											</div>
 										</TabsContent>
 									)}

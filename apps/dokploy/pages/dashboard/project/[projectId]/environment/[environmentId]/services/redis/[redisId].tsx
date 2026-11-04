@@ -12,16 +12,16 @@ import { useRouter } from "next/router";
 import { type ReactElement, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { ShowEnvironment } from "@/components/dashboard/application/environment/show-environment";
-import { ShowDockerLogs } from "@/components/dashboard/application/logs/show";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
-import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
-import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/container/show-paid-container-monitoring";
-import { ShowExternalRedisCredentials } from "@/components/dashboard/redis/general/show-external-redis-credentials";
-import { ShowGeneralRedis } from "@/components/dashboard/redis/general/show-general-redis";
-import { ShowInternalRedisCredentials } from "@/components/dashboard/redis/general/show-internal-redis-credentials";
 import { UpdateRedis } from "@/components/dashboard/redis/update-redis";
-import { ShowDatabaseAdvancedSettings } from "@/components/dashboard/shared/show-database-advanced-settings";
+import {
+	ContainerFreeMonitoring,
+	ContainerPaidMonitoring,
+	lazyTab,
+	ShowDatabaseAdvancedSettings,
+	ShowDockerLogs,
+	ShowEnvironment,
+} from "@/components/dashboard/shared/lazy-service-tabs";
 import { TransferService } from "@/components/dashboard/shared/transfer-service";
 import { RedisIcon } from "@/components/icons/data-tools-icons";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -48,6 +48,12 @@ import { cn } from "@/lib/utils";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
+
+const ShowRedisGeneralTab = lazyTab(() =>
+	import("@/components/dashboard/redis/general/show-redis-general-tab").then(
+		(m) => m.ShowRedisGeneralTab,
+	),
+);
 
 type TabState = "projects" | "monitoring" | "settings" | "advanced";
 
@@ -221,32 +227,55 @@ const Redis = (
 														: "md:grid-cols-5",
 											)}
 										>
-											<TabsTrigger value="general">General</TabsTrigger>
+											<TabsTrigger
+												value="general"
+												onPointerEnter={ShowRedisGeneralTab.preload}
+											>
+												General
+											</TabsTrigger>
 											{permissions?.envVars.read && (
-												<TabsTrigger value="environment">
+												<TabsTrigger
+													value="environment"
+													onPointerEnter={ShowEnvironment.preload}
+												>
 													Environment
 												</TabsTrigger>
 											)}
 											{permissions?.logs.read && (
-												<TabsTrigger value="logs">Logs</TabsTrigger>
+												<TabsTrigger
+													value="logs"
+													onPointerEnter={ShowDockerLogs.preload}
+												>
+													Logs
+												</TabsTrigger>
 											)}
 											{permissions?.monitoring.read &&
 												((data?.serverId && isCloud) || !data?.server) && (
-													<TabsTrigger value="monitoring">
+													<TabsTrigger
+														value="monitoring"
+														onPointerEnter={
+															data?.serverId && isCloud
+																? ContainerPaidMonitoring.preload
+																: ContainerFreeMonitoring.preload
+														}
+													>
 														Monitoring
 													</TabsTrigger>
 												)}
 											{permissions?.service.create && (
-												<TabsTrigger value="advanced">Advanced</TabsTrigger>
+												<TabsTrigger
+													value="advanced"
+													onPointerEnter={ShowDatabaseAdvancedSettings.preload}
+												>
+													Advanced
+												</TabsTrigger>
 											)}
 										</TabsList>
 									</div>
 
 									<TabsContent value="general">
 										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowGeneralRedis redisId={redisId} />
-											<ShowInternalRedisCredentials redisId={redisId} />
-											<ShowExternalRedisCredentials redisId={redisId} />
+											<ShowRedisGeneralTab redisId={redisId} />
 										</div>
 									</TabsContent>
 									{permissions?.envVars.read && (

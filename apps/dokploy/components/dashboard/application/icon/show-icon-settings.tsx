@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Dropzone } from "@/components/ui/dropzone";
 import { Input } from "@/components/ui/input";
-import { type BundledIcon, bundledIcons } from "@/lib/bundled-icons";
+import type { BundledIcon } from "@/lib/bundled-icons";
 import { api } from "@/utils/api";
 import { sanitizeSvg } from "@/utils/sanitize-svg";
 
@@ -34,6 +34,7 @@ export const ShowIconSettings = ({
 	const [open, setOpen] = useState(false);
 	const [iconSearchQuery, setIconSearchQuery] = useState("");
 	const [iconsToShow, setIconsToShow] = useState(24);
+	const [bundledIcons, setBundledIcons] = useState<BundledIcon[]>([]);
 
 	const filteredIcons = useMemo(() => {
 		if (!iconSearchQuery) return bundledIcons;
@@ -42,7 +43,7 @@ export const ShowIconSettings = ({
 			(i) =>
 				i.title.toLowerCase().includes(q) || i.slug.toLowerCase().includes(q),
 		);
-	}, [iconSearchQuery]);
+	}, [bundledIcons, iconSearchQuery]);
 
 	const displayedIcons = filteredIcons.slice(0, iconsToShow);
 	const hasMoreIcons = filteredIcons.length > iconsToShow;
@@ -66,6 +67,10 @@ export const ShowIconSettings = ({
 		if (open) {
 			setIconSearchQuery("");
 			setIconsToShow(24);
+			// The list is 124 KB and this component sits in every service header.
+			import("@/lib/bundled-icons")
+				.then((m) => setBundledIcons(m.bundledIcons))
+				.catch(() => toast.error("Error loading icons"));
 		}
 	}, [open]);
 
@@ -204,7 +209,9 @@ export const ShowIconSettings = ({
 					<div className="max-h-[300px] overflow-y-auto border rounded-lg p-4">
 						{displayedIcons.length === 0 ? (
 							<div className="text-center py-8 text-sm text-muted-foreground">
-								No icons found
+								{bundledIcons.length === 0
+									? "Loading icons..."
+									: "No icons found"}
 							</div>
 						) : (
 							<>
