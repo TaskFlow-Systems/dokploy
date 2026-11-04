@@ -25,6 +25,7 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import {
 	Form,
 	FormControl,
+	FormDescription,
 	FormField,
 	FormItem,
 	FormLabel,
@@ -632,12 +633,15 @@ export const AddDatabase = ({ environmentId, projectName }: Props) => {
 												<FormLabel>Sqld Primary URL</FormLabel>
 												<FormControl>
 													<Input
-														placeholder={"https://<host>:<port>"}
+														placeholder={"http://<primary-app-name>:5001"}
 														autoComplete="off"
 														{...field}
 													/>
 												</FormControl>
-
+												<FormDescription>
+													The Internal Replication Connection URL from the
+													primary's page.
+												</FormDescription>
 												<FormMessage />
 											</FormItem>
 										)}
