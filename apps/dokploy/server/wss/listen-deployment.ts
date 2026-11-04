@@ -19,6 +19,7 @@ import {
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
+import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { verifyWebSocketOrigin } from "./origin";
 
 const getDeploymentLogPathRoot = (
@@ -97,7 +98,7 @@ export const setupDeploymentLogsWebSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 
 		if (pathname === "/_next/webpack-hmr") {
 			return;
@@ -109,7 +110,7 @@ export const setupDeploymentLogsWebSocketServer = (
 		}
 	});
 
-	wssTerm.on("connection", async (ws, req) => {
+	onWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const logPath = url.searchParams.get("logPath");
 		const deploymentId = url.searchParams.get("deploymentId");

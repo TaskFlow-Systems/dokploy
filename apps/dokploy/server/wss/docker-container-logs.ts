@@ -6,6 +6,7 @@ import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
+import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { canAccessDockerLogsWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
 import {
@@ -26,7 +27,7 @@ export const setupDockerContainerLogsWebSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 
 		if (pathname === "/_next/webpack-hmr") {
 			return;
@@ -38,8 +39,7 @@ export const setupDockerContainerLogsWebSocketServer = (
 		}
 	});
 
-	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	wssTerm.on("connection", async (ws, req) => {
+	onWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const containerId = url.searchParams.get("containerId");
 		const tail = url.searchParams.get("tail") ?? "100";
@@ -127,6 +127,7 @@ export const setupDockerContainerLogsWebSocketServer = (
 				}
 
 				if (!server.sshKeyId) {
+					ws.send("No SSH key available for this server");
 					ws.close();
 					return;
 				}
