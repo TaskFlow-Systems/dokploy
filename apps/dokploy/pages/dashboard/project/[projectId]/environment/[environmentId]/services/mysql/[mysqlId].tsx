@@ -12,17 +12,17 @@ import { useRouter } from "next/router";
 import { type ReactElement, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { ShowEnvironment } from "@/components/dashboard/application/environment/show-environment";
-import { ShowDockerLogs } from "@/components/dashboard/application/logs/show";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
-import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
-import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
-import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/container/show-paid-container-monitoring";
-import { ShowExternalMysqlCredentials } from "@/components/dashboard/mysql/general/show-external-mysql-credentials";
-import { ShowGeneralMysql } from "@/components/dashboard/mysql/general/show-general-mysql";
-import { ShowInternalMysqlCredentials } from "@/components/dashboard/mysql/general/show-internal-mysql-credentials";
 import { UpdateMysql } from "@/components/dashboard/mysql/update-mysql";
-import { ShowDatabaseAdvancedSettings } from "@/components/dashboard/shared/show-database-advanced-settings";
+import {
+	ContainerFreeMonitoring,
+	ContainerPaidMonitoring,
+	lazyTab,
+	ShowBackups,
+	ShowDatabaseAdvancedSettings,
+	ShowDockerLogs,
+	ShowEnvironment,
+} from "@/components/dashboard/shared/lazy-service-tabs";
 import { TransferService } from "@/components/dashboard/shared/transfer-service";
 import { MysqlIcon } from "@/components/icons/data-tools-icons";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -49,6 +49,12 @@ import { cn } from "@/lib/utils";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
+
+const ShowMysqlGeneralTab = lazyTab(() =>
+	import("@/components/dashboard/mysql/general/show-mysql-general-tab").then(
+		(m) => m.ShowMysqlGeneralTab,
+	),
+);
 
 type TabState = "projects" | "monitoring" | "settings" | "backups" | "advanced";
 
@@ -222,33 +228,63 @@ const MySql = (
 															: "md:grid-cols-6",
 												)}
 											>
-												<TabsTrigger value="general">General</TabsTrigger>
+												<TabsTrigger
+													value="general"
+													onPointerEnter={ShowMysqlGeneralTab.preload}
+												>
+													General
+												</TabsTrigger>
 												{permissions?.envVars.read && (
-													<TabsTrigger value="environment">
+													<TabsTrigger
+														value="environment"
+														onPointerEnter={ShowEnvironment.preload}
+													>
 														Environment
 													</TabsTrigger>
 												)}
 												{permissions?.logs.read && (
-													<TabsTrigger value="logs">Logs</TabsTrigger>
+													<TabsTrigger
+														value="logs"
+														onPointerEnter={ShowDockerLogs.preload}
+													>
+														Logs
+													</TabsTrigger>
 												)}
 												{permissions?.monitoring.read &&
 													((data?.serverId && isCloud) || !data?.server) && (
-														<TabsTrigger value="monitoring">
+														<TabsTrigger
+															value="monitoring"
+															onPointerEnter={
+																data?.serverId && isCloud
+																	? ContainerPaidMonitoring.preload
+																	: ContainerFreeMonitoring.preload
+															}
+														>
 															Monitoring
 														</TabsTrigger>
 													)}
-												<TabsTrigger value="backups">Backups</TabsTrigger>
+												<TabsTrigger
+													value="backups"
+													onPointerEnter={ShowBackups.preload}
+												>
+													Backups
+												</TabsTrigger>
 												{permissions?.service.create && (
-													<TabsTrigger value="advanced">Advanced</TabsTrigger>
+													<TabsTrigger
+														value="advanced"
+														onPointerEnter={
+															ShowDatabaseAdvancedSettings.preload
+														}
+													>
+														Advanced
+													</TabsTrigger>
 												)}
 											</TabsList>
 										</div>
 
 										<TabsContent value="general">
 											<div className="flex flex-col gap-4 pt-2.5">
-												<ShowGeneralMysql mysqlId={mysqlId} />
-												<ShowInternalMysqlCredentials mysqlId={mysqlId} />
-												<ShowExternalMysqlCredentials mysqlId={mysqlId} />
+												<ShowMysqlGeneralTab mysqlId={mysqlId} />
 											</div>
 										</TabsContent>
 										{permissions?.envVars.read && (

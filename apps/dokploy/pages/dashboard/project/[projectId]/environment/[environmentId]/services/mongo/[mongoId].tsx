@@ -12,17 +12,17 @@ import { useRouter } from "next/router";
 import { type ReactElement, useState } from "react";
 import { toast } from "sonner";
 import superjson from "superjson";
-import { ShowEnvironment } from "@/components/dashboard/application/environment/show-environment";
-import { ShowDockerLogs } from "@/components/dashboard/application/logs/show";
 import { DeleteService } from "@/components/dashboard/compose/delete-service";
-import { ShowBackups } from "@/components/dashboard/database/backups/show-backups";
-import { ShowExternalMongoCredentials } from "@/components/dashboard/mongo/general/show-external-mongo-credentials";
-import { ShowGeneralMongo } from "@/components/dashboard/mongo/general/show-general-mongo";
-import { ShowInternalMongoCredentials } from "@/components/dashboard/mongo/general/show-internal-mongo-credentials";
 import { UpdateMongo } from "@/components/dashboard/mongo/update-mongo";
-import { ContainerFreeMonitoring } from "@/components/dashboard/monitoring/free/container/show-free-container-monitoring";
-import { ContainerPaidMonitoring } from "@/components/dashboard/monitoring/paid/container/show-paid-container-monitoring";
-import { ShowDatabaseAdvancedSettings } from "@/components/dashboard/shared/show-database-advanced-settings";
+import {
+	ContainerFreeMonitoring,
+	ContainerPaidMonitoring,
+	lazyTab,
+	ShowBackups,
+	ShowDatabaseAdvancedSettings,
+	ShowDockerLogs,
+	ShowEnvironment,
+} from "@/components/dashboard/shared/lazy-service-tabs";
 import { TransferService } from "@/components/dashboard/shared/transfer-service";
 import { MongodbIcon } from "@/components/icons/data-tools-icons";
 import { DashboardLayout } from "@/components/layouts/dashboard-layout";
@@ -49,6 +49,12 @@ import { cn } from "@/lib/utils";
 import { appRouter } from "@/server/api/root";
 import { api } from "@/utils/api";
 import { useWhitelabeling } from "@/utils/hooks/use-whitelabeling";
+
+const ShowMongoGeneralTab = lazyTab(() =>
+	import("@/components/dashboard/mongo/general/show-mongo-general-tab").then(
+		(m) => m.ShowMongoGeneralTab,
+	),
+);
 
 type TabState = "projects" | "monitoring" | "settings" | "backups" | "advanced";
 
@@ -222,33 +228,61 @@ const Mongo = (
 														: "md:grid-cols-6",
 											)}
 										>
-											<TabsTrigger value="general">General</TabsTrigger>
+											<TabsTrigger
+												value="general"
+												onPointerEnter={ShowMongoGeneralTab.preload}
+											>
+												General
+											</TabsTrigger>
 											{permissions?.envVars.read && (
-												<TabsTrigger value="environment">
+												<TabsTrigger
+													value="environment"
+													onPointerEnter={ShowEnvironment.preload}
+												>
 													Environment
 												</TabsTrigger>
 											)}
 											{permissions?.logs.read && (
-												<TabsTrigger value="logs">Logs</TabsTrigger>
+												<TabsTrigger
+													value="logs"
+													onPointerEnter={ShowDockerLogs.preload}
+												>
+													Logs
+												</TabsTrigger>
 											)}
 											{permissions?.monitoring.read &&
 												((data?.serverId && isCloud) || !data?.server) && (
-													<TabsTrigger value="monitoring">
+													<TabsTrigger
+														value="monitoring"
+														onPointerEnter={
+															data?.serverId && isCloud
+																? ContainerPaidMonitoring.preload
+																: ContainerFreeMonitoring.preload
+														}
+													>
 														Monitoring
 													</TabsTrigger>
 												)}
-											<TabsTrigger value="backups">Backups</TabsTrigger>
+											<TabsTrigger
+												value="backups"
+												onPointerEnter={ShowBackups.preload}
+											>
+												Backups
+											</TabsTrigger>
 											{permissions?.service.create && (
-												<TabsTrigger value="advanced">Advanced</TabsTrigger>
+												<TabsTrigger
+													value="advanced"
+													onPointerEnter={ShowDatabaseAdvancedSettings.preload}
+												>
+													Advanced
+												</TabsTrigger>
 											)}
 										</TabsList>
 									</div>
 
 									<TabsContent value="general">
 										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowGeneralMongo mongoId={mongoId} />
-											<ShowInternalMongoCredentials mongoId={mongoId} />
-											<ShowExternalMongoCredentials mongoId={mongoId} />
+											<ShowMongoGeneralTab mongoId={mongoId} />
 										</div>
 									</TabsContent>
 									{permissions?.envVars.read && (

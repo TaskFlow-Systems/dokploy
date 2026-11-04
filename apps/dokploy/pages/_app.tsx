@@ -2,15 +2,24 @@ import "@/styles/globals.css";
 
 import type { NextPage } from "next";
 import type { AppProps } from "next/app";
+import dynamic from "next/dynamic";
 import { Inter } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import NextTopLoader from "nextjs-toploader";
 import type { ReactElement, ReactNode } from "react";
-import { SearchCommand } from "@/components/dashboard/search-command";
 import { Analytics } from "@/components/shared/analytics";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { api } from "@/utils/api";
+
+// Every page renders it, the login page too, and it shows nothing until opened.
+const SearchCommand = dynamic(
+	() =>
+		import("@/components/dashboard/search-command").then(
+			(m) => m.SearchCommand,
+		),
+	{ ssr: false },
+);
 
 const inter = Inter({ subsets: ["latin"] });
 
