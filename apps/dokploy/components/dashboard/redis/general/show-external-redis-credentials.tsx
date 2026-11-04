@@ -1,6 +1,6 @@
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildRedisUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 const DockerProviderSchema = z.object({
@@ -49,7 +50,6 @@ export const ShowExternalRedisCredentials = ({ redisId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.redis.one.useQuery({ redisId });
 	const { mutateAsync, isPending } = api.redis.saveExternalPort.useMutation();
-	const [connectionUrl, setConnectionUrl] = useState("");
 	const getIp = data?.server?.ipAddress || ip;
 
 	const form = useForm({
@@ -79,16 +79,9 @@ export const ShowExternalRedisCredentials = ({ redisId }: Props) => {
 			});
 	};
 
-	useEffect(() => {
-		const buildConnectionUrl = () => {
-			const _hostname = window.location.hostname;
-			const port = form.watch("externalPort") || data?.externalPort;
-
-			return `redis://default:${data?.databasePassword}@${getIp}:${port}`;
-		};
-
-		setConnectionUrl(buildConnectionUrl());
-	}, [data?.appName, data?.externalPort, data?.databasePassword, form, getIp]);
+	const connectionUrl = data?.externalPort
+		? buildRedisUrl(data, { host: getIp ?? "", port: data.externalPort })
+		: "";
 	return (
 		<>
 			<div className="flex w-full flex-col gap-5 ">
