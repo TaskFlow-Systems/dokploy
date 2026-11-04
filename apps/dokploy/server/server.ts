@@ -25,6 +25,7 @@ import next from "next";
 import packageInfo from "../package.json";
 import { handleApplicationEnvUpsert } from "../pages/api/application.env.upsert";
 import { isApplicationEnvUpsertRequest } from "./request-url";
+import { closeUnknownUpgradePaths } from "./wss/connection";
 import { setupDockerContainerLogsWebSocketServer } from "./wss/docker-container-logs";
 import { setupDockerContainerTerminalWebSocketServer } from "./wss/docker-container-terminal";
 import { setupDockerStatsMonitoringSocketServer } from "./wss/docker-stats";
@@ -127,6 +128,7 @@ void app.prepare().then(async () => {
 		if (!IS_CLOUD) {
 			setupDockerStatsMonitoringSocketServer(server);
 		}
+		closeUnknownUpgradePaths(server, { dev });
 
 		server.listen(PORT, HOST);
 		console.log(`Server Started on: http://${HOST}:${PORT}`);
