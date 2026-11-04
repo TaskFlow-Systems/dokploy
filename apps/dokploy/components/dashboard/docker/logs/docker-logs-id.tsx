@@ -12,6 +12,7 @@ import { AlertBlock } from "@/components/shared/alert-block";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/utils/api";
+import { useDebounce } from "@/utils/hooks/use-debounce";
 import { AnalyzeLogs } from "./analyze-logs";
 import { LineCountFilter } from "./line-count-filter";
 import { SinceLogsFilter, type TimeFilter } from "./since-logs-filter";
@@ -30,6 +31,10 @@ interface Props {
 // is selected/auto-selected — querying logs for it just surfaces Docker's
 // raw "No such container: select-a-container" daemon error.
 const PLACEHOLDER_CONTAINER_ID = "select-a-container";
+
+// The search runs on the server, so every applied value reopens the websocket
+// and restarts `docker logs`.
+const SEARCH_DEBOUNCE_MS = 300;
 
 export const priorities = [
 	{
@@ -78,6 +83,7 @@ export const DockerLogsId: React.FC<Props> = ({
 	const [autoScroll, setAutoScroll] = React.useState(true);
 	const [lines, setLines] = React.useState<number>(100);
 	const [search, setSearch] = React.useState<string>("");
+	const debouncedSearch = useDebounce(search, SEARCH_DEBOUNCE_MS);
 	const [showTimestamp, setShowTimestamp] = React.useState(true);
 	const [since, setSince] = React.useState<TimeFilter>("all");
 	const [typeFilter, setTypeFilter] = React.useState<string[]>([]);
@@ -159,7 +165,7 @@ export const DockerLogsId: React.FC<Props> = ({
 			containerId,
 			tail: lines.toString(),
 			since,
-			search,
+			search: debouncedSearch,
 			runType,
 		});
 
@@ -236,7 +242,7 @@ export const DockerLogsId: React.FC<Props> = ({
 				ws.close();
 			}
 		};
-	}, [containerId, serverId, serviceId, lines, search, since]);
+	}, [containerId, serverId, serviceId, lines, debouncedSearch, since]);
 
 	const handleDownload = () => {
 		const logContent = filteredLogs
@@ -311,7 +317,7 @@ export const DockerLogsId: React.FC<Props> = ({
 		const logs = parseLogs(rawLogs);
 		const filtered = handleFilter(logs);
 		setFilteredLogs(filtered);
-	}, [rawLogs, search, lines, since, typeFilter]);
+	}, [rawLogs, debouncedSearch, lines, since, typeFilter]);
 
 	useEffect(() => {
 		scrollToBottom();
@@ -425,7 +431,7 @@ export const DockerLogsId: React.FC<Props> = ({
 								<TerminalLine
 									key={`${filteredLog.rawTimestamp ?? ""}-${index}`}
 									log={filteredLog}
-									searchTerm={search}
+									searchTerm={debouncedSearch}
 									noTimestamp={!showTimestamp}
 								/>
 							))
