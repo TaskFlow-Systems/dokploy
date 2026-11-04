@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildPostgresUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -64,7 +65,14 @@ export const ShowInternalPostgresCredentials = ({ postgresId }: Props) => {
 								<Label>Internal Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={`postgresql://${data?.databaseUser}:${data?.databasePassword}@${data?.appName}:5432/${data?.databaseName}`}
+									value={
+										data
+											? buildPostgresUrl(data, {
+													host: data.appName,
+													port: 5432,
+												})
+											: ""
+									}
 								/>
 							</div>
 						</div>
