@@ -10,6 +10,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { buildLibsqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -102,14 +103,22 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 								<Label>Internal Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={`http://${data?.databaseUser}:${data?.databasePassword}@${data?.appName}:8080`}
+									value={
+										data
+											? buildLibsqlUrl(data, { host: data.appName, port: 8080 })
+											: ""
+									}
 								/>
 							</div>
 							<div className="flex flex-col gap-2 md:col-span-2">
 								<Label>Internal Replication Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={`http://${data?.databaseUser}:${data?.databasePassword}@${data?.appName}:5001`}
+									value={
+										data
+											? buildLibsqlUrl(data, { host: data.appName, port: 5001 })
+											: ""
+									}
 								/>
 							</div>
 						</div>

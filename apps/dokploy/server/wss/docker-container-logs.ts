@@ -6,6 +6,7 @@ import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
+import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { canAccessDockerLogsWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
 import {
@@ -26,7 +27,7 @@ export const setupDockerContainerLogsWebSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 
 		if (pathname === "/_next/webpack-hmr") {
 			return;
@@ -38,8 +39,7 @@ export const setupDockerContainerLogsWebSocketServer = (
 		}
 	});
 
-	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	wssTerm.on("connection", async (ws, req) => {
+	onWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const containerId = url.searchParams.get("containerId");
 		const tail = url.searchParams.get("tail") ?? "100";
@@ -102,6 +102,11 @@ export const setupDockerContainerLogsWebSocketServer = (
 			return;
 		}
 
+		// Client may have disconnected during the awaits; a later close handler would never fire.
+		if (ws.readyState !== ws.OPEN) {
+			return;
+		}
+
 		// Set up keep-alive ping mechanism to prevent timeout
 		// Send ping every 45 seconds to keep connection alive
 		const pingInterval = setInterval(() => {
@@ -109,6 +114,9 @@ export const setupDockerContainerLogsWebSocketServer = (
 				ws.ping();
 			}
 		}, 45000); // 45 seconds
+		ws.on("close", () => {
+			clearInterval(pingInterval);
+		});
 		try {
 			if (serverId) {
 				const server = await findServerById(serverId);
@@ -118,11 +126,24 @@ export const setupDockerContainerLogsWebSocketServer = (
 					return;
 				}
 
-				if (!server.sshKeyId) return;
+				if (!server.sshKeyId) {
+					ws.send("No SSH key available for this server");
+					ws.close();
+					return;
+				}
 				const host = await resolveServerDestinationHost(server);
+
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				const client = new Client();
 				client
 					.once("ready", () => {
+						// The close handler below ends this connection, and exec throws on an ended one.
+						if (ws.readyState !== ws.OPEN) {
+							return;
+						}
 						const baseCommand = `docker ${runType === "swarm" ? "service" : "container"} logs --timestamps ${
 							runType === "swarm" ? "--raw" : ""
 						} --tail ${tail} ${
@@ -157,7 +178,6 @@ export const setupDockerContainerLogsWebSocketServer = (
 					.on("error", (err) => {
 						console.error("SSH connection error:", err);
 						ws.send(`SSH error: ${err.message}`);
-						clearInterval(pingInterval);
 						ws.close(); // Cierra el WebSocket si hay un error con SSH
 						client.end();
 					})
@@ -168,7 +188,6 @@ export const setupDockerContainerLogsWebSocketServer = (
 						privateKey: server.sshKey?.privateKey,
 					});
 				ws.on("close", () => {
-					clearInterval(pingInterval);
 					client.end();
 				});
 			} else {
@@ -199,7 +218,6 @@ export const setupDockerContainerLogsWebSocketServer = (
 					ws.send(data);
 				});
 				ws.on("close", () => {
-					clearInterval(pingInterval);
 					ptyProcess.kill();
 				});
 				ws.on("message", (message) => {
@@ -223,6 +241,7 @@ export const setupDockerContainerLogsWebSocketServer = (
 			const errorMessage = error?.message as unknown as string;
 
 			ws.send(errorMessage);
+			ws.close();
 		}
 	});
 };

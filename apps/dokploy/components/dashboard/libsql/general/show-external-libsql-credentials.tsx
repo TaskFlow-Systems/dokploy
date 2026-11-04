@@ -1,6 +1,6 @@
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildLibsqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 const DockerProviderSchema = z.object({
@@ -65,8 +66,6 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.libsql.one.useQuery({ libsqlId });
 	const { mutateAsync, isPending } = api.libsql.saveExternalPorts.useMutation();
-	const [connectionUrl, setConnectionUrl] = useState("");
-	const [connectionGRPCUrl, setGRPCConnectionUrl] = useState("");
 	const getIp = data?.server?.ipAddress || ip;
 
 	const form = useForm({
@@ -100,25 +99,12 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 			});
 	};
 
-	useEffect(() => {
-		const port = form.watch("externalPort") || data?.externalPort;
-		setConnectionUrl(
-			`http://${data?.databaseUser}:${data?.databasePassword}@${getIp}:${port}`,
-		);
-
-		if (data?.sqldNode !== "replica") {
-			const grpcPort = form.watch("externalGRPCPort") || data?.externalGRPCPort;
-			setGRPCConnectionUrl(
-				`http://${data?.databaseUser}:${data?.databasePassword}@${getIp}:${grpcPort}`,
-			);
-		}
-	}, [
-		data?.externalGRPCPort,
-		data?.databasePassword,
-		form,
-		data?.databaseUser,
-		getIp,
-	]);
+	const connectionUrl = data?.externalPort
+		? buildLibsqlUrl(data, { host: getIp ?? "", port: data.externalPort })
+		: "";
+	const connectionGRPCUrl = data?.externalGRPCPort
+		? buildLibsqlUrl(data, { host: getIp ?? "", port: data.externalGRPCPort })
+		: "";
 
 	return (
 		<div className="flex w-full flex-col gap-5">

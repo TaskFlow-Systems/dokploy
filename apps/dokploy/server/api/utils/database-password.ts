@@ -70,5 +70,8 @@ export const buildMongoPasswordChangeCommand = ({
 	password: string;
 }) => {
 	const js = `db.getSiblingDB("admin").changeUserPassword(${JSON.stringify(databaseUser)}, ${JSON.stringify(password)})`;
-	return `docker exec "$CONTAINER_ID" mongosh -u ${quoteShellArg(databaseUser)} -p ${quoteShellArg(databasePassword)} --authenticationDatabase admin --eval ${quoteShellArg(js)}`;
+	// mongosh reads `-p -x` as a flag with no value followed by an option, and a
+	// password may start with `-`. Only the `=` form takes any value.
+	const clientCommand = `mongosh --username=${quoteShellArg(databaseUser)} --password="$DOKPLOY_DB_PASSWORD" --authenticationDatabase admin --eval ${quoteShellArg(js)}`;
+	return `docker exec -e DOKPLOY_DB_PASSWORD=${quoteShellArg(databasePassword)} "$CONTAINER_ID" sh -c ${quoteShellArg(clientCommand)}`;
 };

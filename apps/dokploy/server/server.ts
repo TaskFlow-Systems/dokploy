@@ -24,6 +24,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import next from "next";
 import packageInfo from "../package.json";
 import { handleApplicationEnvUpsert } from "../pages/api/application.env.upsert";
+import { isApplicationEnvUpsertRequest } from "./request-url";
 import { setupDockerContainerLogsWebSocketServer } from "./wss/docker-container-logs";
 import { setupDockerContainerTerminalWebSocketServer } from "./wss/docker-container-terminal";
 import { setupDockerStatsMonitoringSocketServer } from "./wss/docker-stats";
@@ -51,29 +52,6 @@ const handle = app.getRequestHandler();
 type NodeNextApiResponse = ServerResponse & {
 	status: (code: number) => NodeNextApiResponse;
 	json: (body: unknown) => NodeNextApiResponse;
-};
-
-const isApplicationEnvUpsertRequest = (req: IncomingMessage) => {
-	const pathname = new URL(
-		req.url ?? "/",
-		`http://${req.headers.host ?? "localhost"}`,
-	).pathname.replace(/\/+$/, "");
-	const rawUrl = req.url ?? "";
-	const forwardedUri = req.headers["x-forwarded-uri"];
-	const forwardedPath =
-		typeof forwardedUri === "string"
-			? forwardedUri
-			: Array.isArray(forwardedUri)
-				? forwardedUri.join(" ")
-				: "";
-	const routeMarkers = [pathname, rawUrl, forwardedPath].join(" ");
-
-	return (
-		pathname === "/api/application/env/upsert" ||
-		pathname === "/api/application.env.upsert" ||
-		routeMarkers.includes("/api/application/env/upsert") ||
-		routeMarkers.includes("/api/application.env.upsert")
-	);
 };
 
 const readJsonBody = async (req: IncomingMessage) =>

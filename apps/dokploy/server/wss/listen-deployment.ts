@@ -19,6 +19,7 @@ import {
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
+import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { verifyWebSocketOrigin } from "./origin";
 
 const getDeploymentLogPathRoot = (
@@ -97,7 +98,7 @@ export const setupDeploymentLogsWebSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 
 		if (pathname === "/_next/webpack-hmr") {
 			return;
@@ -109,7 +110,7 @@ export const setupDeploymentLogsWebSocketServer = (
 		}
 	});
 
-	wssTerm.on("connection", async (ws, req) => {
+	onWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const logPath = url.searchParams.get("logPath");
 		const deploymentId = url.searchParams.get("deploymentId");
@@ -173,6 +174,10 @@ export const setupDeploymentLogsWebSocketServer = (
 			return;
 		}
 
+		if (ws.readyState !== ws.OPEN) {
+			return;
+		}
+
 		let tailProcess: ReturnType<typeof spawn> | null = null;
 		let sshClient: Client | null = null;
 
@@ -199,10 +204,6 @@ export const setupDeploymentLogsWebSocketServer = (
 			if (effectiveServerId) {
 				const server = await findServerById(effectiveServerId);
 
-				if (ws.readyState !== ws.OPEN) {
-					return;
-				}
-
 				if (server.organizationId !== session.activeOrganizationId) {
 					ws.close();
 					return;
@@ -214,9 +215,18 @@ export const setupDeploymentLogsWebSocketServer = (
 				}
 
 				const host = await resolveServerDestinationHost(server);
+
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				sshClient = new Client();
 				sshClient
 					.on("ready", () => {
+						// The close handler below ends this connection, and exec throws on an ended one.
+						if (ws.readyState !== ws.OPEN) {
+							return;
+						}
 						const encodedPath = encodeBase64(effectiveLogPath);
 						const command = `tail -n +1 -f "$(echo '${encodedPath}' | base64 -d)"`;
 

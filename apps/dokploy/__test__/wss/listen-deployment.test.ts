@@ -53,6 +53,7 @@ const mockValidateRequest = vi.hoisted(() => vi.fn());
 const mockFindServerById = vi.hoisted(() => vi.fn());
 const mockFindDeploymentById = vi.hoisted(() => vi.fn());
 const mockCheckServicePermissionAndAccess = vi.hoisted(() => vi.fn());
+const mockResolveServerDestinationHost = vi.hoisted(() => vi.fn());
 // NOTE: full mocks (no importOriginal) — importing the real server barrel
 // OOMs the websocket test worker.
 vi.mock("@dokploy/server", () => ({
@@ -64,6 +65,9 @@ vi.mock("@dokploy/server", () => ({
 vi.mock("@dokploy/server/services/permission", () => ({
 	checkPermission: vi.fn(async () => undefined),
 	checkServicePermissionAndAccess: mockCheckServicePermissionAndAccess,
+}));
+vi.mock("@dokploy/server/utils/servers/destination", () => ({
+	resolveServerDestinationHost: mockResolveServerDestinationHost,
 }));
 vi.mock("@dokploy/server/wss/utils", () => ({
 	readValidDirectory: () => true,
@@ -109,6 +113,7 @@ beforeEach(async () => {
 		schedule: null,
 	});
 	mockCheckServicePermissionAndAccess.mockResolvedValue(undefined);
+	mockResolveServerDestinationHost.mockResolvedValue("10.0.0.1");
 	server = http.createServer();
 	setupDeploymentLogsWebSocketServer(server);
 	await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -178,6 +183,65 @@ describe("deployment logs websocket (#5518)", () => {
 
 		const connected = sshClients.filter((c) => c.connect.mock.calls.length > 0);
 		expect(connected).toHaveLength(0);
+	});
+
+	it("does not spawn tail when the client disconnects while loading the deployment", async () => {
+		mockValidateRequest.mockResolvedValue(AUTH);
+		const deployment = await mockFindDeploymentById();
+		const lookup = deferred<unknown>();
+		mockFindDeploymentById.mockReturnValue(lookup.promise);
+		const ws = await connect();
+		await vi.waitFor(() => expect(mockFindDeploymentById).toHaveBeenCalled());
+
+		await closeClient(ws);
+		lookup.resolve(deployment);
+		await flush();
+
+		expect(children).toHaveLength(0);
+	});
+
+	it("does not spawn tail when the client disconnects during the access check", async () => {
+		mockValidateRequest.mockResolvedValue(AUTH);
+		const access = deferred<undefined>();
+		mockCheckServicePermissionAndAccess.mockReturnValue(access.promise);
+		const ws = await connect();
+		await vi.waitFor(() =>
+			expect(mockCheckServicePermissionAndAccess).toHaveBeenCalled(),
+		);
+
+		await closeClient(ws);
+		access.resolve(undefined);
+		await flush();
+
+		expect(children).toHaveLength(0);
+	});
+
+	it("does not open an SSH session when the client disconnects while resolving the address", async () => {
+		mockValidateRequest.mockResolvedValue(AUTH);
+		mockFindDeploymentById.mockResolvedValue({
+			...(await mockFindDeploymentById()),
+			buildServerId: "srv-1",
+		});
+		mockFindServerById.mockResolvedValue({
+			organizationId: "org-1",
+			sshKeyId: "key-1",
+			sshKey: { privateKey: "key" },
+			ipAddress: "10.0.0.1",
+			port: 22,
+			username: "root",
+		});
+		const address = deferred<string>();
+		mockResolveServerDestinationHost.mockReturnValue(address.promise);
+		const ws = await connect();
+		await vi.waitFor(() =>
+			expect(mockResolveServerDestinationHost).toHaveBeenCalled(),
+		);
+
+		await closeClient(ws);
+		address.resolve("10.0.0.1");
+		await flush();
+
+		expect(sshClients).toHaveLength(0);
 	});
 
 	it("force-kills tail with SIGKILL when SIGTERM does not stop it", async () => {

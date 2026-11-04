@@ -8,6 +8,7 @@ import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
+import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
@@ -30,7 +31,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 
 		if (pathname === "/_next/webpack-hmr") {
 			return;
@@ -42,8 +43,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 		}
 	});
 
-	// eslint-disable-next-line @typescript-eslint/no-misused-promises
-	wssTerm.on("connection", async (ws, req) => {
+	onWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 		const containerId = url.searchParams.get("containerId");
 		const activeWay = url.searchParams.get("activeWay");
@@ -122,11 +122,21 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					throw new Error("No SSH key available for this server");
 
 				const host = await resolveServerDestinationHost(server);
+
+				// Client may have disconnected during the awaits; a later close handler would never fire.
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				const conn = new Client();
 				let _stdout = "";
 				let _stderr = "";
 				conn
 					.once("ready", () => {
+						if (ws.readyState !== ws.OPEN) {
+							conn.end();
+							return;
+						}
 						// Use array-style arguments to prevent shell injection
 						const dockerCommand = [
 							"docker",
@@ -187,7 +197,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 								}
 							});
 
-							ws.on("close", () => {
+							const hangUp = () => {
 								hangingUp = true;
 								const endConnection = () => {
 									stream.end();
@@ -211,7 +221,14 @@ export const setupDockerContainerTerminalWebSocketServer = (
 										hangup.stderr.resume();
 									},
 								);
-							});
+							};
+
+							// The shell is already running if the client left while it was opening.
+							if (ws.readyState !== ws.OPEN) {
+								hangUp();
+								return;
+							}
+							ws.on("close", hangUp);
 						});
 					})
 					.on("error", (err) => {
@@ -234,6 +251,11 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					ws.close();
 					return;
 				}
+
+				if (ws.readyState !== ws.OPEN) {
+					return;
+				}
+
 				const ptyProcess = spawn(
 					"docker",
 					["exec", "-it", "-e", sessionMarker, "-w", "/", containerId, shell],
@@ -278,6 +300,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 			const errorMessage = error?.message as unknown as string;
 
 			ws.send(errorMessage);
+			ws.close();
 		}
 	});
 };

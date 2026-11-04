@@ -11,7 +11,10 @@ import {
 	buildMongo,
 	type MongoNested,
 } from "@dokploy/server/utils/databases/mongo";
-import { getMongoRestoreCommand } from "@dokploy/server/utils/restore/utils";
+import {
+	getMongoRestoreCommand,
+	getRestoreCommand,
+} from "@dokploy/server/utils/restore/utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	buildExternalMongoUrl,
@@ -585,6 +588,69 @@ describe("mongo replica set access control", () => {
 					`gunzip -c ${archive} | ${getMongoRestoreCommand("app", mongo.databaseUser, mongo.databasePassword)}`,
 				);
 				expect(await countDocs(storedUrl(mongo), "backed-up")).toBe(1);
+			} finally {
+				await rm(dir, { recursive: true, force: true });
+			}
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it.each([
+		{ kind: "dash-rs", first: "-x", second: "--port", replicaSets: true },
+		{ kind: "dash-solo", first: "--port", second: "-x", replicaSets: false },
+	])(
+		"backs up, restores and changes a password that reads as an option: $kind",
+		async ({ kind, first, second, replicaSets }) => {
+			const mongo = fixture(kind, first, { replicaSets });
+			await buildMongo(mongo);
+			await waitForAccessControl(mongo);
+			await insertDoc(storedUrl(mongo), "backed-up");
+
+			const dir = await mkdtemp(join(tmpdir(), "mongo-replica-set-auth-"));
+			const backupAndRestore = async (databasePassword: string) => {
+				const url = storedUrl({ ...mongo, databasePassword });
+				const archive = join(dir, "app.bson.gz");
+				await runPanelCommand(
+					mongo.appName,
+					`${getMongoBackupCommand("app", mongo.databaseUser, databasePassword)} > ${archive}`,
+				);
+				await mongosh(
+					url,
+					'db.getSiblingDB("app").docs.deleteMany({}); print("ok")',
+				);
+				expect(await countDocs(url, "backed-up")).toBe(0);
+
+				// The whole restore the panel runs: the copy step stands in for rclone.
+				await runPanelCommand(
+					mongo.appName,
+					getRestoreCommand({
+						appName: mongo.appName,
+						type: "mongo",
+						restoreType: "database",
+						credentials: {
+							database: "app",
+							databaseUser: mongo.databaseUser,
+							databasePassword,
+						},
+						rcloneCommand: `cp ${archive}`,
+						backupFile: "app.bson.gz",
+					}),
+				);
+				expect(await countDocs(url, "backed-up")).toBe(1);
+			};
+
+			try {
+				await backupAndRestore(first);
+
+				await runPanelCommand(
+					mongo.appName,
+					buildMongoPasswordChangeCommand({
+						databaseUser: mongo.databaseUser,
+						databasePassword: first,
+						password: second,
+					}),
+				);
+				await backupAndRestore(second);
 			} finally {
 				await rm(dir, { recursive: true, force: true });
 			}
