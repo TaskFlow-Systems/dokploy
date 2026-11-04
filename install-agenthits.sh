@@ -167,8 +167,14 @@ providers:
 entryPoints:
   web:
     address: :80
+    transport:
+      lifeCycle:
+        graceTimeOut: 2s
   websecure:
     address: :443
+    transport:
+      lifeCycle:
+        graceTimeOut: 2s
     http3:
       advertisedPort: 443
     http:

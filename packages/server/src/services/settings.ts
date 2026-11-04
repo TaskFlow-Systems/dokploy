@@ -12,6 +12,7 @@ import semver from "semver";
 import { db } from "../db";
 import { compose } from "../db/schema";
 import {
+	buildTraefikGraceTimeoutStep,
 	buildTraefikTlsMigrationStep,
 	ensureTraefikImage,
 	initializeStandaloneTraefik,
@@ -1223,12 +1224,14 @@ export const checkPortInUse = async (
 	}
 };
 
-const convertTraefikConfigToTls = async (serverId?: string) => {
+const prepareTraefikConfig = async (serverId?: string) => {
 	// Loaded lazily: a static import would close a cycle through server-setup and monitoring-setup, which import this module.
 	const { wrapComponentUpdateSteps } = await import(
 		"../setup/server-components"
 	);
-	const script = wrapComponentUpdateSteps(buildTraefikTlsMigrationStep());
+	const script = wrapComponentUpdateSteps(
+		`${buildTraefikTlsMigrationStep()}\n${buildTraefikGraceTimeoutStep()}`,
+	);
 	try {
 		if (serverId) {
 			await execAsyncRemote(serverId, script);
@@ -1241,7 +1244,7 @@ const convertTraefikConfigToTls = async (serverId?: string) => {
 		const detail =
 			stderr || (error instanceof Error ? error.message : String(error));
 		throw new Error(
-			`Traefik config ${TRAEFIK_MAIN_CONFIG_PATH} could not be converted to tlsChallenge. ${detail}`,
+			`Traefik config ${TRAEFIK_MAIN_CONFIG_PATH} could not be updated. ${detail}`,
 		);
 	}
 };
@@ -1254,7 +1257,7 @@ export const writeTraefikSetup = async (input: TraefikOptions) => {
 	);
 
 	if (resourceType === "service") {
-		await convertTraefikConfigToTls(input.serverId);
+		await prepareTraefikConfig(input.serverId);
 		await initializeTraefikService({
 			env: input.env,
 			additionalPorts: input.additionalPorts,
@@ -1262,7 +1265,7 @@ export const writeTraefikSetup = async (input: TraefikOptions) => {
 		});
 		await reconnectServicesToTraefik(input.serverId);
 	} else if (resourceType === "standalone") {
-		await convertTraefikConfigToTls(input.serverId);
+		await prepareTraefikConfig(input.serverId);
 		await initializeStandaloneTraefik({
 			env: input.env,
 			additionalPorts: input.additionalPorts,

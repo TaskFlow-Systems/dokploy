@@ -14,6 +14,7 @@ import {
 	createServerTraefikConfig,
 	getDefaultServerTraefikConfig,
 	setupNetwork,
+	TRAEFIK_GRACE_TIMEOUT,
 } from "@dokploy/server";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -124,6 +125,18 @@ describe("createServerTraefikConfig", () => {
 		expect(parse(config).providers.swarm).toEqual({
 			exposedByDefault: false,
 			watch: true,
+		});
+		expect(dockerCalls.some((call) => call.startsWith("restart"))).toBe(false);
+	});
+
+	it("adds the grace timeout to an existing config without restarting Traefik", () => {
+		const { config, dockerCalls } = runStep(
+			MANAGER,
+			"entryPoints:\n  websecure:\n    address: :443\n",
+		);
+
+		expect(parse(config).entryPoints.websecure.transport.lifeCycle).toEqual({
+			graceTimeOut: TRAEFIK_GRACE_TIMEOUT,
 		});
 		expect(dockerCalls.some((call) => call.startsWith("restart"))).toBe(false);
 	});
