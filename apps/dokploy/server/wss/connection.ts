@@ -1,4 +1,4 @@
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
 import type { WebSocket, WebSocketServer } from "ws";
 import { parseRequestUrl } from "../request-url";
@@ -10,6 +10,13 @@ const CLOSE_INTERNAL_ERROR = 1011;
 // (a database address, for one) could reach a client that has not signed in.
 const CONNECTION_FAILED =
 	"The panel could not open this connection. Check the panel logs.";
+
+const UNKNOWN_PATH_RESPONSE =
+	"HTTP/1.1 404 Not Found\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+
+// Filled as servers register, so a path has no copy to fall out of step and a
+// server that was never set up (the stats one in the cloud) is not listed.
+const servedUpgradePaths = new Set<string>();
 
 // ws.close() throws on a reason longer than one control frame can carry.
 export const toCloseReason = (text: string) => {
@@ -30,6 +37,32 @@ export const readUpgradePathname = (req: IncomingMessage, socket: Duplex) => {
 	return url.pathname;
 };
 
+// Without this such a socket is never freed: every listener skips it, nothing
+// reads it, so even a client leaving goes unnoticed, and Node has dropped its
+// timeouts by now. Next leaves it too, since an application's own server may
+// listen on that path.
+export const closeUnknownUpgradePaths = (
+	server: Server,
+	{ dev }: { dev: boolean },
+) => {
+	server.on("upgrade", (req, socket) => {
+		const pathname = readUpgradePathname(req, socket);
+		if (pathname === null || servedUpgradePaths.has(pathname)) {
+			return;
+		}
+		// Next serves its hot reload socket from a listener of its own, and the
+		// path changes between its versions.
+		if (dev && pathname.startsWith("/_next/")) {
+			return;
+		}
+		// Node removes its own error listener on upgrade, so a client resetting
+		// the connection during this write would throw from the socket's callback.
+		socket.on("error", () => {});
+		socket.once("finish", () => socket.destroy());
+		socket.end(UNKNOWN_PATH_RESPONSE);
+	});
+};
+
 type ConnectionHandler = (ws: WebSocket, req: IncomingMessage) => Promise<void>;
 
 const handleConnections = (
@@ -37,6 +70,10 @@ const handleConnections = (
 	handler: ConnectionHandler,
 	clientReadsText: boolean,
 ) => {
+	if (wss.options.path) {
+		servedUpgradePaths.add(wss.options.path);
+	}
+
 	wss.on("connection", (ws, req) => {
 		// With no listener, EventEmitter throws this out of the socket's own
 		// callback, and a malformed frame from any client is enough for that.

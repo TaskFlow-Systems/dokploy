@@ -3,8 +3,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
 import path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WebSocket } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 
 type FakeConnection = EventEmitter & {
 	end: ReturnType<typeof vi.fn>;
@@ -119,6 +120,9 @@ vi.mock("ssh2", async () => {
 	return { Client };
 });
 
+const { closeUnknownUpgradePaths } = await import(
+	"../../server/wss/connection"
+);
 const { setupDockerContainerLogsWebSocketServer } = await import(
 	"../../server/wss/docker-container-logs"
 );
@@ -213,9 +217,11 @@ describe("websocket handler failures", () => {
 		const closed = new Promise<void>((resolve) => {
 			socket.once("close", () => resolve());
 		});
+		let reply = "";
 		const upgraded = new Promise<void>((resolve) => {
 			socket.on("data", (data) => {
-				if (data.toString("latin1").startsWith("HTTP/1.1 101")) resolve();
+				reply += data.toString("latin1");
+				if (reply.startsWith("HTTP/1.1 101")) resolve();
 			});
 		});
 		socket.write(
@@ -230,7 +236,7 @@ describe("websocket handler failures", () => {
 				"",
 			].join("\r\n"),
 		);
-		return { socket, closed, upgraded };
+		return { socket, closed, upgraded, reply: () => reply };
 	};
 
 	const connection = async () => {
@@ -256,6 +262,7 @@ describe("websocket handler failures", () => {
 		setupDockerContainerTerminalWebSocketServer(server);
 		setupTerminalWebSocketServer(server);
 		setupDockerStatsMonitoringSocketServer(server);
+		closeUnknownUpgradePaths(server, { dev: false });
 		await new Promise<void>((resolve) => {
 			server.listen(0, "127.0.0.1", () => resolve());
 		});
@@ -430,13 +437,136 @@ describe("websocket handler failures", () => {
 			expect(reason).toBe(`Error: ${"x".repeat(116)}`);
 		}, 5000);
 	});
+
+	describe("upgrade to a path no server handles", () => {
+		const host = () => `127.0.0.1:${port}`;
+
+		const restart = async (setup: (next: http.Server) => void) => {
+			await new Promise<void>((resolve) => server.close(() => resolve()));
+			server = http.createServer();
+			setup(server);
+			await new Promise<void>((resolve) => {
+				server.listen(0, "127.0.0.1", () => resolve());
+			});
+			port = (server.address() as AddressInfo).port;
+		};
+
+		it.each([
+			"/no-such-socket",
+			"/terminal/",
+			"/terminal/extra",
+			"/",
+			"/_next/hmr",
+			"/_next/webpack-hmr",
+		])("answers 404 and closes %s", async (target) => {
+			const { closed, reply } = rawUpgrade(target, host());
+
+			await closed;
+			expect(reply()).toMatch(/^HTTP\/1\.1 404 /);
+		});
+
+		it("leaves /_next/ to Next's own listener in dev", async () => {
+			await restart((next) => {
+				closeUnknownUpgradePaths(next, { dev: true });
+				const nextHotReload = new WebSocketServer({ noServer: true });
+				next.on("upgrade", (req, socket, head) => {
+					if (req.url === "/_next/hmr") {
+						nextHotReload.handleUpgrade(req, socket, head, () => {});
+					}
+				});
+			});
+
+			const hmr = rawUpgrade("/_next/hmr", host());
+			await hmr.upgraded;
+			const unknown = rawUpgrade("/no-such-socket", host());
+			await unknown.closed;
+
+			expect(unknown.reply()).toMatch(/^HTTP\/1\.1 404 /);
+			expect(hmr.socket.destroyed).toBe(false);
+		});
+
+		it("closes the stats path when its server is not set up, as in the cloud", async () => {
+			vi.resetModules();
+			const connection = await import("../../server/wss/connection");
+			const { setupTerminalWebSocketServer: setupTerminal } = await import(
+				"../../server/wss/terminal"
+			);
+			await restart((next) => {
+				setupTerminal(next);
+				connection.closeUnknownUpgradePaths(next, { dev: false });
+			});
+
+			const stats = rawUpgrade(
+				"/listen-docker-stats-monitoring?appName=web",
+				host(),
+			);
+			await stats.closed;
+			expect(stats.reply()).toMatch(/^HTTP\/1\.1 404 /);
+
+			await rawUpgrade(TERMINAL, host()).upgraded;
+		});
+
+		it("survives a client resetting the connection during the answer", () => {
+			const socket = new PassThrough();
+
+			server.emit(
+				"upgrade",
+				{ url: "/no-such-socket", headers: { host: "127.0.0.1" } },
+				socket,
+				Buffer.alloc(0),
+			);
+
+			expect(() =>
+				socket.emit("error", new Error("read ECONNRESET")),
+			).not.toThrow();
+		});
+	});
 });
 
 describe("websocket server sources", () => {
-	const dir = path.resolve(__dirname, "../../server/wss");
+	const root = path.resolve(__dirname, "../../server");
+	const dir = path.join(root, "wss");
 	const sources = readdirSync(dir)
 		.filter((file) => file.endsWith(".ts") && file !== "connection.ts")
 		.map((file) => [file, readFileSync(path.join(dir, file), "utf8")] as const);
+	const servers = sources.filter(([, source]) =>
+		source.includes("new WebSocketServer("),
+	);
+	const declaredPath = (source: string) =>
+		source.match(/\bpath: "([^"]+)"/)?.[1];
+
+	it("runs the socket tests above on every path a server declares", () => {
+		expect(servers.map(([, source]) => declaredPath(source)).sort()).toEqual(
+			SOCKETS.map(([socket]) => socket.split("?")[0]).sort(),
+		);
+	});
+
+	it.each(servers)("%s registers the path it compares", (_file, source) => {
+		const compared = [...source.matchAll(/pathname === "([^"]+)"/g)]
+			.map((match) => match[1])
+			.filter((pathname) => !pathname?.startsWith("/_next/"));
+
+		expect(compared).toEqual([declaredPath(source)]);
+		expect(source).toMatch(/\bon(Json)?WebSocketConnection\(wss/);
+	});
+
+	it("creates no websocket server outside server/wss", () => {
+		const outside = readdirSync(root, { encoding: "utf8", recursive: true })
+			.filter((file) => file.endsWith(".ts") && !file.startsWith("wss/"))
+			.filter((file) =>
+				/new WebSocketServer\(|\.on\(\s*"upgrade"/.test(
+					readFileSync(path.join(root, file), "utf8"),
+				),
+			);
+
+		expect(outside).toEqual([]);
+	});
+
+	it("server.ts closes upgrades no server handles", () => {
+		expect(readFileSync(path.join(root, "server.ts"), "utf8")).toContain(
+			"closeUnknownUpgradePaths(server, { dev })",
+		);
+	});
 
 	it.each(sources)("%s goes through the guarded helpers", (_file, source) => {
 		expect(source).not.toMatch(/\.on\(\s*"connection"/);
