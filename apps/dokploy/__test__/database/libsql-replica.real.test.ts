@@ -7,6 +7,7 @@ import {
 	type LibsqlNested,
 } from "@dokploy/server/utils/databases/libsql";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { buildLibsqlUrl } from "@/lib/database-connection-url";
 
 const execFileAsync = promisify(execFile);
 
@@ -89,12 +90,8 @@ const fixture = (
 };
 
 // The string the panel shows as a primary's Internal Replication Connection URL.
-const replicationUrl = ({
-	appName,
-	databaseUser,
-	databasePassword,
-}: LibsqlNested) =>
-	`http://${encodeURIComponent(databaseUser)}:${encodeURIComponent(databasePassword)}@${appName}:5001`;
+const replicationUrl = (libsql: LibsqlNested) =>
+	buildLibsqlUrl(libsql, { host: libsql.appName, port: 5001 });
 
 const replicaOf = (
 	primary: LibsqlNested,
