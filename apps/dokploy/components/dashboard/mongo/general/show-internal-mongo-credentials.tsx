@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildInternalMongoUrl } from "@/lib/mongo-connection-url";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -62,7 +63,7 @@ export const ShowInternalMongoCredentials = ({ mongoId }: Props) => {
 								<Label>Internal Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={`mongodb://${data?.databaseUser}:${data?.databasePassword}@${data?.appName}:27017/?authSource=admin${data?.replicaSets ? "" : "&directConnection=true"}`}
+									value={data ? buildInternalMongoUrl(data) : ""}
 								/>
 							</div>
 						</div>
