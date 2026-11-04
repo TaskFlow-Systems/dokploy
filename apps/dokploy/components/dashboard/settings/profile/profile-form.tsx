@@ -1,6 +1,6 @@
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
 import { Loader2, Palette, User } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -26,11 +26,16 @@ import {
 import { Input } from "@/components/ui/input";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
-import { getAvatarType, isSolidColorAvatar } from "@/lib/avatar-utils";
+import {
+	getAvatarType,
+	getGravatarUrl,
+	isSolidColorAvatar,
+} from "@/lib/avatar-utils";
 import { generateSHA256Hash, getFallbackAvatarInitials } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { Configure2FA } from "./configure-2fa";
 import { Enable2FA } from "./enable-2fa";
+import { GravatarOption } from "./gravatar-option";
 import { ManagePasskeys } from "./manage-passkeys";
 
 const profileSchema = z.object({
@@ -76,12 +81,7 @@ export const ProfileForm = () => {
 	const [gravatarHash, setGravatarHash] = useState<string | null>(null);
 	const colorInputRef = useRef<HTMLInputElement>(null);
 
-	const availableAvatars = useMemo(() => {
-		if (gravatarHash === null) return randomImages;
-		return randomImages.concat([
-			`https://www.gravatar.com/avatar/${gravatarHash}`,
-		]);
-	}, [gravatarHash]);
+	const gravatarUrl = gravatarHash ? getGravatarUrl(gravatarHash) : null;
 
 	const form = useForm({
 		defaultValues: {
@@ -393,7 +393,12 @@ export const ProfileForm = () => {
 																		/>
 																	</FormLabel>
 																</FormItem>
-																{availableAvatars.map((image) => (
+																<GravatarOption
+																	key="gravatar"
+																	value={field.value}
+																	gravatarUrl={gravatarUrl}
+																/>
+																{randomImages.map((image) => (
 																	<FormItem key={image}>
 																		<FormLabel className="[&:has([data-state=checked])>img]:border-primary [&:has([data-state=checked])>img]:border [&:has([data-state=checked])>img]:p-px cursor-pointer">
 																			<FormControl>
@@ -415,6 +420,13 @@ export const ProfileForm = () => {
 																))}
 															</RadioGroup>
 														</FormControl>
+														{gravatarUrl && (
+															<FormDescription>
+																The @ option uses your Gravatar. Choosing it
+																makes your browser contact gravatar.com, which
+																receives a hash of your email.
+															</FormDescription>
+														)}
 														<FormMessage />
 													</FormItem>
 												)}

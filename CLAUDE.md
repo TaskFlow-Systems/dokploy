@@ -21,6 +21,10 @@ A deployment's log stays where it was written. Reads and single removals find th
 
 `replicaSets: true` replaces the image entrypoint with the script in `packages/server/src/utils/databases/mongo.ts`, so `MONGO_INITDB_ROOT_*` do nothing there and the script itself runs `mongod --auth --keyFile`. The key file is generated at `/data/db/.dokploy-keyfile`, in the data volume, so it goes with the data through a volume backup or a rebuild. Credentials reach the script through `DOKPLOY_DB_USER` and `DOKPLOY_DB_PASSWORD` in Env, never through its text. Data without a key file gets one more start without access control on the next deploy, which makes the stored user and password valid, and then restarts with it; nothing changes for a running database until that deploy. `mongo-replica-set-auth.real.test.ts` runs all of this on real Docker, including the old script as the starting point. It uses `mongo:7`: `mongod` 8 refuses to start on kernels from 6.19 up to 7.0.13 (SERVER-121912), and GitHub-hosted runners have 7.0.0.
 
+## Gravatar
+
+The Profile page contacts `www.gravatar.com` only after the user picks the @ option or when the account's image is already a Gravatar, because the request carries a hash of the user's email. `GravatarOption` (`components/dashboard/settings/profile/gravatar-option.tsx`) renders the `<img>` only then; computing the hash in `profile-form.tsx` stays in the browser. `__test__/settings/gravatar-on-request.test.ts` fails if an upstream merge puts the URL back into the avatar list.
+
 ## Service page tabs
 
 The eight pages under `pages/dashboard/project/[projectId]/environment/[environmentId]/services/` load each tab's code on first open through `lazyTab` (`components/dashboard/shared/lazy-service-tabs.tsx`), and each `TabsTrigger` starts that load with `onPointerEnter={Tab.preload}`. A tab with several components gets one module (`show-*-general-tab`, `show-*-advanced-tab`), so it appears at once. What the page header shows stays a normal import. `DashboardLayout` renders nothing until mounted, so the dashboard has no server-rendered content. After an upstream merge, check that no tab came back as a normal import.

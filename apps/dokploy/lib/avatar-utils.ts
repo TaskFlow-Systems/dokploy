@@ -13,6 +13,16 @@ export function isSolidColorAvatar(value?: string | null) {
 	);
 }
 
+const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar/";
+
+export function getGravatarUrl(hash: string) {
+	return `${GRAVATAR_BASE_URL}${hash}`;
+}
+
+export function isGravatarAvatar(value?: string | null): value is string {
+	return value?.startsWith(GRAVATAR_BASE_URL) ?? false;
+}
+
 /**
  * Gets the avatar type for form selection (RadioGroup value).
  *
