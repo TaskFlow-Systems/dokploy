@@ -401,6 +401,15 @@ type KeyPatterns = {
 	afterAuthorization: RegExp[];
 };
 
+// This rule also runs over whole command output, so it has to stay linear on a
+// long line without spaces. A quoted key checks once that a value follows, or it
+// would rescan the string from every keyword inside it. A bare key starts at its
+// keyword: the keyword begins with a word character and a separator is not one,
+// so a boundary always exists before it and scanning for one proves nothing.
+// Only what follows the keyword is bounded; 128 is well past the longest key
+// found in real configs and logs.
+const VALUE_AFTER_KEY = String.raw`\s*:\s*[^\s,}\]]`;
+
 const DEFAULT_KEY_PATTERNS: KeyPatterns = {
 	beforeAuthorization: [
 		new RegExp(
@@ -414,7 +423,7 @@ const DEFAULT_KEY_PATTERNS: KeyPatterns = {
 	],
 	afterAuthorization: [
 		new RegExp(
-			`((?:"[^"]*${SENSITIVE_KEY_PATTERN}[^"]*"|'[^']*${SENSITIVE_KEY_PATTERN}[^']*'|\\b[^\\s:,{]*${SENSITIVE_KEY_PATTERN}[^\\s:,{]*\\b)\\s*:\\s*)("[^"]*"|'[^']*'|[^\\s,}\\]]+)`,
+			`((?:"(?=[^"]*"${VALUE_AFTER_KEY})[^"]*${SENSITIVE_KEY_PATTERN}[^"]*"|'(?=[^']*'${VALUE_AFTER_KEY})[^']*${SENSITIVE_KEY_PATTERN}[^']*'|${SENSITIVE_KEY_PATTERN}[^\\s:,{]{0,128}\\b)\\s*:\\s*)("[^"]*"|'[^']*'|[^\\s,}\\]]+)`,
 			"gi",
 		),
 		// Negated flags such as pg_dump's `--no-password` take no value, so the
@@ -665,12 +674,15 @@ export function redactSensitiveText(
 	// mysql/mariadb clients take the password glued to -p. A separate word after
 	// -p is not a password, uppercase -P is the port, and -p of other tools
 	// (docker -p, ssh -p, compose -p) is a port or project name.
+	// A client word without a glued password takes the rest of its command, so
+	// the next client word there is not scanned again: it would find nothing.
 	redacted = redacted.replace(
 		new RegExp(
-			String.raw`(\b(?:mysql|mariadb)[a-z-]*(?:\\.|[^\n;&|\\])*?\s-p)(${SHELL_VALUE_PATTERN})`,
+			String.raw`(\b(?:mysql|mariadb)[a-z-]*(?:\\.|[^\n;&|\\])*?\s-p)(${SHELL_VALUE_PATTERN})|\b(?:mysql|mariadb)(?:[^\n;&|\\]+|\\.)*`,
 			"g",
 		),
-		hideRest,
+		(match, prefix?: string) =>
+			prefix === undefined ? match : hideRest(match, prefix),
 	);
 
 	redacted = redacted.replace(
