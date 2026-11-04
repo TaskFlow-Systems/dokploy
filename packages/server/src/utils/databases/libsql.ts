@@ -20,6 +20,45 @@ export type LibsqlNested = InferResultType<
 		environment: { with: { project: true } };
 	}
 >;
+
+const PRIMARY_COMMAND =
+	"sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000";
+
+// No --grpc-listen-addr: sqld refuses it together with a primary URL.
+// A replica deployed while its primary URL never reached sqld ran as a primary of
+// its own, and sqld overwrites such data without a word on its first request after
+// reaching the real primary. Only a node that has replicated has client_wal_index.
+const REPLICA_COMMAND = `if ls iku.db/dbs/*/data >/dev/null 2>&1 && ! ls iku.db/dbs/*/client_wal_index >/dev/null 2>&1; then
+	kept="iku.db.before-replica-$(date +%s)"
+	mv iku.db "$kept" || exit 1
+	echo "This node's own data is kept in $kept: sqld would overwrite it with the primary's."
+fi
+exec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --admin-listen-addr 0.0.0.0:5000`;
+
+// Each of these would start a node that never replicates while the deployment
+// reports success, so it fails here, with the running service left as it is.
+const assertReplicaCanConnect = ({
+	sqldPrimaryUrl,
+	command,
+}: Pick<LibsqlNested, "sqldPrimaryUrl" | "command">) => {
+	if (!sqldPrimaryUrl) {
+		throw new Error("A libSQL replica needs the URL of its primary");
+	}
+	// sqld exits at once, and Swarm rolls the update back.
+	if (command?.includes("--grpc-listen-addr")) {
+		throw new Error(
+			"A libSQL replica cannot listen for gRPC: remove --grpc-listen-addr from the custom command",
+		);
+	}
+	// sqld stays up and every request hangs. The field's placeholder used to suggest
+	// https, and only a custom command can pass the TLS flags.
+	if (!command && sqldPrimaryUrl.startsWith("https://")) {
+		throw new Error(
+			"The default libSQL command connects to its primary without TLS: use the primary's http:// Internal Replication Connection URL, or a custom command with the --primary-grpc-tls flags",
+		);
+	}
+};
+
 export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 	const libsql = await withResolvedVaultRefs(rawLibsql);
 	const {
@@ -41,14 +80,26 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 		enableNamespaces,
 	} = libsql;
 
+	const isReplica = sqldNode === "replica";
+	if (isReplica) {
+		assertReplicaCanConnect(libsql);
+	}
+
 	const basicAuth = Buffer.from(
 		`${databaseUser}:${databasePassword}`,
 		"utf-8",
 	).toString("base64");
 
+	// sqld reads SQLD_PRIMARY_GRPC_URL by itself, so this free text stays out of the
+	// shell and a custom command gets it too. Only the image's entrypoint reads
+	// SQLD_PRIMARY_URL: an empty command runs it, and a custom command may refer to it.
 	const defaultLibsqlEnv = `SQLD_NODE="${sqldNode}"\nSQLD_HTTP_AUTH="basic:${basicAuth}"${
 		env ? `\n${env}` : ""
-	}${sqldNode === "replica" ? `\nSQLD_PRIMARY_URL="${sqldPrimaryUrl}"` : ""}`;
+	}${
+		isReplica
+			? `\nSQLD_PRIMARY_URL="${sqldPrimaryUrl}"\nSQLD_PRIMARY_GRPC_URL="${sqldPrimaryUrl}"`
+			: ""
+	}`;
 
 	const resolvedNetworks = await resolveServiceNetworks(libsql);
 
@@ -82,9 +133,7 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 
 	const docker = await getRemoteDocker(libsql.serverId);
 
-	let finalCommand =
-		command ??
-		"sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000";
+	let finalCommand = command ?? (isReplica ? REPLICA_COMMAND : PRIMARY_COMMAND);
 	if (enableNamespaces) {
 		finalCommand += " --enable-namespaces";
 	}

@@ -196,9 +196,13 @@ export const ShowCustomCommand = ({ id, type }: Props) => {
 											<FormControl>
 												<Input
 													placeholder={
-														type === "libsql"
-															? "sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000"
-															: "Custom command"
+														type !== "libsql"
+															? "Custom command"
+															: data &&
+																	"sqldNode" in data &&
+																	data.sqldNode === "replica"
+																? "sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --admin-listen-addr 0.0.0.0:5000"
+																: "sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000"
 													}
 													{...field}
 												/>
