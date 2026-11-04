@@ -1585,7 +1585,13 @@ type SwarmServiceSpec = {
 
 type SwarmTask = {
 	CreatedAt?: string;
+	Version?: { Index?: number };
 	Status?: { Err?: string; Timestamp?: string };
+};
+
+type SwarmServiceState = {
+	UpdatedAt?: string;
+	Version?: { Index?: number };
 };
 
 const REVERTED_OUTCOME =
@@ -1654,6 +1660,28 @@ const firstTaskError = (tasks: SwarmTask[], updateStartedAt?: string) => {
 		)[0]?.Status?.Err;
 };
 
+// How long a task had been running when its service last changed, by the cluster's
+// own clocks, so the panel's clock plays no part. This is what spares a redeploy that
+// changes nothing from watching a task that has been up for days, and a task that
+// passed Swarm's watch from being watched again. The timestamp comes from the task's
+// node and UpdatedAt from a manager, so a node with a slow clock could make a new task
+// look old. The raft indexes order the two changes without any clock and rule that out.
+const runningBeforeServiceChangeMs = (
+	task: SwarmTask,
+	service: SwarmServiceState,
+) => {
+	const taskChangedSince =
+		(task.Version?.Index ?? 0) >= (service.Version?.Index ?? 0);
+	if (taskChangedSince) {
+		return 0;
+	}
+	return Math.max(
+		0,
+		Date.parse(service.UpdatedAt ?? "") -
+			Date.parse(task.Status?.Timestamp ?? ""),
+	);
+};
+
 export const waitForSwarmServiceConvergence = async (
 	appName: string,
 	serverId?: string | null,
@@ -1663,22 +1691,38 @@ export const waitForSwarmServiceConvergence = async (
 	const remoteDocker = await getRemoteDocker(serverId);
 	const service = remoteDocker.getService(appName);
 	const startedAt = Date.now();
+	const firstSeenRunningAt = new Map<string, number>();
 	let timeoutMs = options?.timeoutMs;
 
 	while (true) {
 		const info = await service.inspect();
 		timeoutMs ??= getSwarmConvergenceTimeoutMs(info.Spec);
 		const desiredTasksCount = info.Spec?.Mode?.Replicated?.Replicas ?? 1;
+		const monitorMs =
+			(info.Spec?.UpdateConfig?.Monitor ?? DOCKER_DEFAULT_MONITOR_NS) / 1e6;
 
 		const tasks = await remoteDocker.listTasks({
 			filters: JSON.stringify({ service: [appName] }),
 		});
+		const now = Date.now();
 		const currentTasks = tasks.filter(
 			(task) => task.DesiredState === "running",
 		);
-		const runningTasksCount = currentTasks.filter(
-			(task) => task.Status?.State === "running",
-		).length;
+		// Swarm watches a task for `Monitor` only during an update, so nothing watches
+		// a new service or a new replica, and a restart loop can show a running task on
+		// any poll. A restart always makes a new task, so the same ID staying up that
+		// long is the check Swarm would have made.
+		const settledTasksCount = currentTasks.filter((task) => {
+			if (task.Status?.State !== "running") {
+				return false;
+			}
+			const firstSeenAt = firstSeenRunningAt.get(task.ID) ?? now;
+			firstSeenRunningAt.set(task.ID, firstSeenAt);
+			return (
+				now - firstSeenAt + runningBeforeServiceChangeMs(task, info) >=
+				monitorMs
+			);
+		}).length;
 		const updateState: string | undefined = info.UpdateStatus?.State;
 		const taskError = firstTaskError(tasks, info.UpdateStatus?.StartedAt);
 
@@ -1693,7 +1737,7 @@ export const waitForSwarmServiceConvergence = async (
 			);
 		}
 
-		const elapsedMs = Date.now() - startedAt;
+		const elapsedMs = now - startedAt;
 		// `service.update` clears UpdateStatus, and Swarm sets `updating` about
 		// 50 ms later only if a task has to change: a fresh service, an update
 		// with nothing to roll out and a scale change never get a state. Until
@@ -1709,14 +1753,14 @@ export const waitForSwarmServiceConvergence = async (
 			updateState === "completed" ||
 			(updateState === undefined && noRolloutPending);
 
-		if (rolloutFinished && runningTasksCount >= desiredTasksCount) {
+		if (rolloutFinished && settledTasksCount >= desiredTasksCount) {
 			return;
 		}
 
 		if (elapsedMs >= timeoutMs) {
 			const lastState = currentTasks[0]?.Status?.State ?? "unknown";
 			throw new ServiceConvergenceError(
-				`Service ${appName} did not converge within ${timeoutMs}ms: ${runningTasksCount}/${desiredTasksCount} tasks running${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""})`,
+				`Service ${appName} did not converge within ${timeoutMs}ms: ${settledTasksCount}/${desiredTasksCount} tasks stayed running for ${monitorMs / 1000} s${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""})`,
 			);
 		}
 

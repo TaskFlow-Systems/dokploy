@@ -2,7 +2,7 @@ import {
 	getSwarmConvergenceTimeoutMs,
 	waitForSwarmServiceConvergence,
 } from "@dokploy/server/utils/docker/utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { inspect, listTasks } = vi.hoisted(() => ({
 	inspect: vi.fn(),
@@ -19,17 +19,27 @@ vi.mock("@dokploy/server/utils/servers/remote-docker", () => ({
 const UPDATE_STARTED_AT = "2026-11-04T10:00:00.500000000Z";
 const SECOND_NS = 1e9;
 
-const service = (state?: string, forceUpdate = 1) => ({
+const SERVICE_VERSION = 100;
+const NEWER_THAN_SERVICE = 101;
+
+const service = (state?: string, forceUpdate = 1, monitorNs?: number) => ({
+	UpdatedAt: "2026-11-04T10:00:10.000000000Z",
+	Version: { Index: SERVICE_VERSION },
 	Spec: {
 		Mode: { Replicated: { Replicas: 1 } },
 		TaskTemplate: { ForceUpdate: forceUpdate },
+		UpdateConfig: { Monitor: monitorNs },
 	},
 	...(state && {
 		UpdateStatus: { State: state, StartedAt: UPDATE_STARTED_AT },
 	}),
 });
 
+// By default a task that went up 8 s before the service last changed, so it has
+// done its time. A task of the current deployment passes `version`.
 const task = (fields: {
+	id?: string;
+	version?: number;
 	state: string;
 	desired?: string;
 	err?: string;
@@ -37,6 +47,8 @@ const task = (fields: {
 	createdAt?: string;
 	timestamp?: string;
 }) => ({
+	ID: fields.id ?? "task-1",
+	Version: { Index: fields.version ?? 50 },
 	CreatedAt: fields.createdAt ?? "2026-11-04T10:00:01.000000000Z",
 	DesiredState: fields.desired ?? "running",
 	Spec: { ForceUpdate: fields.forceUpdate ?? 1 },
@@ -158,7 +170,7 @@ describe("waitForSwarmServiceConvergence", () => {
 		);
 
 		expect(message).toContain("did not converge within 5ms");
-		expect(message).toContain("0/1 tasks running");
+		expect(message).toContain("0/1 tasks stayed running for 5 s");
 		expect(message).toContain("task error: task: exit (3)");
 		expect(message).not.toContain("still updating");
 	});
@@ -185,6 +197,149 @@ describe("waitForSwarmServiceConvergence", () => {
 		);
 
 		expect(message).toContain("did not converge within 2100ms");
+	});
+
+	describe("a task that Swarm did not watch", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		// The wait counts on Date.now, which rounds to whole milliseconds, and the
+		// clock tests below replace Date.now, so these use another clock with a margin.
+		const secondsSince = (startedAt: number) =>
+			(performance.now() - startedAt) / 1000;
+		const AT_LEAST_WATCHED_S = 2.4;
+		const NOT_WATCHED_AGAIN_S = 4;
+
+		it("trusts a new task only after it stayed up for Monitor", async () => {
+			inspect.mockResolvedValue(service(undefined, 1, 2.5 * SECOND_NS));
+			listTasks.mockResolvedValue([
+				task({ state: "running", version: NEWER_THAN_SERVICE }),
+			]);
+
+			const startedAt = performance.now();
+			await waitForSwarmServiceConvergence("app", null, { intervalMs: 50 });
+
+			expect(secondsSince(startedAt)).toBeGreaterThanOrEqual(
+				AT_LEAST_WATCHED_S,
+			);
+		});
+
+		it("does not trust a restart loop that shows a running task on every poll", async () => {
+			let restarts = 0;
+			inspect.mockResolvedValue(service(undefined, 1, 0.2 * SECOND_NS));
+			listTasks.mockImplementation(async () => {
+				restarts += 1;
+				return [
+					task({
+						id: `task-${restarts}`,
+						state: "running",
+						version: NEWER_THAN_SERVICE + restarts,
+					}),
+					task({
+						id: `task-${restarts - 1}`,
+						state: "failed",
+						desired: "shutdown",
+						err: "task: non-zero exit (3)",
+					}),
+				];
+			});
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 2_300,
+					intervalMs: 50,
+				}),
+			);
+
+			expect(message).toContain("did not converge within 2300ms");
+			expect(message).toContain("0/1 tasks stayed running for 0.2 s");
+			expect(message).toContain("task error: task: non-zero exit (3)");
+		});
+
+		it("does not take a completed update for done while its task keeps restarting", async () => {
+			let restarts = 0;
+			inspect.mockResolvedValue(service("completed", 1, 0.2 * SECOND_NS));
+			listTasks.mockImplementation(async () => {
+				restarts += 1;
+				return [
+					task({ id: `task-${restarts}`, state: "running", version: 101 }),
+				];
+			});
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 400,
+					intervalMs: 50,
+				}),
+			);
+
+			expect(message).toContain("0/1 tasks stayed running");
+			expect(message).not.toContain("still updating");
+		});
+
+		it("watches only the rest of Monitor for a task that went up before the service changed", async () => {
+			inspect.mockResolvedValue(service("completed"));
+			listTasks.mockResolvedValue([
+				task({
+					state: "running",
+					timestamp: "2026-11-04T10:00:06.000000000Z",
+				}),
+			]);
+
+			const startedAt = performance.now();
+			await waitForSwarmServiceConvergence("app", null, { intervalMs: 50 });
+
+			expect(secondsSince(startedAt)).toBeGreaterThanOrEqual(0.9);
+			expect(secondsSince(startedAt)).toBeLessThan(NOT_WATCHED_AGAIN_S);
+		});
+
+		it("gives no credit to a new task on a node whose clock is behind", async () => {
+			inspect.mockResolvedValue(service(undefined, 1, 2.5 * SECOND_NS));
+			listTasks.mockResolvedValue([
+				task({
+					state: "running",
+					version: NEWER_THAN_SERVICE,
+					timestamp: "2026-11-04T09:00:00.000000000Z",
+				}),
+			]);
+
+			const startedAt = performance.now();
+			await waitForSwarmServiceConvergence("app", null, { intervalMs: 50 });
+
+			expect(secondsSince(startedAt)).toBeGreaterThanOrEqual(
+				AT_LEAST_WATCHED_S,
+			);
+		});
+
+		it.each([
+			["ahead of", 3_600_000],
+			["behind", -3_600_000],
+		])(
+			"does not depend on the panel's clock being %s the server's",
+			async (_, offsetMs) => {
+				const realNow = Date.now;
+				vi.spyOn(Date, "now").mockImplementation(() => realNow() + offsetMs);
+
+				inspect.mockResolvedValue(service());
+				listTasks.mockResolvedValue([task({ state: "running" })]);
+				const oldTaskStartedAt = performance.now();
+				await waitForSwarmServiceConvergence("app", null, { intervalMs: 50 });
+				expect(secondsSince(oldTaskStartedAt)).toBeLessThan(
+					NOT_WATCHED_AGAIN_S,
+				);
+
+				inspect.mockResolvedValue(service(undefined, 1, 2.5 * SECOND_NS));
+				listTasks.mockResolvedValue([
+					task({ state: "running", version: NEWER_THAN_SERVICE }),
+				]);
+				const newTaskStartedAt = performance.now();
+				await waitForSwarmServiceConvergence("app", null, { intervalMs: 50 });
+				expect(secondsSince(newTaskStartedAt)).toBeGreaterThanOrEqual(
+					AT_LEAST_WATCHED_S,
+				);
+			},
+		);
 	});
 });
 
