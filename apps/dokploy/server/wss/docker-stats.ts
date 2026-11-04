@@ -12,6 +12,11 @@ import { quote } from "shell-quote";
 import { WebSocketServer } from "ws";
 import { assertContainerMetricsServiceAccess } from "@/server/api/utils/monitoring-access";
 import { canAccessDockerOverWss, isServiceContainerName } from "./authorize";
+import {
+	onJsonWebSocketConnection,
+	readUpgradePathname,
+	toCloseReason,
+} from "./connection";
 import { findServiceAppName } from "./container-ownership";
 import { verifyWebSocketOrigin } from "./origin";
 import { canAccessMonitoringWebSocket } from "./server-permission";
@@ -73,7 +78,7 @@ export const setupDockerStatsMonitoringSocketServer = (
 	});
 
 	server.on("upgrade", (req, socket, head) => {
-		const { pathname } = new URL(req.url || "", `http://${req.headers.host}`);
+		const pathname = readUpgradePathname(req, socket);
 
 		if (pathname === "/_next/webpack-hmr") {
 			return;
@@ -85,7 +90,7 @@ export const setupDockerStatsMonitoringSocketServer = (
 		}
 	});
 
-	wssTerm.on("connection", async (ws, req) => {
+	onJsonWebSocketConnection(wssTerm, async (ws, req) => {
 		const url = new URL(req.url || "", `http://${req.headers.host}`);
 
 		if (IS_CLOUD) {
@@ -236,7 +241,7 @@ export const setupDockerStatsMonitoringSocketServer = (
 				);
 			} catch (error) {
 				// @ts-expect-error
-				ws.close(4000, `Error: ${error.message}`);
+				ws.close(4000, toCloseReason(`Error: ${error.message}`));
 			}
 		}, 1300);
 
