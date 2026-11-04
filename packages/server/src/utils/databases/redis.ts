@@ -1,5 +1,6 @@
 import type { InferResultType } from "@dokploy/server/types/with";
-import type { CreateServiceOptions } from "dockerode";
+import type { ContainerSpec, CreateServiceOptions } from "dockerode";
+import { parse } from "dotenv";
 import { resolveServiceNetworks } from "../../services/network";
 import { buildDokployLabels } from "../docker/dokploy-labels";
 import {
@@ -21,10 +22,54 @@ import { withResolvedVaultRefs } from "../vault";
 const REDIS_START_SCRIPT =
 	'exec redis-server --requirepass "${DOKPLOY_DB_PASSWORD:?no password to start Redis with}" --port 6379';
 
+const OLD_REDIS_START_PREFIX = "redis-server --requirepass ";
+
 export type RedisNested = InferResultType<
 	"redis",
 	{ mounts: true; environment: { with: { project: true } } }
 >;
+
+// The custom command form saves an empty string and an empty list when it is
+// left empty, and neither is an override.
+export const usesDefaultRedisStart = ({
+	command,
+	args,
+}: Pick<RedisNested, "command" | "args">) => !command && !args?.length;
+
+export const hasRedisStartScript = ({ Args }: ContainerSpec) =>
+	Args?.[1] === REDIS_START_SCRIPT;
+
+export const passwordInOldRedisStart = ({ Args }: ContainerSpec) =>
+	Args?.[1]?.startsWith(OLD_REDIS_START_PREFIX)
+		? Args[1].slice(OLD_REDIS_START_PREFIX.length)
+		: undefined;
+
+// Only the password lines change, so a password change does not also apply env
+// edits that wait for the next deploy. REDIS_PASSWORD set in the service env
+// stays, as it does on a deploy.
+export const withRedisPassword = (
+	spec: ContainerSpec,
+	serviceEnv: string | null,
+	password: string,
+): ContainerSpec => {
+	const keepsRedisPassword = "REDIS_PASSWORD" in parse(serviceEnv ?? "");
+	return {
+		...spec,
+		Command: ["/bin/sh"],
+		Args: ["-c", REDIS_START_SCRIPT],
+		Env: [
+			...(spec.Env ?? [])
+				.filter((line) => !line.startsWith("DOKPLOY_DB_PASSWORD="))
+				.map((line) =>
+					!keepsRedisPassword && line.startsWith("REDIS_PASSWORD=")
+						? `REDIS_PASSWORD=${password}`
+						: line,
+				),
+			`DOKPLOY_DB_PASSWORD=${password}`,
+		],
+	};
+};
+
 export const buildRedis = async (rawRedis: RedisNested) => {
 	const redis = await withResolvedVaultRefs(rawRedis);
 	const {
@@ -45,9 +90,7 @@ export const buildRedis = async (rawRedis: RedisNested) => {
 	const defaultRedisEnv = `REDIS_PASSWORD="${databasePassword}"${
 		env ? `\n${env}` : ""
 	}`;
-	// The custom command form saves an empty string and an empty list when it is
-	// left empty, and neither is an override.
-	const usesDefaultStart = !command && !args?.length;
+	const usesDefaultStart = usesDefaultRedisStart(redis);
 
 	const resolvedNetworks = await resolveServiceNetworks(redis);
 

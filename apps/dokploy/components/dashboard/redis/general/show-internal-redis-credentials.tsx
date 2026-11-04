@@ -36,6 +36,7 @@ export const ShowInternalRedisCredentials = ({ redisId }: Props) => {
 										disabled
 									/>
 									<UpdateDatabasePassword
+										notice="Redis restarts with the new password, so its clients disconnect for a moment and need the new password to reconnect. A stopped Redis takes it at the next start. With a custom command, only the running Redis changes: nothing restarts, and the command decides the password after the next restart."
 										onUpdatePassword={async (newPassword) => {
 											await changePassword({
 												redisId,
