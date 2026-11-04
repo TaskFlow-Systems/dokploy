@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildRedisUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -60,7 +61,11 @@ export const ShowInternalRedisCredentials = ({ redisId }: Props) => {
 								<Label>Internal Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={`redis://default:${data?.databasePassword}@${data?.appName}:6379`}
+									value={
+										data
+											? buildRedisUrl(data, { host: data.appName, port: 6379 })
+											: ""
+									}
 								/>
 							</div>
 						</div>
