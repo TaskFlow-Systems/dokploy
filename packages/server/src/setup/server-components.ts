@@ -8,6 +8,7 @@ import {
 import { runSshCommand } from "./ssh-command";
 import {
 	buildTraefikCreateWithImage,
+	buildTraefikGraceTimeoutStep,
 	buildTraefikTlsMigrationStep,
 	TRAEFIK_VERSION,
 } from "./traefik-setup";
@@ -530,6 +531,7 @@ traefik_restore() {
 	fi
 	exit 1
 }
+${buildTraefikGraceTimeoutStep()}
 if [ "$traefik_existed" = 1 ] && [ "\${traefik_old_image%%@*}" = "traefik:v${TRAEFIK_VERSION}" ] && traefik_check_running && ! $SUDO_CMD grep -q '^[[:space:]]*httpChallenge:' /etc/dokploy/traefik/traefik.yml 2>/dev/null && ! $SUDO_CMD docker inspect -f '{{json .HostConfig.PortBindings}}' dokploy-traefik 2>/dev/null | grep -q '"80/tcp"'; then
 	echo "Traefik already runs traefik:v${TRAEFIK_VERSION}"
 else

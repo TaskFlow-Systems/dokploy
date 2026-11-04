@@ -70,6 +70,9 @@ describe("writeTraefikSetup", { timeout: 60_000 }, () => {
 		).toBeLessThan(
 			mocks.initializeStandaloneTraefik.mock.invocationCallOrder[0] ?? 0,
 		);
+		expect(mocks.execAsyncRemote.mock.calls[conversion]?.[1]).toContain(
+			"traefik_add_grace_timeout",
+		);
 		expect(mocks.initializeTraefikService).not.toHaveBeenCalled();
 	});
 
@@ -126,7 +129,7 @@ describe("writeTraefikSetup", { timeout: 60_000 }, () => {
 		const failure = writeTraefikSetup({ serverId: "server-1" });
 
 		await expect(failure).rejects.toThrow(
-			`Traefik config ${TRAEFIK_MAIN_CONFIG_PATH} could not be converted to tlsChallenge`,
+			`Traefik config ${TRAEFIK_MAIN_CONFIG_PATH} could not be updated`,
 		);
 		await expect(failure).rejects.toThrow(
 			`${TRAEFIK_MAIN_CONFIG_PATH}.bak-20261009000000`,

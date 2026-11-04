@@ -174,6 +174,23 @@ describe("initializeStandaloneTraefik", () => {
 		vi.restoreAllMocks();
 	});
 
+	it("starts the new container as soon as the old one has stopped", async () => {
+		const fake = fakeDocker();
+		mocks.getRemoteDocker.mockResolvedValue(fake.docker);
+
+		const result = initializeStandaloneTraefik();
+		await vi.advanceTimersByTimeAsync(0);
+
+		expect(fake.log).toEqual([
+			"rename old -> dokploy-traefik-previous",
+			"stop old",
+			"create new",
+			"start new",
+		]);
+		await vi.runAllTimersAsync();
+		await result;
+	});
+
 	it("keeps the old container until the new one stays up, then removes it", async () => {
 		const fake = fakeDocker();
 

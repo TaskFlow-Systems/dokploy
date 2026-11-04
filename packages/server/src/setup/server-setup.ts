@@ -11,6 +11,7 @@ import {
 } from "@dokploy/server/services/server";
 import {
 	buildProbeShieldInstallStep,
+	buildTraefikGraceTimeoutStep,
 	buildTraefikRunCommand,
 	buildTraefikTlsMigrationStep,
 	getDefaultMiddlewares,
@@ -703,6 +704,7 @@ export const createServerTraefikConfig = (
 	fi
 	if [ -f "${configPath}" ]; then
 		echo "Traefik config already exists ✅"
+${buildTraefikGraceTimeoutStep(configPath)}
 		if ${isSwarmWorker}; then
 			(
 				command -v flock > /dev/null && flock 9

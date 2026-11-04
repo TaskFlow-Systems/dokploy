@@ -34,6 +34,7 @@ import {
 	buildTraefikCreateWithImage,
 	buildTraefikRunCommand,
 	buildTraefikTlsMigrationStep,
+	TRAEFIK_GRACE_TIMEOUT,
 	TRAEFIK_VERSION,
 } from "@dokploy/server/setup/traefik-setup";
 import { describe, expect, it } from "vitest";
@@ -854,6 +855,31 @@ describe("buildComponentUpdateScript run order", { timeout: 60_000 }, () => {
 			expect(run.calls.some((call) => call.startsWith("docker create"))).toBe(
 				false,
 			);
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+	it(
+		"adds the grace timeout and leaves a Traefik that already runs the pinned image alone",
+		() => {
+			const run = runComponentScript(["traefik"], {
+				traefikConfig: `entryPoints:\n  websecure:\n    address: :443\n${TLS_CHALLENGE_CONFIG}`,
+				env: {
+					FAKE_OLD_IMAGE: `traefik:v${TRAEFIK_VERSION}`,
+					FAKE_PORT_BINDINGS: "{}",
+				},
+			});
+
+			expect(run.status).toBe(0);
+			expect(run.stdout).toContain(
+				`Traefik already runs traefik:v${TRAEFIK_VERSION}`,
+			);
+			expect(run.calls.some((call) => call.startsWith("docker stop"))).toBe(
+				false,
+			);
+			expect(run.traefikConfigFile).toContain(
+				`graceTimeOut: ${TRAEFIK_GRACE_TIMEOUT}`,
+			);
+			expect(run.traefikConfigFile).toContain("tlsChallenge: {}");
 		},
 		SPAWN_TEST_TIMEOUT_MS,
 	);

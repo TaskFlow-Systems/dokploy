@@ -57,6 +57,18 @@ export const buildTraefikCreateCommand = (version: string) =>
 
 export const TRAEFIK_MAIN_CONFIG_PATH = "/etc/dokploy/traefik/traefik.yml";
 
+// Traefik closes its listeners first and then waits this long for open connections, and
+// a WebSocket never finishes on its own, so with the default 10s any open one meant 10s
+// of refused connections on every host. Requests still running after this are cut.
+export const TRAEFIK_GRACE_TIMEOUT = "2s";
+
+// A new object each time: stringify writes one shared by two entry points as a YAML alias.
+const entryPointTransport = () => ({
+	lifeCycle: {
+		graceTimeOut: TRAEFIK_GRACE_TIMEOUT,
+	},
+});
+
 export const HTTP_CHALLENGE_TO_TLS_AWK = String.raw`/^[[:space:]]*httpChallenge:[[:space:]]*$/ {
 	match($0, /[^[:space:]]/)
 	indent = RSTART - 1
@@ -174,6 +186,144 @@ traefik_convert_acme_to_tls() {
 }
 traefik_convert_acme_to_tls`;
 
+// Line-based, so a hand-edited file keeps its comments and layout. Only ever adds lines,
+// and an entry point that already has lifeCycle stays as it is. Prints nothing and exits
+// 3 when there is nothing to add, 2 on a form it does not understand.
+const ADD_GRACE_TIMEOUT_AWK = String.raw`function indent_of(text) {
+	match(text, /[^ ]/)
+	return RSTART - 1
+}
+function ignorable(text) {
+	return text ~ /^[[:space:]]*(#.*)?$/
+}
+function next_content(from,    index_) {
+	for (index_ = from; index_ <= total; index_++) {
+		if (!ignorable(lines[index_])) return index_
+	}
+	return 0
+}
+function key_of(text) {
+	text = tolower(text)
+	sub(/^ +/, "", text)
+	return text
+}
+function pad(count,    text) {
+	text = ""
+	while (length(text) < count) text = text " "
+	return text
+}
+{
+	lines[NR] = $0
+	total = NR
+}
+END {
+	start = 0
+	for (i = 1; i <= total; i++) {
+		if (tolower(lines[i]) ~ /^entrypoints:[[:space:]]*(#.*)?$/) {
+			start = i
+			break
+		}
+		if (tolower(lines[i]) ~ /^entrypoints:/) exit 2
+	}
+	if (!start) exit 3
+	entry_indent = -1
+	entries = 0
+	changed = 0
+	for (i = start + 1; i <= total; i++) {
+		if (ignorable(lines[i])) continue
+		level = indent_of(lines[i])
+		if (level == 0) break
+		if (entry_indent < 0) entry_indent = level
+		if (level < entry_indent || lines[i] ~ /<</) exit 2
+		if (level > entry_indent) continue
+		if (lines[i] !~ /^ +"?[A-Za-z0-9_-]+"?:[[:space:]]*(#.*)?$/) exit 2
+		entries++
+		first = next_content(i + 1)
+		if (!first || indent_of(lines[first]) <= entry_indent) exit 2
+		body = indent_of(lines[first])
+		step = body - entry_indent
+		transport = 0
+		for (j = first; j <= total; j++) {
+			if (ignorable(lines[j])) continue
+			if (indent_of(lines[j]) <= entry_indent) break
+			if (indent_of(lines[j]) == body && key_of(lines[j]) ~ /^transport:/) {
+				transport = j
+				break
+			}
+		}
+		if (!transport) {
+			after[i] = pad(body) "transport:\n" pad(body + step) "lifeCycle:\n" pad(body + 2 * step) "graceTimeOut: ${TRAEFIK_GRACE_TIMEOUT}"
+			changed = 1
+			continue
+		}
+		if (key_of(lines[transport]) !~ /^transport:[[:space:]]*(#.*)?$/) exit 2
+		first = next_content(transport + 1)
+		if (!first || indent_of(lines[first]) <= body) exit 2
+		child = indent_of(lines[first])
+		has_life_cycle = 0
+		for (j = first; j <= total; j++) {
+			if (ignorable(lines[j])) continue
+			if (indent_of(lines[j]) <= body) break
+			if (indent_of(lines[j]) == child && key_of(lines[j]) ~ /^lifecycle:/) has_life_cycle = 1
+		}
+		if (has_life_cycle) continue
+		after[transport] = pad(child) "lifeCycle:\n" pad(child + step) "graceTimeOut: ${TRAEFIK_GRACE_TIMEOUT}"
+		changed = 1
+	}
+	if (!entries) exit 2
+	if (!changed) exit 3
+	for (i = 1; i <= total; i++) {
+		print lines[i]
+		if (i in after) print after[i]
+	}
+}
+`;
+
+// Traefik reads this file only when it starts, so this needs no restart and changes
+// nothing until the next one. The Traefik being stopped then still waits the old 10s;
+// the restart after that is the first short one. It fails only when the file is damaged,
+// so a Traefik that still holds a good config in memory is not replaced.
+export const buildTraefikGraceTimeoutStep = (
+	configPath = TRAEFIK_MAIN_CONFIG_PATH,
+) => `traefik_add_grace_timeout() {
+	local config="${configPath}"
+	local backup updated awk_status=0
+	if ! $SUDO_CMD test -f "$config"; then
+		return 0
+	fi
+	local manual="Traefik keeps waiting 10s on a restart; to change that, add transport.lifeCycle.graceTimeOut: ${TRAEFIK_GRACE_TIMEOUT} to each entry point by hand."
+	if ! updated="$(mktemp "\${TMPDIR:-/tmp}/traefik-grace.XXXXXX")"; then
+		echo "Warning: could not create a temporary file to update $config. $manual" >&2
+		return 0
+	fi
+	$SUDO_CMD awk '${ADD_GRACE_TIMEOUT_AWK}' "$config" > "$updated" || awk_status=$?
+	if [ "$awk_status" -ne 0 ]; then
+		rm -f "$updated"
+		if [ "$awk_status" -ne 3 ]; then
+			echo "Warning: the entry points in $config have a form that cannot be updated automatically, so it was left unchanged. $manual" >&2
+		fi
+		return 0
+	fi
+	backup="$config.bak-grace-$(date -u +%Y%m%d%H%M%S)"
+	if ! $SUDO_CMD cp -p "$config" "$backup"; then
+		rm -f "$updated"
+		echo "Warning: could not back up $config, so it was left unchanged. $manual" >&2
+		return 0
+	fi
+	if ! $SUDO_CMD tee "$config" < "$updated" >/dev/null; then
+		rm -f "$updated"
+		if $SUDO_CMD cp -p "$backup" "$config"; then
+			echo "Warning: could not write $config, so the previous config was restored from $backup. $manual" >&2
+			return 0
+		fi
+		echo "Error: could not write $config, and restoring it from $backup failed. Restore it from the backup before starting Traefik." >&2
+		return 1
+	fi
+	rm -f "$updated"
+	echo "Traefik will wait at most ${TRAEFIK_GRACE_TIMEOUT} on a stop, from the restart after next. Previous config saved to $backup"
+}
+traefik_add_grace_timeout`;
+
 export interface TraefikOptions {
 	env?: string[];
 	serverId?: string;
@@ -284,8 +434,8 @@ const recreateStandaloneTraefik = async ({
 			.remove({ force: true })
 			.catch(() => {});
 		await current.rename({ name: PREVIOUS_TRAEFIK_CONTAINER });
+		// Docker has released the published ports by the time stop returns.
 		await current.stop().catch(() => {});
-		await sleep(5000);
 	}
 
 	try {
@@ -573,9 +723,11 @@ export const getDefaultTraefikConfig = () => {
 		entryPoints: {
 			web: {
 				address: `:${TRAEFIK_PORT}`,
+				transport: entryPointTransport(),
 			},
 			websecure: {
 				address: `:${TRAEFIK_SSL_PORT}`,
+				transport: entryPointTransport(),
 				http3: {
 					advertisedPort: TRAEFIK_HTTP3_PORT,
 				},
@@ -631,9 +783,11 @@ export const getDefaultServerTraefikConfig = (withSwarmProvider = true) => {
 		entryPoints: {
 			web: {
 				address: `:${TRAEFIK_PORT}`,
+				transport: entryPointTransport(),
 			},
 			websecure: {
 				address: `:${TRAEFIK_SSL_PORT}`,
+				transport: entryPointTransport(),
 				http3: {
 					advertisedPort: TRAEFIK_HTTP3_PORT,
 				},
