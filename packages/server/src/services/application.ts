@@ -8,13 +8,16 @@ import {
 } from "@dokploy/server/db/schema";
 import { getAdvancedStats } from "@dokploy/server/monitoring/utils";
 import {
+	type ApplicationNested,
 	getBuildCommand,
 	mechanizeDockerContainer,
+	waitForApplicationRollout,
 } from "@dokploy/server/utils/builders";
 import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications/build-error";
 import { getBuildErrorMessage } from "@dokploy/server/utils/notifications/build-error-message";
 import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
 import {
+	appendToBuildLog,
 	createBuildRunner,
 	recordBuildFailure,
 } from "@dokploy/server/utils/process/build-process";
@@ -228,6 +231,27 @@ export const updateApplicationStatus = async (
 	return application;
 };
 
+// The service runs on `application.serverId`, the log stays on the server that
+// built the image.
+const rollOutApplication = async (
+	application: ApplicationNested,
+	logPath: string,
+	buildServerId: string | null,
+) => {
+	await mechanizeDockerContainer(application);
+	await appendToBuildLog(
+		buildServerId,
+		logPath,
+		"Waiting for Swarm to start the new version...",
+	);
+	await waitForApplicationRollout(application.appName, application.serverId);
+	await appendToBuildLog(
+		buildServerId,
+		logPath,
+		"The service runs the new version ✅",
+	);
+};
+
 export const deployApplication = async ({
 	applicationId,
 	titleLog = "Manual deployment",
@@ -285,7 +309,7 @@ export const deployApplication = async ({
 		);
 		await runBuildCommand(commandWithLog);
 
-		await mechanizeDockerContainer(application);
+		await rollOutApplication(application, deployment.logPath, serverId);
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
 
@@ -372,7 +396,7 @@ export const rebuildApplication = async ({
 			application.appName,
 		);
 		await runBuildCommand(commandWithLog);
-		await mechanizeDockerContainer(application);
+		await rollOutApplication(application, deployment.logPath, serverId);
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
 
@@ -386,6 +410,11 @@ export const rebuildApplication = async ({
 			environmentName: application.environment.name,
 		});
 	} catch (error) {
+		const errorMessage = await getBuildErrorMessage(
+			error,
+			deployment.logPath,
+			serverId,
+		);
 		await recordBuildFailure({
 			deploymentId: deployment.deploymentId,
 			logPath: deployment.logPath,
@@ -394,6 +423,16 @@ export const rebuildApplication = async ({
 		});
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updateApplicationStatus(applicationId, "error");
+
+		await sendBuildErrorNotifications({
+			projectName: application.environment.project.name,
+			applicationName: application.name,
+			applicationType: "application",
+			errorMessage,
+			buildLink,
+			organizationId: application.environment.project.organizationId,
+		});
+
 		throw error;
 	}
 
@@ -490,7 +529,7 @@ export const deployPreviewApplication = async ({
 				application.appName,
 			);
 			await runBuildCommand(commandWithLog);
-			await mechanizeDockerContainer(application);
+			await rollOutApplication(application, deployment.logPath, serverId);
 		}
 		const successComment = getIssueComment(
 			application.name,
@@ -506,6 +545,13 @@ export const deployPreviewApplication = async ({
 			previewStatus: "done",
 		});
 	} catch (error) {
+		await recordBuildFailure({
+			deploymentId: deployment.deploymentId,
+			logPath: deployment.logPath,
+			serverId: application.buildServerId || application.serverId,
+			error,
+		});
+
 		const comment = getIssueComment(application.name, "error", previewDomain);
 		await updateIssueComment({
 			...issueParams,
@@ -603,7 +649,7 @@ export const rebuildPreviewApplication = async ({
 			application.appName,
 		);
 		await runBuildCommand(commandWithLog);
-		await mechanizeDockerContainer(application);
+		await rollOutApplication(application, deployment.logPath, serverId);
 
 		const successComment = getIssueComment(
 			application.name,

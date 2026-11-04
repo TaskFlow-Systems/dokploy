@@ -143,6 +143,25 @@ export const createBuildRunner = async (
 };
 
 /**
+ * Adds a line of the panel's own to the build log. The log is only a report, so
+ * a server out of reach must not change how the deployment ends.
+ */
+export const appendToBuildLog = async (
+	serverId: string | null,
+	logPath: string,
+	line: string,
+) => {
+	try {
+		await runOnBuildServer(
+			serverId,
+			`echo "${encodeBase64(`${line}\n`)}" | base64 -d >> "${logPath}";`,
+		);
+	} catch (error) {
+		console.error("Failed to write to the build log", error);
+	}
+};
+
+/**
  * Writes the failure to the build log. The build server may be out of reach,
  * often the very reason the build failed, so this keeps the reason on the
  * deployment instead and never stops the caller from marking the build failed.

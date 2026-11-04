@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => {
 		execAsyncRemote: vi.fn(),
 		updateDeploymentStatus: vi.fn(),
 		sendBuildErrorNotifications: vi.fn(),
+		sendBuildSuccessNotifications: vi.fn(),
 		mechanizeDockerContainer: vi.fn(),
+		waitForApplicationRollout: vi.fn(),
 	};
 });
 
@@ -62,7 +64,7 @@ vi.mock("@dokploy/server/utils/notifications/build-error", () => ({
 	sendBuildErrorNotifications: mocks.sendBuildErrorNotifications,
 }));
 vi.mock("@dokploy/server/utils/notifications/build-success", () => ({
-	sendBuildSuccessNotifications: vi.fn(),
+	sendBuildSuccessNotifications: mocks.sendBuildSuccessNotifications,
 }));
 vi.mock("@dokploy/server/utils/providers/github", async () => {
 	const actual = await vi.importActual<
@@ -81,6 +83,7 @@ vi.mock("@dokploy/server/utils/builders", async () => {
 		...actual,
 		getBuildCommand: vi.fn().mockResolvedValue("build;"),
 		mechanizeDockerContainer: mocks.mechanizeDockerContainer,
+		waitForApplicationRollout: mocks.waitForApplicationRollout,
 	};
 });
 vi.mock("@dokploy/server/utils/builders/compose", async () => {
@@ -96,6 +99,7 @@ vi.mock("@dokploy/server/utils/builders/compose", async () => {
 import { db } from "@dokploy/server/db";
 import {
 	deployApplication,
+	deployPreviewApplication,
 	rebuildApplication,
 	rebuildPreviewApplication,
 } from "@dokploy/server/services/application";
@@ -161,9 +165,9 @@ beforeEach(() => {
 	mocks.chain.set?.mockImplementation(() => mocks.chain);
 	mocks.chain.where?.mockImplementation(() => mocks.chain);
 	mocks.chain.returning?.mockResolvedValue([{}]);
-	vi.mocked(db.query.applications.findFirst).mockResolvedValue(
-		application as never,
-	);
+	// A preview deployment renames the application it loads.
+	vi.mocked(db.query.applications.findFirst).mockImplementation((async () =>
+		structuredClone(application)) as never);
 	vi.mocked(db.query.compose.findFirst).mockResolvedValue(compose as never);
 	vi.mocked(db.query.previewDeployments.findFirst).mockResolvedValue({
 		previewDeploymentId: "preview-1",
@@ -200,6 +204,9 @@ describe("a build that loses the connection to its server", () => {
 
 		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "error");
 		expect(savedStatuses()).toContainEqual({ applicationStatus: "error" });
+		expect(mocks.sendBuildErrorNotifications).toHaveBeenCalledWith(
+			expect.objectContaining({ errorMessage: LOST_CONNECTION }),
+		);
 	});
 
 	it("marks a preview rebuild as failed", async () => {
@@ -234,10 +241,83 @@ describe("a build that loses the connection to its server", () => {
 	});
 });
 
+describe("a rollout that Swarm does not finish", () => {
+	const ROLLED_BACK = "Swarm rolled back the update of service web-app";
+	const previewRequest = {
+		...applicationRequest,
+		previewDeploymentId: "preview-1",
+	};
+
+	beforeEach(() => {
+		mocks.execAsyncRemote.mockReset();
+		mocks.execAsyncRemote.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.waitForApplicationRollout.mockRejectedValue(new Error(ROLLED_BACK));
+	});
+
+	const failureLogLine = () =>
+		mocks.execAsyncRemote.mock.calls.find(([, command]) =>
+			String(command).includes(Buffer.from(ROLLED_BACK).toString("base64")),
+		);
+
+	it.each([
+		["deployment", deployApplication],
+		["rebuild", rebuildApplication],
+	])("marks an application %s as failed and notifies", async (_, deploy) => {
+		await expect(deploy(applicationRequest)).rejects.toThrow(ROLLED_BACK);
+
+		expect(mocks.waitForApplicationRollout).toHaveBeenCalledWith(
+			"web-app",
+			"deploy-server",
+		);
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "error");
+		expect(mocks.updateDeploymentStatus).not.toHaveBeenCalledWith(
+			"dep-1",
+			"done",
+		);
+		expect(savedStatuses()).toContainEqual({ applicationStatus: "error" });
+		expect(mocks.sendBuildSuccessNotifications).not.toHaveBeenCalled();
+		expect(mocks.sendBuildErrorNotifications).toHaveBeenCalledWith(
+			expect.objectContaining({ errorMessage: ROLLED_BACK }),
+		);
+		expect(failureLogLine()?.[0]).toBe("build-server");
+	});
+
+	it.each([
+		["deployment", deployPreviewApplication],
+		["rebuild", rebuildPreviewApplication],
+	])("marks a preview %s as failed and logs why", async (_, deploy) => {
+		await expect(deploy(previewRequest)).rejects.toThrow(ROLLED_BACK);
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "error");
+		expect(savedStatuses()).toContainEqual({ previewStatus: "error" });
+		expect(savedStatuses()).not.toContainEqual({ previewStatus: "done" });
+		expect(failureLogLine()?.[0]).toBe("build-server");
+	});
+
+	it("still reports the failure when the log is out of reach", async () => {
+		mocks.execAsyncRemote.mockImplementation(async (_server, command) => {
+			if (String(command).includes(">> ")) {
+				if (!String(command).includes("dokploy-build:")) {
+					throw lostConnection();
+				}
+			}
+			return { stdout: "", stderr: "" };
+		});
+
+		await expect(deployApplication(applicationRequest)).rejects.toThrow(
+			ROLLED_BACK,
+		);
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "error");
+		expect(savedStatuses()).toContainEqual({ errorMessage: ROLLED_BACK });
+	});
+});
+
 describe("a build that succeeds", () => {
 	beforeEach(() => {
 		mocks.execAsyncRemote.mockReset();
 		mocks.execAsyncRemote.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.waitForApplicationRollout.mockResolvedValue(undefined);
 	});
 
 	it("runs the whole application build on the build server under a timeout", async () => {
@@ -251,6 +331,20 @@ describe("a build that succeeds", () => {
 		expect(buildCall?.[1]).toContain(">> /etc/dokploy/logs/app/app.log 2>&1'");
 		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
 		expect(mocks.mechanizeDockerContainer).toHaveBeenCalled();
+	});
+
+	it("keeps the done status when the log is out of reach after the rollout", async () => {
+		mocks.execAsyncRemote.mockImplementation(async (_server, command) => {
+			if (String(command).includes("base64 -d")) {
+				throw lostConnection();
+			}
+			return { stdout: "", stderr: "" };
+		});
+
+		await deployApplication(applicationRequest);
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+		expect(mocks.sendBuildSuccessNotifications).toHaveBeenCalled();
 	});
 
 	it("runs every compose step under a timeout", async () => {

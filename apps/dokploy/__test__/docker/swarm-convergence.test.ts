@@ -30,6 +30,7 @@ const service = (state?: string, forceUpdate = 1) => ({
 });
 
 const task = (fields: {
+	id?: string;
 	state: string;
 	desired?: string;
 	err?: string;
@@ -37,6 +38,7 @@ const task = (fields: {
 	createdAt?: string;
 	timestamp?: string;
 }) => ({
+	ID: fields.id ?? "task",
 	CreatedAt: fields.createdAt ?? "2026-11-04T10:00:01.000000000Z",
 	DesiredState: fields.desired ?? "running",
 	Spec: { ForceUpdate: fields.forceUpdate ?? 1 },
@@ -185,6 +187,194 @@ describe("waitForSwarmServiceConvergence", () => {
 		);
 
 		expect(message).toContain("did not converge within 2100ms");
+	});
+});
+
+describe("waitForSwarmServiceConvergence with the options of an application", () => {
+	const UPDATE_MONITOR_MS = 40;
+	const monitoredService = (state?: string) => ({
+		...service(state),
+		Spec: {
+			...service(state).Spec,
+			UpdateConfig: { Monitor: UPDATE_MONITOR_MS * 1e6 },
+		},
+	});
+	const failedTask = task({
+		state: "failed",
+		desired: "shutdown",
+		err: "task: exit (3)",
+	});
+
+	beforeEach(() => {
+		inspect.mockReset();
+		listTasks.mockReset();
+	});
+
+	it("gives a quiet task the allowance, once per batch", async () => {
+		inspect.mockResolvedValue({
+			...service("updating"),
+			Spec: {
+				...service("updating").Spec,
+				Mode: { Replicated: { Replicas: 2 } },
+				UpdateConfig: { Parallelism: 1 },
+			},
+		});
+		listTasks.mockResolvedValue([task({ state: "preparing" })]);
+		const startedAt = Date.now();
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 10,
+				quietStartAllowanceMs: 50,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(110);
+		expect(message).toContain("did not converge within 110ms");
+		expect(message).toContain("still updating");
+	});
+
+	it("takes the short limit from the first sight of a task error", async () => {
+		inspect.mockResolvedValue(service("updating"));
+		const quiet = [task({ state: "preparing" })];
+		listTasks
+			.mockResolvedValueOnce(quiet)
+			.mockResolvedValueOnce(quiet)
+			.mockResolvedValue([
+				task({ state: "pending", err: "no suitable node (host-mode port)" }),
+			]);
+		const startedAt = Date.now();
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 30,
+				quietStartAllowanceMs: 60_000,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeLessThan(5_000);
+		expect(message).toContain("task error: no suitable node (host-mode port)");
+	});
+
+	it("does not take an error of an earlier deployment for this update", async () => {
+		inspect.mockResolvedValue({
+			...service(),
+			UpdatedAt: "2026-11-04T10:00:00.000000000Z",
+		});
+		listTasks.mockResolvedValue([
+			task({ state: "preparing", forceUpdate: 2 }),
+			{
+				...failedTask,
+				CreatedAt: "2026-11-04T09:00:00.000000000Z",
+			},
+		]);
+		const startedAt = Date.now();
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 10,
+				quietStartAllowanceMs: 100,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(110);
+		expect(message).not.toContain("task: exit (3)");
+	});
+
+	it("does not take a task for up before it stayed up for Monitor", async () => {
+		const swarmStartGraceMs = 2_000;
+		inspect.mockResolvedValue(monitoredService());
+		listTasks.mockImplementation(async () => [
+			task({ id: `task-${Date.now()}`, state: "running" }),
+		]);
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: swarmStartGraceMs + 200,
+				monitorTasks: true,
+				intervalMs: 50,
+			}),
+		);
+
+		expect(message).toContain("did not converge");
+	});
+
+	it("returns once the same task stayed up for Monitor", async () => {
+		inspect.mockResolvedValue(monitoredService());
+		listTasks.mockResolvedValue([task({ id: "steady", state: "running" })]);
+
+		await waitForSwarmServiceConvergence("app", null, {
+			monitorTasks: true,
+			intervalMs: 10,
+		});
+
+		expect(listTasks.mock.calls.length).toBeGreaterThan(1);
+	});
+
+	it("takes a completed update without errors at once: Swarm has monitored it", async () => {
+		inspect.mockResolvedValue(monitoredService("completed"));
+		listTasks.mockResolvedValue([task({ state: "running" })]);
+
+		await waitForSwarmServiceConvergence("app", null, { monitorTasks: true });
+
+		expect(inspect).toHaveBeenCalledTimes(1);
+	});
+
+	it("does not trust a completed update whose tasks keep failing", async () => {
+		inspect.mockResolvedValue(monitoredService("completed"));
+		listTasks.mockImplementation(async () => [
+			task({ id: `task-${Date.now()}`, state: "running" }),
+			failedTask,
+		]);
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 100,
+				monitorTasks: true,
+				intervalMs: 5,
+			}),
+		);
+
+		expect(message).toContain("task error: task: exit (3)");
+	});
+
+	it("outlives a lost connection, because the update goes on without the panel", async () => {
+		inspect
+			.mockRejectedValueOnce(new Error("Keepalive timeout"))
+			.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([task({ state: "running" })]);
+
+		await waitForSwarmServiceConvergence("app", null, { intervalMs: 1 });
+
+		expect(inspect).toHaveBeenCalledTimes(2);
+	});
+
+	it("gives up on a connection that stays lost", async () => {
+		inspect.mockRejectedValue(new Error("Keepalive timeout"));
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 5,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(message).toContain("Could not read the state of service app");
+		expect(message).toContain("Keepalive timeout");
+	});
+
+	it("fails at once when the service is gone", async () => {
+		inspect.mockRejectedValue(
+			Object.assign(new Error("no such service"), { statusCode: 404 }),
+		);
+
+		const message = await failureOf(waitForSwarmServiceConvergence("app"));
+
+		expect(message).toContain("no such service");
+		expect(inspect).toHaveBeenCalledTimes(1);
 	});
 });
 

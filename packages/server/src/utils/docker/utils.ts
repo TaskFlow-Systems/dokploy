@@ -1607,11 +1607,18 @@ const FAILED_UPDATE_STATES: Record<
 	},
 };
 
+const swarmUpdateBatches = (spec?: SwarmServiceSpec) => {
+	const replicas = spec?.Mode?.Replicated?.Replicas ?? 1;
+	return Math.max(
+		1,
+		Math.ceil(replicas / (spec?.UpdateConfig?.Parallelism || replicas || 1)),
+	);
+};
+
 // Swarm sets no limit of its own: a task waiting for a node keeps an update in
 // `updating` forever. Replicas go batch by batch, so a fixed limit would fail
 // a healthy update of three replicas that stop slowly. The default spec comes to 45 s.
 export const getSwarmConvergenceTimeoutMs = (spec?: SwarmServiceSpec) => {
-	const replicas = spec?.Mode?.Replicated?.Replicas ?? 1;
 	const update = spec?.UpdateConfig;
 	const container = spec?.TaskTemplate?.ContainerSpec;
 	const health = container?.Healthcheck;
@@ -1622,17 +1629,13 @@ export const getSwarmConvergenceTimeoutMs = (spec?: SwarmServiceSpec) => {
 					((health.Interval || DOCKER_DEFAULT_HEALTH_STEP_NS) +
 						(health.Timeout || DOCKER_DEFAULT_HEALTH_STEP_NS))
 			: 0;
-	const batches = Math.max(
-		1,
-		Math.ceil(replicas / (update?.Parallelism || replicas || 1)),
-	);
 	const batchNs =
 		(container?.StopGracePeriod ?? DOCKER_DEFAULT_STOP_GRACE_NS) +
 		TASK_START_ALLOWANCE_NS +
 		healthNs +
 		(update?.Monitor ?? DOCKER_DEFAULT_MONITOR_NS) +
 		(update?.Delay ?? 0);
-	return (batches * batchNs) / 1e6;
+	return (swarmUpdateBatches(spec) * batchNs) / 1e6;
 };
 
 // The earliest error is the cause. Later ones are its consequences: a replacement
@@ -1654,33 +1657,84 @@ const firstTaskError = (tasks: SwarmTask[], updateStartedAt?: string) => {
 		)[0]?.Status?.Err;
 };
 
+type SwarmConvergenceOptions = {
+	timeoutMs?: number;
+	intervalMs?: number;
+	// Added per batch to the limit for as long as no task reports an error. A pull
+	// and a HEALTHCHECK of the image itself show in no spec, so the limit cannot
+	// count them. A crash or "no suitable node" still ends the wait after `timeoutMs`.
+	quietStartAllowanceMs?: number;
+	// Swarm watches new tasks for `UpdateConfig.Monitor` only during a rollout. A
+	// fresh service gets no such period, and with `FailureAction: continue` a
+	// completed update can have tasks that keep restarting, so here the same tasks
+	// have to stay up that long.
+	monitorTasks?: boolean;
+};
+
 export const waitForSwarmServiceConvergence = async (
 	appName: string,
 	serverId?: string | null,
-	options?: { timeoutMs?: number; intervalMs?: number },
+	options?: SwarmConvergenceOptions,
 ): Promise<void> => {
 	const intervalMs = options?.intervalMs ?? 2_000;
 	const remoteDocker = await getRemoteDocker(serverId);
 	const service = remoteDocker.getService(appName);
 	const startedAt = Date.now();
 	let timeoutMs = options?.timeoutMs;
+	let quietLimitMs: number | undefined;
+	let taskErrorSeenAt: number | undefined;
+	let watchedTaskIds = "";
+	let watchedSince = startedAt;
+
+	const readService = async () => ({
+		info: await service.inspect(),
+		tasks: await remoteDocker.listTasks({
+			filters: JSON.stringify({ service: [appName] }),
+		}),
+	});
+	const pause = () => new Promise((resolve) => setTimeout(resolve, intervalMs));
 
 	while (true) {
-		const info = await service.inspect();
+		let state: Awaited<ReturnType<typeof readService>>;
+		try {
+			state = await readService();
+		} catch (error) {
+			if ((error as { statusCode?: number }).statusCode === 404) {
+				throw error;
+			}
+			// The update goes on without the panel, so a lost connection says nothing
+			// about it.
+			const limitMs =
+				quietLimitMs ?? options?.timeoutMs ?? getSwarmConvergenceTimeoutMs();
+			if (Date.now() - startedAt >= limitMs) {
+				throw new ServiceConvergenceError(
+					`Could not read the state of service ${appName} within ${limitMs}ms: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+			await pause();
+			continue;
+		}
+		const { info, tasks } = state;
 		timeoutMs ??= getSwarmConvergenceTimeoutMs(info.Spec);
+		quietLimitMs ??=
+			timeoutMs +
+			swarmUpdateBatches(info.Spec) * (options?.quietStartAllowanceMs ?? 0);
 		const desiredTasksCount = info.Spec?.Mode?.Replicated?.Replicas ?? 1;
 
-		const tasks = await remoteDocker.listTasks({
-			filters: JSON.stringify({ service: [appName] }),
-		});
 		const currentTasks = tasks.filter(
 			(task) => task.DesiredState === "running",
 		);
-		const runningTasksCount = currentTasks.filter(
+		const runningTasks = currentTasks.filter(
 			(task) => task.Status?.State === "running",
-		).length;
+		);
+		const runningTasksCount = runningTasks.length;
 		const updateState: string | undefined = info.UpdateStatus?.State;
-		const taskError = firstTaskError(tasks, info.UpdateStatus?.StartedAt);
+		// Until Swarm sets `updating` there is no StartedAt, and the failed tasks a
+		// service keeps from an earlier deployment are not this update's.
+		const taskError = firstTaskError(
+			tasks,
+			info.UpdateStatus?.StartedAt ?? info.UpdatedAt,
+		);
 
 		// The first sight decides: Swarm can replace `rollback_completed` with
 		// `completed` seconds later (seen with two replicas), and it reports
@@ -1693,7 +1747,8 @@ export const waitForSwarmServiceConvergence = async (
 			);
 		}
 
-		const elapsedMs = Date.now() - startedAt;
+		const now = Date.now();
+		const elapsedMs = now - startedAt;
 		// `service.update` clears UpdateStatus, and Swarm sets `updating` about
 		// 50 ms later only if a task has to change: a fresh service, an update
 		// with nothing to roll out and a scale change never get a state. Until
@@ -1709,18 +1764,42 @@ export const waitForSwarmServiceConvergence = async (
 			updateState === "completed" ||
 			(updateState === undefined && noRolloutPending);
 
-		if (rolloutFinished && runningTasksCount >= desiredTasksCount) {
+		const runningTaskIds = runningTasks
+			.map((task) => task.ID)
+			.sort()
+			.join();
+		if (runningTaskIds !== watchedTaskIds) {
+			watchedTaskIds = runningTaskIds;
+			watchedSince = now;
+		}
+		const tasksSettled =
+			!options?.monitorTasks ||
+			(updateState === "completed" && !taskError) ||
+			now - watchedSince >=
+				(info.Spec?.UpdateConfig?.Monitor || DOCKER_DEFAULT_MONITOR_NS) / 1e6;
+
+		if (
+			rolloutFinished &&
+			runningTasksCount >= desiredTasksCount &&
+			tasksSettled
+		) {
 			return;
 		}
 
-		if (elapsedMs >= timeoutMs) {
+		if (taskError) {
+			taskErrorSeenAt ??= now;
+		}
+		if (
+			elapsedMs >= quietLimitMs ||
+			(taskErrorSeenAt !== undefined && now - taskErrorSeenAt >= timeoutMs)
+		) {
 			const lastState = currentTasks[0]?.Status?.State ?? "unknown";
 			throw new ServiceConvergenceError(
-				`Service ${appName} did not converge within ${timeoutMs}ms: ${runningTasksCount}/${desiredTasksCount} tasks running${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""})`,
+				`Service ${appName} did not converge within ${Math.min(elapsedMs, quietLimitMs)}ms: ${runningTasksCount}/${desiredTasksCount} tasks running${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""})`,
 			);
 		}
 
-		await new Promise((resolve) => setTimeout(resolve, intervalMs));
+		await pause();
 	}
 };
 
