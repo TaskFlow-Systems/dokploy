@@ -11,19 +11,24 @@ type FakeStream = import("node:events").EventEmitter & {
 	setWindow: ReturnType<typeof vi.fn>;
 	write: ReturnType<typeof vi.fn>;
 };
-type FakeConnection = {
+type FakeConnection = import("node:events").EventEmitter & {
 	commands: string[];
 	streams: FakeStream[];
 	end: ReturnType<typeof vi.fn>;
 	failNextExec: boolean;
+	releaseExecCallbacks: () => void;
 };
 
 const mocks = vi.hoisted(() => ({
 	canAccessDockerOverWss: vi.fn(),
 	canAccessDockerTerminalWebSocket: vi.fn(),
 	connections: [] as FakeConnection[],
+	containerBelongsToService: vi.fn(),
 	execFile: vi.fn(),
 	findServerById: vi.fn(),
+	holdExecCallback: { value: false },
+	holdReady: { value: false },
+	resolveServerDestinationHost: vi.fn(),
 	spawn: vi.fn(),
 	validateRequest: vi.fn(),
 }));
@@ -37,11 +42,15 @@ vi.mock("@dokploy/server", () => ({
 }));
 
 vi.mock("@dokploy/server/utils/servers/destination", () => ({
-	resolveServerDestinationHost: vi.fn(async () => "203.0.113.10"),
+	resolveServerDestinationHost: mocks.resolveServerDestinationHost,
 }));
 
 vi.mock("../../server/wss/authorize", () => ({
 	canAccessDockerOverWss: mocks.canAccessDockerOverWss,
+}));
+
+vi.mock("../../server/wss/container-ownership", () => ({
+	containerBelongsToService: mocks.containerBelongsToService,
 }));
 
 vi.mock("../../server/wss/docker-permission", () => ({
@@ -70,13 +79,21 @@ vi.mock("ssh2", async () => {
 		streams: FakeStream[] = [];
 		end = vi.fn();
 		failNextExec = false;
+		heldExecCallbacks: (() => void)[] = [];
 		constructor() {
 			super();
-			mocks.connections.push(this);
+			mocks.connections.push(this as unknown as FakeConnection);
 		}
 		connect() {
-			setImmediate(() => this.emit("ready"));
+			if (!mocks.holdReady.value) {
+				setImmediate(() => this.emit("ready"));
+			}
 			return this;
+		}
+		releaseExecCallbacks() {
+			for (const release of this.heldExecCallbacks.splice(0)) {
+				release();
+			}
 		}
 		exec(
 			command: string,
@@ -95,6 +112,10 @@ vi.mock("ssh2", async () => {
 			}
 			const stream = makeStream();
 			this.streams.push(stream);
+			if (mocks.holdExecCallback.value) {
+				this.heldExecCallbacks.push(() => callback(undefined, stream));
+				return this;
+			}
 			setImmediate(() => callback(undefined, stream));
 			return this;
 		}
@@ -125,6 +146,40 @@ const openTerminal = async (port: number, query: string) => {
 	return ws;
 };
 
+const deferred = <T>() => {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((res) => {
+		resolve = res;
+	});
+	return { promise, resolve };
+};
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+const closeClient = async (ws: WebSocket) => {
+	const closed = new Promise((resolve) => ws.once("close", resolve));
+	ws.close();
+	await closed;
+};
+
+const AUTH = {
+	user: { id: "user-1" },
+	session: {
+		id: "session-1",
+		activeOrganizationId: "org-1",
+		authMethod: "session",
+	},
+};
+
+const SERVER = {
+	organizationId: "org-1",
+	port: 22,
+	serverId: "server-1",
+	sshKey: { privateKey: "test-key" },
+	sshKeyId: "key-1",
+	username: "root",
+};
+
 const markerIn = (args: readonly string[]) => {
 	const marker = args[args.indexOf("-e") + 1];
 	expect(marker).toMatch(/^DOKPLOY_TERMINAL_SESSION=[a-f0-9]{32}$/);
@@ -139,24 +194,14 @@ describe("container terminal hangs up its shell when it closes", () => {
 	beforeEach(async () => {
 		vi.clearAllMocks();
 		mocks.connections.length = 0;
+		mocks.holdExecCallback.value = false;
+		mocks.holdReady.value = false;
 		mocks.canAccessDockerOverWss.mockResolvedValue(true);
 		mocks.canAccessDockerTerminalWebSocket.mockResolvedValue(true);
-		mocks.validateRequest.mockResolvedValue({
-			user: { id: "user-1" },
-			session: {
-				id: "session-1",
-				activeOrganizationId: "org-1",
-				authMethod: "session",
-			},
-		});
-		mocks.findServerById.mockResolvedValue({
-			organizationId: "org-1",
-			port: 22,
-			serverId: "server-1",
-			sshKey: { privateKey: "test-key" },
-			sshKeyId: "key-1",
-			username: "root",
-		});
+		mocks.containerBelongsToService.mockResolvedValue(true);
+		mocks.validateRequest.mockResolvedValue(AUTH);
+		mocks.findServerById.mockResolvedValue(SERVER);
+		mocks.resolveServerDestinationHost.mockResolvedValue("203.0.113.10");
 		pty = { kill: vi.fn() };
 		mocks.spawn.mockReturnValue({
 			...pty,
@@ -246,6 +291,93 @@ describe("container terminal hangs up its shell when it closes", () => {
 		hangup.emit("close", 0);
 		expect(shell.end).toHaveBeenCalled();
 		expect(connection.end).toHaveBeenCalled();
+	});
+
+	describe("closed before the shell has started", () => {
+		const SERVICE = "containerId=abc123def456&serviceId=service-1";
+		const REMOTE = "containerId=abc123def456&serverId=server-1";
+
+		it.each([
+			["session check", mocks.validateRequest, AUTH],
+			["terminal access check", mocks.canAccessDockerTerminalWebSocket, true],
+			["docker access check", mocks.canAccessDockerOverWss, true],
+			["container ownership check", mocks.containerBelongsToService, true],
+		] as const)(
+			"starts no local shell during the %s",
+			async (_name, check, value) => {
+				const pending = deferred<unknown>();
+				check.mockReturnValue(pending.promise);
+				const ws = await openTerminal(port, SERVICE);
+				await vi.waitFor(() => expect(check).toHaveBeenCalled());
+
+				await closeClient(ws);
+				pending.resolve(value);
+				await flush();
+
+				expect(mocks.spawn).not.toHaveBeenCalled();
+				expect(mocks.execFile).not.toHaveBeenCalled();
+			},
+		);
+
+		it.each([
+			["docker access check", mocks.canAccessDockerOverWss, true],
+			["server lookup", mocks.findServerById, SERVER],
+			["address lookup", mocks.resolveServerDestinationHost, "203.0.113.10"],
+		] as const)(
+			"opens no SSH connection during the %s",
+			async (_name, check, value) => {
+				const pending = deferred<unknown>();
+				check.mockReturnValue(pending.promise);
+				const ws = await openTerminal(port, REMOTE);
+				await vi.waitFor(() => expect(check).toHaveBeenCalled());
+
+				await closeClient(ws);
+				pending.resolve(value);
+				await flush();
+
+				expect(mocks.connections).toHaveLength(0);
+			},
+		);
+
+		it("runs nothing on a connection that became ready after the close", async () => {
+			mocks.holdReady.value = true;
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() => expect(mocks.connections).toHaveLength(1));
+			const connection = mocks.connections[0] as FakeConnection;
+
+			await closeClient(ws);
+			connection.emit("ready");
+
+			expect(connection.commands).toEqual([]);
+			expect(connection.end).toHaveBeenCalled();
+		});
+
+		it("hangs up a shell that opened after the close", async () => {
+			mocks.holdExecCallback.value = true;
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			const connection = mocks.connections[0] as FakeConnection;
+
+			await closeClient(ws);
+			expect(connection.commands).toHaveLength(1);
+			mocks.holdExecCallback.value = false;
+			connection.releaseExecCallbacks();
+
+			await vi.waitFor(() => expect(connection.commands).toHaveLength(2));
+			const marker = markerIn((connection.commands[0] as string).split(" "));
+			expect(connection.commands[1]).toBe(
+				quoteShellArgs([
+					"docker",
+					...getTerminalHangupArgs("abc123def456", "sh", marker),
+				]),
+			);
+			const hangup = connection.streams[1] as FakeStream;
+			await vi.waitFor(() => expect(hangup.resume).toHaveBeenCalled());
+			hangup.emit("close", 0);
+			expect(connection.end).toHaveBeenCalled();
+		});
 	});
 
 	it("still ends the SSH connection when the hangup cannot start", async () => {
