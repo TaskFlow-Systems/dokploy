@@ -13,6 +13,10 @@ import {
 } from "@dokploy/server/utils/databases/mongo";
 import { getMongoRestoreCommand } from "@dokploy/server/utils/restore/utils";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	buildExternalMongoUrl,
+	buildInternalMongoUrl,
+} from "@/lib/mongo-connection-url";
 import { buildMongoPasswordChangeCommand } from "@/server/api/utils/database-password";
 
 const execFileAsync = promisify(execFile);
@@ -32,6 +36,8 @@ const CHECKOUT_ID = createHash("sha256")
 const RUN_ID = `${CHECKOUT_ID}-${Date.now()}`;
 const NETWORK = `real-mongo-net-${RUN_ID}`;
 const CLIENT = `real-mongo-client-${RUN_ID}`;
+const OUTSIDE_CLIENT = `real-mongo-outside-${RUN_ID}`;
+const SPECIAL_PASSWORD = "p@ss:w?rd#1%41&^*()_+-=[]{}|,.<>~";
 
 const appNames: string[] = [];
 
@@ -145,16 +151,14 @@ const deployLegacy = (mongo: MongoNested) =>
 const anonymousUrl = (mongo: MongoNested) =>
 	`mongodb://${mongo.appName}:27017/?directConnection=true`;
 
-// What show-internal-mongo-credentials.tsx shows, with the password encoded.
-const storedUrl = (mongo: MongoNested) =>
-	`mongodb://${mongo.databaseUser}:${encodeURIComponent(mongo.databasePassword)}@${mongo.appName}:27017/?authSource=admin`;
+const storedUrl = (mongo: MongoNested) => buildInternalMongoUrl(mongo);
 
-const mongosh = (url: string, js: string) =>
-	dockerCli("exec", CLIENT, "mongosh", url, "--quiet", "--eval", js);
+const mongosh = (url: string, js: string, client = CLIENT) =>
+	dockerCli("exec", client, "mongosh", url, "--quiet", "--eval", js);
 
-const mongoshError = async (url: string, js: string) => {
+const mongoshError = async (url: string, js: string, client = CLIENT) => {
 	try {
-		return { refused: false, output: await mongosh(url, js) };
+		return { refused: false, output: await mongosh(url, js, client) };
 	} catch (error) {
 		const { stdout, stderr } = error as { stdout: string; stderr: string };
 		return { refused: true, output: `${stdout}${stderr}` };
@@ -370,6 +374,20 @@ describe("mongo replica set access control", () => {
 			IMAGE,
 			"3600",
 		);
+		// On no overlay network, so a service's name does not resolve here, as on
+		// a client machine.
+		await dockerCli(
+			"run",
+			"-d",
+			"--name",
+			OUTSIDE_CLIENT,
+			"--add-host",
+			"host.docker.internal:host-gateway",
+			"--entrypoint",
+			"sleep",
+			IMAGE,
+			"3600",
+		);
 	}, 600_000);
 
 	afterAll(async () => {
@@ -377,6 +395,7 @@ describe("mongo replica set access control", () => {
 			dockerCli(...args).catch(() => undefined);
 
 		await ignoreErrors(["rm", "-f", "-v", CLIENT]);
+		await ignoreErrors(["rm", "-f", "-v", OUTSIDE_CLIENT]);
 		for (const appName of appNames) {
 			await ignoreErrors(["service", "rm", appName]);
 		}
@@ -461,8 +480,79 @@ describe("mongo replica set access control", () => {
 			expect(anonymous.output).toMatch(/requires authentication/);
 			expect(
 				await mongosh(
-					`mongodb://${mongo.databaseUser}:${mongo.databasePassword}@host.docker.internal:${port}/?authSource=admin&directConnection=true`,
+					buildExternalMongoUrl({
+						...mongo,
+						host: "host.docker.internal",
+						port,
+					}),
 					"db.adminCommand({ listDatabases: 1 }).ok",
+				),
+			).toBe("1");
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"connects with the panel's strings, from outside the Docker network and from inside it",
+		async () => {
+			const port = await freePort();
+			const mongo = fixture("strings", SPECIAL_PASSWORD, {
+				externalPort: port,
+			});
+			await buildMongo(mongo);
+			await waitForAccessControl(mongo);
+
+			const external = buildExternalMongoUrl({
+				...mongo,
+				host: "host.docker.internal",
+				port,
+			});
+			await waitUntil(
+				"the published port",
+				async () =>
+					(await mongosh(
+						external,
+						"db.adminCommand({ listDatabases: 1 }).ok",
+						OUTSIDE_CLIENT,
+					)) === "1",
+			);
+
+			// Transactions are what a replica set is usually picked for, and a direct
+			// connection must not lose them.
+			expect(
+				await mongosh(
+					external,
+					`const session = db.getMongo().startSession();
+					session.startTransaction();
+					session.getDatabase("app").docs.insertOne({ marker: "outside" });
+					session.commitTransaction();
+					print(db.getSiblingDB("app").docs.countDocuments({ marker: "outside" }))`,
+					OUTSIDE_CLIENT,
+				),
+			).toBe("1");
+
+			expect(await mongosh(external, "db.hello().me", OUTSIDE_CLIENT)).toBe(
+				`${mongo.appName}:27017`,
+			);
+
+			// mongosh adds directConnection=true to a one-host URL that does not set it,
+			// so only an explicit false behaves as a driver does by default.
+			const discovering = external.replace(
+				"directConnection=true",
+				"directConnection=false",
+			);
+			const discovered = await mongoshError(
+				discovering,
+				"db.hello().ok",
+				OUTSIDE_CLIENT,
+			);
+			expect(discovered.refused).toBe(true);
+			expect(discovered.output).toContain(mongo.appName);
+
+			expect(
+				await mongosh(
+					`${buildInternalMongoUrl(mongo)}&directConnection=false`,
+					`print(db.getSiblingDB("app").docs.countDocuments({ marker: "outside" }))`,
 				),
 			).toBe("1");
 		},
@@ -580,15 +670,12 @@ describe("mongo replica set access control", () => {
 	it(
 		"turns a standalone database into a replica set with auth",
 		async () => {
-			const standalone = fixture("standalone", undefined, {
+			const standalone = fixture("standalone", SPECIAL_PASSWORD, {
 				replicaSets: false,
 			});
 			await buildMongo(standalone);
 			await waitForAccessControl(standalone);
-			await insertDoc(
-				`${storedUrl(standalone)}&directConnection=true`,
-				"standalone-era",
-			);
+			await insertDoc(storedUrl(standalone), "standalone-era");
 
 			const mongo = { ...standalone, replicaSets: true } as MongoNested;
 			await redeploy(mongo);

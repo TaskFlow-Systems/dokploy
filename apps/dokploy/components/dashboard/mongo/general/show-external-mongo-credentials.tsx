@@ -1,6 +1,6 @@
 import { standardSchemaResolver as zodResolver } from "@hookform/resolvers/standard-schema";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { buildExternalMongoUrl } from "@/lib/mongo-connection-url";
 import { api } from "@/utils/api";
 
 const DockerProviderSchema = z.object({
@@ -49,7 +50,6 @@ export const ShowExternalMongoCredentials = ({ mongoId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.mongo.one.useQuery({ mongoId });
 	const { mutateAsync, isPending } = api.mongo.saveExternalPort.useMutation();
-	const [connectionUrl, setConnectionUrl] = useState("");
 	const getIp = data?.server?.ipAddress || ip;
 	const form = useForm({
 		defaultValues: {},
@@ -78,23 +78,14 @@ export const ShowExternalMongoCredentials = ({ mongoId }: Props) => {
 			});
 	};
 
-	useEffect(() => {
-		const buildConnectionUrl = () => {
-			const port = form.watch("externalPort") || data?.externalPort;
-
-			const params = `authSource=admin${data?.replicaSets ? "" : "&directConnection=true"}`;
-			return `mongodb://${data?.databaseUser}:${data?.databasePassword}@${getIp}:${port}/?${params}`;
-		};
-
-		setConnectionUrl(buildConnectionUrl());
-	}, [
-		data?.appName,
-		data?.externalPort,
-		data?.databasePassword,
-		form,
-		data?.databaseUser,
-		getIp,
-	]);
+	const connectionUrl = data?.externalPort
+		? buildExternalMongoUrl({
+				databaseUser: data.databaseUser,
+				databasePassword: data.databasePassword,
+				host: getIp ?? "",
+				port: data.externalPort,
+			})
+		: "";
 
 	return (
 		<>
