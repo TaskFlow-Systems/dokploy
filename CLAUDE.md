@@ -31,6 +31,10 @@ The Profile page contacts `www.gravatar.com` only after the user picks the @ opt
 
 The eight pages under `pages/dashboard/project/[projectId]/environment/[environmentId]/services/` load each tab's code on first open through `lazyTab` (`components/dashboard/shared/lazy-service-tabs.tsx`), and each `TabsTrigger` starts that load with `onPointerEnter={Tab.preload}`. A tab with several components gets one module (`show-*-general-tab`, `show-*-advanced-tab`), so it appears at once. What the page header shows stays a normal import. `DashboardLayout` renders nothing until mounted, so the dashboard has no server-rendered content. After an upstream merge, check that no tab came back as a normal import.
 
+## Sidebar links
+
+`next/link` prefetches the page of every link in the viewport and then runs that page's module on idle, also from the browser cache, so the sidebar made each dashboard load fetch and execute 17 pages nobody had opened. Its links and the breadcrumb's plain link take `prefetch={false}`, which still loads a page when the pointer or a finger reaches the link. On a slow link this makes the first click on a page slower, once per page per panel build; a normal desktop does not notice. Links inside a page keep prefetching, because they are likely next clicks. `sidebar-no-prefetch.test.ts` fails if an upstream merge drops the prop.
+
 ## Stripe in the browser
 
 A panel contacts Stripe's hosts only after a click on Subscribe now in the onboarding plan step: `plan-step.tsx` imports `@stripe/stripe-js/pure` and calls `loadStripe` in that handler. The package's main entry injects `js.stripe.com/v3` as soon as the module runs, even with no key, and the script then calls `m.stripe.network` and `m.stripe.com` by itself. The pages router's prefetch runs a page's module on idle, so an import anywhere under a page linked from the sidebar reaches every panel page. The billing page needs no browser SDK: it redirects to the URL of the checkout session. `__test__/billing/stripe-script-on-demand.test.ts` fails on the main entry; after an upstream merge, check that it still passes.

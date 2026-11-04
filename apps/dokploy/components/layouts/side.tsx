@@ -1056,6 +1056,7 @@ export default function Page({ children }: Props) {
 													className={cn(isActive && "bg-border")}
 												>
 													<Link
+														prefetch={false}
 														href={item.url}
 														className="flex w-full items-center gap-2"
 													>
@@ -1091,6 +1092,7 @@ export default function Page({ children }: Props) {
 																		className={cn(isActive && "bg-border")}
 																	>
 																		<Link
+																			prefetch={false}
 																			href={subItem.url}
 																			className="flex w-full items-center"
 																		>
@@ -1145,6 +1147,7 @@ export default function Page({ children }: Props) {
 													className={cn(isActive && "bg-border")}
 												>
 													<Link
+														prefetch={false}
 														href={item.url}
 														className="flex w-full items-center gap-2"
 													>
@@ -1180,6 +1183,7 @@ export default function Page({ children }: Props) {
 																		className={cn(isActive && "bg-border")}
 																	>
 																		<Link
+																			prefetch={false}
 																			href={subItem.url}
 																			className="flex w-full items-center"
 																		>
@@ -1279,6 +1283,7 @@ export default function Page({ children }: Props) {
 										<BreadcrumbItem className="block">
 											<BreadcrumbLink asChild>
 												<Link
+													prefetch={false}
 													href={activeItem?.url || "/"}
 													className="flex items-center gap-1.5"
 												>
