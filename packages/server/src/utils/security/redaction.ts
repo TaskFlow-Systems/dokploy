@@ -8,10 +8,33 @@ export type SecretRecord = Record<string, unknown>;
 const SENSITIVE_KEY_PATTERN =
 	"(?:access[_-]?key|api[_-]?key|authorization|credential|private[_-]?key|refresh[_-]?token|secret|token|password|passwd|pwd)";
 
-// shell-quote leaves values bare with backslash escapes (pa\&ss) or wraps them
-// in double quotes with escaped quotes, so a value ends at the first unescaped
-// separator, not at the first separator character.
-const SHELL_VALUE_PATTERN = String.raw`"(?:\\.|[^"\\])*"|'[^']*'|(?:\\.|[^\s;&|\\])+`;
+// What shell-quote writes for a value, alone and quoted again for `sh -c`. The
+// value ends at the first separator outside these forms, not at the first
+// separator character:
+//
+//   alone         in sh -c '...'                    in sh -c "..."
+//   a\&b          a\&b                              a\\&b
+//   'a b'         '"'"'a b'"'"'                     'a b'
+//   "a'b"         "a'"'"'b"                         \"a'b\"
+//   'a'"'"'b!'    '"'"'a'"'"'"'"'"'"'"'"'b!'"'"'    (`!` and `'` force the middle form)
+const BARE_PIECE = String.raw`(?:\\\\[;&|]|\\.|[^\s;&|\\])`;
+const QUOTED_PIECE = String.raw`"(?:'"'"'(?!")|\\.|[^"\\])*"|'[^']*'`;
+const ESCAPED_QUOTED_PIECE = String.raw`\\"(?:\\\\\\.|\\\\(?!\\)|\\[^"\\]|[^"\\])*\\"`;
+
+// Only these continue a word after a quoted piece; `\'` is how people write it
+// by hand. Any other quote there usually closes a string around the assignment,
+// as in `"TOKEN='abc'", "next"`, and reading it as a piece would swallow the text
+// up to the next quote, whole lines of a log included.
+const QUOTE_JOINT = String.raw`"'+"|'"+'|\\'`;
+
+// In `sh -c '...'` the value's first quote closes the outer string, so its pieces
+// start one character later. What follows the run of quotes tells this from a
+// value that starts with `"'`, written `'"'"'"'a b'`.
+const OUTER_QUOTE_END = `'(?=(?:"'"'"')*"'"'(?!"'))`;
+
+// Nothing may follow this in a regex: with no way to fail after it, a long value
+// never backtracks.
+const SHELL_VALUE_PATTERN = `(?:${OUTER_QUOTE_END}|${QUOTED_PIECE})(?:(?:${QUOTE_JOINT})+(?:${QUOTED_PIECE})?)*|${ESCAPED_QUOTED_PIECE}${BARE_PIECE}*|${BARE_PIECE}+`;
 
 export const isRedactedSecretValue = (value: unknown) =>
 	value === REDACTED_SECRET_VALUE;
