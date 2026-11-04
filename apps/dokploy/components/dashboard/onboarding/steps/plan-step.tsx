@@ -1,4 +1,6 @@
-import { loadStripe } from "@stripe/stripe-js";
+// Not the main entry: it injects Stripe's script as soon as this module runs, and the
+// sidebar's prefetch of the home page runs it on every panel, self-hosted ones included.
+import { loadStripe } from "@stripe/stripe-js/pure";
 import { ArrowRightIcon, CheckIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -10,10 +12,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { api } from "@/utils/api";
 import { displayFont } from "../font";
-
-const stripePromise = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY
-	? loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY)
-	: null;
 
 type Tier = "hobby" | "startup";
 
@@ -74,7 +72,8 @@ export const PlanStep = ({ onNext }: Props) => {
 		if (!productId) return;
 		setLoading(`checkout:${tier}`);
 		try {
-			const stripe = await stripePromise;
+			const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
+			const stripe = publishableKey ? await loadStripe(publishableKey) : null;
 			const session = await createCheckoutSession({
 				tier,
 				productId,

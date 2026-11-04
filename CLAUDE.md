@@ -25,6 +25,10 @@ A deployment's log stays where it was written. Reads and single removals find th
 
 The eight pages under `pages/dashboard/project/[projectId]/environment/[environmentId]/services/` load each tab's code on first open through `lazyTab` (`components/dashboard/shared/lazy-service-tabs.tsx`), and each `TabsTrigger` starts that load with `onPointerEnter={Tab.preload}`. A tab with several components gets one module (`show-*-general-tab`, `show-*-advanced-tab`), so it appears at once. What the page header shows stays a normal import. `DashboardLayout` renders nothing until mounted, so the dashboard has no server-rendered content. After an upstream merge, check that no tab came back as a normal import.
 
+## Stripe in the browser
+
+A panel contacts Stripe's hosts only after a click on Subscribe now in the onboarding plan step: `plan-step.tsx` imports `@stripe/stripe-js/pure` and calls `loadStripe` in that handler. The package's main entry injects `js.stripe.com/v3` as soon as the module runs, even with no key, and the script then calls `m.stripe.network` and `m.stripe.com` by itself. The pages router's prefetch runs a page's module on idle, so an import anywhere under a page linked from the sidebar reaches every panel page. The billing page needs no browser SDK: it redirects to the URL of the checkout session. `__test__/billing/stripe-script-on-demand.test.ts` fails on the main entry; after an upstream merge, check that it still passes.
+
 ## Pull requests
 
 Every pull request targets `AgentHits-Dev`, including a PR that builds on another open PR. Checks run only for that base, so a PR stacked on another branch gets none. When one PR depends on another, say so in the description; do not change the base.
