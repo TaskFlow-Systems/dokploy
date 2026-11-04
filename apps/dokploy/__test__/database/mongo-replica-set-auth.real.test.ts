@@ -159,30 +159,47 @@ const mongoshError = async (url: string, js: string) => {
 	}
 };
 
-const waitUntil = async (what: string, check: () => Promise<boolean>) => {
+const waitUntil = async (
+	what: string,
+	check: () => Promise<boolean>,
+	explain?: () => Promise<string>,
+) => {
 	const deadline = Date.now() + WAIT_TIMEOUT_MS;
+	let lastError = "the condition never held";
 	while (Date.now() < deadline) {
-		if (await check().catch(() => false)) return;
+		try {
+			if (await check()) return;
+		} catch (error) {
+			lastError = error instanceof Error ? error.message : String(error);
+		}
 		await new Promise((resolve) => setTimeout(resolve, 1000));
 	}
-	throw new Error(`Timed out waiting for ${what}`);
+	const details = explain ? `\n${await explain()}` : "";
+	throw new Error(
+		`Timed out waiting for ${what}. Last error: ${lastError}${details}`,
+	);
 };
 
 // The stored password already works during the one open start of a move, so a
 // successful sign-in alone does not mean the move has finished.
 const waitForAccessControl = (mongo: MongoNested) =>
-	waitUntil("access control and the stored connection string", async () => {
-		const anonymous = await mongoshError(
-			anonymousUrl(mongo),
-			"db.adminCommand({ listDatabases: 1 })",
-		);
-		return (
-			anonymous.refused &&
-			anonymous.output.includes("requires authentication") &&
-			(await mongosh(storedUrl(mongo), "db.hello().isWritablePrimary")) ===
+	waitUntil(
+		"access control and the stored connection string",
+		async () => {
+			const anonymous = await mongoshError(
+				anonymousUrl(mongo),
+				"db.adminCommand({ listDatabases: 1 })",
+			);
+			if (!anonymous.output.includes("requires authentication")) {
+				throw new Error(`Anonymous client: ${anonymous.output}`);
+			}
+			return (
+				(await mongosh(storedUrl(mongo), "db.hello().isWritablePrimary")) ===
 				"true"
-		);
-	});
+			);
+		},
+		() => describeService(mongo.appName),
+	);
 
 const waitForAnonymousAccess = (mongo: MongoNested) =>
 	waitUntil(
@@ -190,6 +207,7 @@ const waitForAnonymousAccess = (mongo: MongoNested) =>
 		async () =>
 			(await mongosh(anonymousUrl(mongo), "db.hello().isWritablePrimary")) ===
 			"true",
+		() => describeService(mongo.appName),
 	);
 
 const expectAnonymousRefused = async (mongo: MongoNested) => {
@@ -252,6 +270,23 @@ const serviceLogs = async (appName: string) => {
 		logs.push(stdout, stderr);
 	}
 	return logs.join("\n");
+};
+
+// A timeout on a CI runner leaves nothing else to look at once the run is over.
+const describeService = async (appName: string) => {
+	const run = (...args: string[]) =>
+		dockerCli(...args).catch((error: Error) => `failed: ${error.message}`);
+	const task = await runningContainerId(appName).catch(() => "");
+	const lines = [
+		`engine: ${await run("info", "--format", "{{.ServerVersion}} {{.KernelVersion}}")}`,
+		`tasks: ${await run("service", "ps", "--no-trunc", "--format", "{{.Name}} {{.CurrentState}} {{.Error}}", appName)}`,
+		`network: ${await run("network", "inspect", "--format", "{{json .IPAM.Config}}", NETWORK)}`,
+		`client resolves: ${await run("exec", CLIENT, "getent", "hosts", appName)}`,
+		`task resolves: ${task ? await run("exec", task, "getent", "hosts", appName) : "no running task"}`,
+		`task address: ${task ? await run("exec", task, "hostname", "-i") : "no running task"}`,
+		`logs: ${(await serviceLogs(appName).catch((error: Error) => error.message)).slice(-3000)}`,
+	];
+	return lines.join("\n");
 };
 
 // Swarm bumps Version.Index while a service converges, and an update against an
@@ -331,7 +366,7 @@ describe("mongo replica set access control", () => {
 			"--entrypoint",
 			"sleep",
 			IMAGE,
-			"900",
+			"3600",
 		);
 	}, 600_000);
 
