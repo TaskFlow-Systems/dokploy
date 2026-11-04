@@ -23,9 +23,17 @@ A deployment's log stays where it was written. Reads and single removals find th
 
 The connection strings the panel shows come from `apps/dokploy/lib/mongo-connection-url.ts`. The external one always carries `directConnection=true`: a replica set names its member `<appName>:27017`, which resolves only inside the Docker network, so a driver outside that follows discovery cannot connect. The internal one leaves discovery on for a replica set. `mongosh` adds `directConnection=true` to a one-host URL that does not set it, so a check through `mongosh` sees what a driver does only with an explicit `directConnection=false`.
 
+## Gravatar
+
+The Profile page contacts `www.gravatar.com` only after the user picks the @ option or when the account's image is already a Gravatar, because the request carries a hash of the user's email. `GravatarOption` (`components/dashboard/settings/profile/gravatar-option.tsx`) renders the `<img>` only then; computing the hash in `profile-form.tsx` stays in the browser. `__test__/settings/gravatar-on-request.test.ts` fails if an upstream merge puts the URL back into the avatar list.
+
 ## Service page tabs
 
 The eight pages under `pages/dashboard/project/[projectId]/environment/[environmentId]/services/` load each tab's code on first open through `lazyTab` (`components/dashboard/shared/lazy-service-tabs.tsx`), and each `TabsTrigger` starts that load with `onPointerEnter={Tab.preload}`. A tab with several components gets one module (`show-*-general-tab`, `show-*-advanced-tab`), so it appears at once. What the page header shows stays a normal import. `DashboardLayout` renders nothing until mounted, so the dashboard has no server-rendered content. After an upstream merge, check that no tab came back as a normal import.
+
+## Stripe in the browser
+
+A panel contacts Stripe's hosts only after a click on Subscribe now in the onboarding plan step: `plan-step.tsx` imports `@stripe/stripe-js/pure` and calls `loadStripe` in that handler. The package's main entry injects `js.stripe.com/v3` as soon as the module runs, even with no key, and the script then calls `m.stripe.network` and `m.stripe.com` by itself. The pages router's prefetch runs a page's module on idle, so an import anywhere under a page linked from the sidebar reaches every panel page. The billing page needs no browser SDK: it redirects to the URL of the checkout session. `__test__/billing/stripe-script-on-demand.test.ts` fails on the main entry; after an upstream merge, check that it still passes.
 
 ## Pull requests
 
