@@ -1,6 +1,8 @@
 name: Bun Migration Docker Check
 
 on:
+  # deps-auto-update.yml starts this on its branch too: its pull_request runs
+  # wait for approval, and a dependency update can break the image or node-pty.
   workflow_dispatch:
     inputs:
       railpack-frontend:
