@@ -27,6 +27,10 @@ A deployment's log stays where it was written. Reads and single removals find th
 
 The connection strings the panel shows come from `apps/dokploy/lib/mongo-connection-url.ts`. The external one always carries `directConnection=true`: a replica set names its member `<appName>:27017`, which resolves only inside the Docker network, so a driver outside that follows discovery cannot connect. The internal one leaves discovery on for a replica set. `mongosh` adds `directConnection=true` to a one-host URL that does not set it, so a check through `mongosh` sees what a driver does only with an explicit `directConnection=false`.
 
+## Mongo tool arguments
+
+`getMongoBackupCommand`, `getMongoRestoreCommand` and `buildMongoPasswordChangeCommand` pass `--username=<user>` and `--password="$DOKPLOY_DB_PASSWORD"`, with the password in `docker exec -e`. The password validator allows a leading `-`, and the `-p <value>` form fails on it however well the shell quotes it: `mongodump` and `mongorestore` refuse `-x` and `--port` before connecting, and `mongosh` also refuses a lone `-`. The text of a failed command reaches the UI, and an env assignment is what `redactSensitiveText` masks whole. `__test__/backups/mongo-password-argument.test.ts` fails if an upstream merge puts the old form back.
+
 ## Database connection strings
 
 The strings the panel shows for Postgres, MySQL, MariaDB, Redis and libSQL come from `apps/dokploy/lib/database-connection-url.ts`, and Mongo's builders use its `encodeCredentials` and `formatUrlHost`. The user, the password and the database name are percent-encoded, because `DATABASE_PASSWORD_REGEX` allows `@ : ? # %` and no validator limits the name. A host with a colon gets brackets, because `getPublicIpWithFallback` falls back to IPv6 and `server.ipAddress` accepts any text. Two clients fail on such a string for reasons of their own: `@libsql/client` refuses any URL with credentials, and `node-redis` looks up the address with its brackets.

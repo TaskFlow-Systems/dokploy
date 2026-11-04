@@ -273,8 +273,10 @@ export const getMongoBackupCommand = (
 	databasePassword: string,
 ) => {
 	const safeDatabase = normalizeRestoreDatabaseName(database);
-	const innerCommand = `set -o pipefail; mongodump -d ${quoteRestoreShellArg(safeDatabase)} -u ${quoteRestoreShellArg(databaseUser)} -p ${quoteRestoreShellArg(databasePassword)} --archive --authenticationDatabase admin --gzip`;
-	return `docker exec -i "$CONTAINER_ID" bash -c ${quoteRestoreShellArg(innerCommand)}`;
+	// mongodump reads `-p -x` as a flag with no value followed by an option, and a
+	// password may start with `-`. Only the `=` form takes any value.
+	const innerCommand = `set -o pipefail; mongodump -d ${quoteRestoreShellArg(safeDatabase)} --username=${quoteRestoreShellArg(databaseUser)} --password="$DOKPLOY_DB_PASSWORD" --archive --authenticationDatabase admin --gzip`;
+	return `docker exec -e DOKPLOY_DB_PASSWORD=${quoteRestoreShellArg(databasePassword)} -i "$CONTAINER_ID" bash -c ${quoteRestoreShellArg(innerCommand)}`;
 };
 
 export const getLibsqlBackupCommand = (database: string) => {
