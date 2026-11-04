@@ -79,7 +79,7 @@ describe("buildLibsql replica spec", () => {
 	});
 
 	it("keeps shell syntax in the primary URL out of the command and unchanged in Env", async () => {
-		const url = "http://host:5001/$(touch /tmp/pwn);`id`'#&|";
+		const url = "http://host:5001/$(touch$IFS/tmp/pwn);`id`'#&|";
 		const { Args, Env } = await containerSpec(fixture({ sqldPrimaryUrl: url }));
 
 		expect(Args[1]).not.toContain("/tmp/pwn");
@@ -155,13 +155,76 @@ describe("buildLibsql replica spec", () => {
 		expect(mocks.createService).not.toHaveBeenCalled();
 	});
 
-	it("refuses https with the default command, which has no TLS flags", async () => {
+	it.each([
+		["null", null],
+		["cleared", ""],
+		["blank", "  "],
+	])(
+		"refuses https with a %s command, which is the default and has no TLS flags",
+		async (_, command) => {
+			await expect(
+				buildLibsql(
+					fixture({ command, sqldPrimaryUrl: "https://primary-app:5001" }),
+				),
+			).rejects.toThrow("without TLS");
+
+			expect(mocks.inspect).not.toHaveBeenCalled();
+			expect(mocks.createService).not.toHaveBeenCalled();
+		},
+	);
+
+	it("refuses a primary URL without a scheme, on which sqld panics at every request", async () => {
 		await expect(
-			buildLibsql(fixture({ sqldPrimaryUrl: "https://primary-app:5001" })),
-		).rejects.toThrow("without TLS");
+			buildLibsql(fixture({ sqldPrimaryUrl: "primary-app:5001" })),
+		).rejects.toThrow("full http:// URL");
 
 		expect(mocks.inspect).not.toHaveBeenCalled();
 		expect(mocks.createService).not.toHaveBeenCalled();
+	});
+
+	it.each([
+		["null", null],
+		["cleared", ""],
+		["blank", "  "],
+	])(
+		"runs a replica's default command when the custom command is %s",
+		async (_, command) => {
+			const { Command, Args } = await containerSpec(fixture({ command }));
+
+			expect(Command).toEqual(["/bin/sh"]);
+			expect(Args[1]).toContain("iku.db.before-replica-");
+			expect(Args[1].split("\n").at(-1)).toMatch(/^exec sqld /);
+			expect(Args[1]).toContain("--admin-listen-addr 0.0.0.0:5000");
+		},
+	);
+
+	it.each([
+		["null", null],
+		["cleared", ""],
+		["blank", "  "],
+	])(
+		"runs a primary's default command with namespaces when the custom command is %s",
+		async (_, command) => {
+			const { Command, Args } = await containerSpec(
+				fixture({
+					sqldNode: "primary",
+					sqldPrimaryUrl: null,
+					enableNamespaces: true,
+					command,
+				}),
+			);
+
+			expect(Command).toEqual(["/bin/sh"]);
+			expect(Args[1]).toBe(`${PRIMARY_COMMAND} --enable-namespaces`);
+		},
+	);
+
+	it("runs a primary's default command when the custom command is cleared and namespaces are off", async () => {
+		const { Args } = await containerSpec(
+			fixture({ sqldNode: "primary", sqldPrimaryUrl: null, command: "" }),
+		);
+
+		expect(Args[1]).toBe(PRIMARY_COMMAND);
 	});
 
 	it("lets a custom command use https, since it can pass the TLS flags", async () => {

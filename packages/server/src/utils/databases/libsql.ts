@@ -12,6 +12,10 @@ import {
 } from "../docker/utils";
 import { getRemoteDocker } from "../servers/remote-docker";
 import { withResolvedVaultRefs } from "../vault";
+import {
+	getCustomLibsqlCommand,
+	getLibsqlPrimaryUrlProblem,
+} from "./libsql-primary-url";
 
 export type LibsqlNested = InferResultType<
 	"libsql",
@@ -35,26 +39,19 @@ const REPLICA_COMMAND = `if ls iku.db/dbs/*/data >/dev/null 2>&1 && ! ls iku.db/
 fi
 exec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --admin-listen-addr 0.0.0.0:5000`;
 
-// Each of these would start a node that never replicates while the deployment
-// reports success, so it fails here, with the running service left as it is.
+// These fail here, with the running service left as it is.
 const assertReplicaCanConnect = ({
 	sqldPrimaryUrl,
 	command,
 }: Pick<LibsqlNested, "sqldPrimaryUrl" | "command">) => {
-	if (!sqldPrimaryUrl) {
-		throw new Error("A libSQL replica needs the URL of its primary");
+	const problem = getLibsqlPrimaryUrlProblem(sqldPrimaryUrl, command);
+	if (problem) {
+		throw new Error(problem);
 	}
 	// sqld exits at once, and Swarm rolls the update back.
 	if (command?.includes("--grpc-listen-addr")) {
 		throw new Error(
 			"A libSQL replica cannot listen for gRPC: remove --grpc-listen-addr from the custom command",
-		);
-	}
-	// sqld stays up and every request hangs. The field's placeholder used to suggest
-	// https, and only a custom command can pass the TLS flags.
-	if (!command && sqldPrimaryUrl.startsWith("https://")) {
-		throw new Error(
-			"The default libSQL command connects to its primary without TLS: use the primary's http:// Internal Replication Connection URL, or a custom command with the --primary-grpc-tls flags",
 		);
 	}
 };
@@ -92,7 +89,7 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 
 	// sqld reads SQLD_PRIMARY_GRPC_URL by itself, so this free text stays out of the
 	// shell and a custom command gets it too. Only the image's entrypoint reads
-	// SQLD_PRIMARY_URL: an empty command runs it, and a custom command may refer to it.
+	// SQLD_PRIMARY_URL, and a custom command may refer to it.
 	const defaultLibsqlEnv = `SQLD_NODE="${sqldNode}"\nSQLD_HTTP_AUTH="basic:${basicAuth}"${
 		env ? `\n${env}` : ""
 	}${
@@ -133,7 +130,9 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 
 	const docker = await getRemoteDocker(libsql.serverId);
 
-	let finalCommand = command ?? (isReplica ? REPLICA_COMMAND : PRIMARY_COMMAND);
+	let finalCommand =
+		getCustomLibsqlCommand(command) ??
+		(isReplica ? REPLICA_COMMAND : PRIMARY_COMMAND);
 	if (enableNamespaces) {
 		finalCommand += " --enable-namespaces";
 	}
@@ -146,12 +145,8 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 				Image: "ghcr.io/tursodatabase/libsql-server:v0.24.32",
 				Env: envVariables,
 				Mounts: [...volumesMount, ...bindsMount, ...filesMount],
-				...(finalCommand
-					? {
-							Command: ["/bin/sh"],
-							Args: ["-c", finalCommand],
-						}
-					: {}),
+				Command: ["/bin/sh"],
+				Args: ["-c", finalCommand],
 				Labels: {
 					...Labels,
 					...buildDokployLabels({
