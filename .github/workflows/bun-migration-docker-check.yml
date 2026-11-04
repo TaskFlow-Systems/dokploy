@@ -65,6 +65,8 @@ jobs:
           docker run --rm --entrypoint bun dokploy-bun-check:main --version
           docker run --rm --entrypoint sh dokploy-bun-check:main -lc '
             test -f /app/packages/server/dist/index.js
+            test ! -e /app/node_modules/sharp
+            test ! -e /app/node_modules/@img
             node --input-type=module -e "console.log(await import.meta.resolve(\"@dokploy/server\"))"
           '
           # The panel calls these at runtime; the image installs them without

@@ -31,11 +31,15 @@ COPY packages/server/package.json ./packages/server/package.json
 #
 # The @trpc packages list typescript as a required peer, so the production
 # install also brings the TypeScript 7 compiler, a Go binary the panel never runs.
+#
+# sharp is an optional dependency of next, used only behind /_next/image, which
+# images.unoptimized turns off. It brings libvips, 38 MB of C the panel never runs.
 FROM deps AS prod-deps
 RUN --mount=type=cache,id=bun,target=/root/.bun/install/cache \
     bun install --production --frozen-lockfile --linker hoisted \
     && rm -f node_modules/dokploy node_modules/@dokploy/api node_modules/@dokploy/schedules \
     && rm -rf node_modules/typescript node_modules/@typescript node_modules/.bin/tsc \
+    && rm -rf node_modules/sharp node_modules/@img \
     && mkdir -p packages/server/node_modules
 
 FROM deps AS build
