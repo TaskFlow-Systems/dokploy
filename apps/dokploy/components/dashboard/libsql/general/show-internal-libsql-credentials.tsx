@@ -61,10 +61,12 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 									<Label>Internal Port (Container)</Label>
 									<Input disabled value="8080" />
 								</div>
-								<div className="w-full flex flex-col gap-2">
-									<Label>Internal GRPC Port (Container)</Label>
-									<Input disabled value="5001" />
-								</div>
+								{data?.sqldNode !== "replica" && (
+									<div className="w-full flex flex-col gap-2">
+										<Label>Internal GRPC Port (Container)</Label>
+										<Input disabled value="5001" />
+									</div>
+								)}
 								<div className="w-full flex flex-col gap-2">
 									<Label>Internal Admin Port (Container)</Label>
 									<Input disabled value="5000" />
@@ -110,17 +112,22 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 									}
 								/>
 							</div>
-							<div className="flex flex-col gap-2 md:col-span-2">
-								<Label>Internal Replication Connection URL </Label>
-								<ToggleVisibilityInput
-									disabled
-									value={
-										data
-											? buildLibsqlUrl(data, { host: data.appName, port: 5001 })
-											: ""
-									}
-								/>
-							</div>
+							{data?.sqldNode !== "replica" && (
+								<div className="flex flex-col gap-2 md:col-span-2">
+									<Label>Internal Replication Connection URL </Label>
+									<ToggleVisibilityInput
+										disabled
+										value={
+											data
+												? buildLibsqlUrl(data, {
+														host: data.appName,
+														port: 5001,
+													})
+												: ""
+										}
+									/>
+								</div>
+							)}
 						</div>
 					</CardContent>
 				</Card>

@@ -67,7 +67,7 @@ const Libsql = (
 	const { projectId, environmentId } = router.query;
 	const [tab, setSab] = useState<TabState>(activeTab);
 	const { data } = api.libsql.one.useQuery({ libsqlId });
-	const { data: auth } = api.user.get.useQuery();
+	const { data: permissions } = api.user.getPermissions.useQuery();
 
 	const { data: isCloud } = api.settings.isCloud.useQuery();
 	const { data: serverIp } = api.settings.getIp.useQuery();
@@ -155,15 +155,17 @@ const Libsql = (
 									)}
 								</div>
 								<div className="flex flex-row gap-2 justify-end">
-									<UpdateLibsql libsqlId={libsqlId} />
-									{(auth?.role === "owner" || auth?.canCreateServices) && (
+									{permissions?.service.create && (
+										<UpdateLibsql libsqlId={libsqlId} />
+									)}
+									{permissions?.service.create && (
 										<TransferService
 											id={libsqlId}
 											type="libsql"
 											serverId={data?.serverId}
 										/>
 									)}
-									{(auth?.role === "owner" || auth?.canDeleteServices) && (
+									{permissions?.service.delete && (
 										<DeleteService id={libsqlId} type="libsql" />
 									)}
 								</div>
@@ -387,6 +389,8 @@ export async function getServerSideProps(
 				libsqlId: params?.libsqlId,
 			});
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
+			await helpers.settings.getIp.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),

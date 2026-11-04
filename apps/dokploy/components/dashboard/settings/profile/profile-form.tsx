@@ -68,6 +68,9 @@ const randomImages = [
 	"/avatars/avatar-12.png",
 ];
 
+// crypto.subtle exists only in a secure context: not on a panel on plain HTTP.
+const canHashEmail = !!globalThis.crypto?.subtle;
+
 export const ProfileForm = () => {
 	const { data, refetch, isPending } = api.user.get.useQuery();
 	const { data: isCloud } = api.settings.isCloud.useQuery();
@@ -114,7 +117,7 @@ export const ProfileForm = () => {
 			);
 			form.setValue("allowImpersonation", data?.user?.allowImpersonation);
 
-			if (data.user.email) {
+			if (data.user.email && canHashEmail) {
 				generateSHA256Hash(data.user.email).then((hash) => {
 					setGravatarHash(hash);
 				});
@@ -397,6 +400,7 @@ export const ProfileForm = () => {
 																	key="gravatar"
 																	value={field.value}
 																	gravatarUrl={gravatarUrl}
+																	hashPending={canHashEmail && !gravatarUrl}
 																/>
 																{randomImages.map((image) => (
 																	<FormItem key={image}>
@@ -420,7 +424,7 @@ export const ProfileForm = () => {
 																))}
 															</RadioGroup>
 														</FormControl>
-														{gravatarUrl && (
+														{canHashEmail && (
 															<FormDescription>
 																The @ option uses your Gravatar. Choosing it
 																makes your browser contact gravatar.com, which

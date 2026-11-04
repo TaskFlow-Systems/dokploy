@@ -1,4 +1,13 @@
+import {
+	getMariadbBackupCommand,
+	getMysqlBackupCommand,
+} from "@dokploy/server/utils/backups/utils";
 import { ExecError } from "@dokploy/server/utils/process/ExecError";
+import {
+	getMariadbRestoreCommand,
+	getMongoRestoreCommand,
+	getMysqlRestoreCommand,
+} from "@dokploy/server/utils/restore/utils";
 import {
 	isSecretPlaceholderValue,
 	preserveSecretPlaceholderFields,
@@ -13,6 +22,7 @@ import {
 	redactSensitiveText,
 	secretUpdateValue,
 } from "@dokploy/server/utils/security/redaction";
+import { quote } from "shell-quote";
 import { describe, expect, it } from "vitest";
 
 describe("shared secret redaction helpers", () => {
@@ -416,6 +426,201 @@ describe("shared secret redaction helpers", () => {
 		for (const message of untouched) {
 			expect(redactSensitiveText(message)).toBe(message);
 		}
+	});
+
+	describe("a shell word made of several quoted pieces", () => {
+		// They cover the paths through shell-quote: `'` with `!` splits the word at
+		// every `'`, `'` alone wraps it in double quotes, the rest stays bare.
+		const passwords = [
+			"we'ird\"pass\\word $HOME `x` ;!",
+			"we'ird x!",
+			"'we ird!",
+			"we ird'!",
+			"we''ird x!",
+			"\"'we ird!",
+			"\"'\"'we ird!",
+			"we' ird!",
+			"we'ird\"pass x",
+			"we'ird;pass&x|y",
+			"we'ird x\\",
+			'we ird"!',
+			'"ird x',
+			"we'ird'",
+			"we&ird|x",
+		];
+		const fragments = ["we", "ird", "pass", "word", "HOME", "x", "y"];
+		const visiblePart = (redacted: string, password: string) => {
+			const rest = redacted
+				.replaceAll(REDACTED_SECRET_VALUE, " ")
+				.split(/[^A-Za-z]+/);
+			return fragments.filter(
+				(fragment) => password.includes(fragment) && rest.includes(fragment),
+			);
+		};
+
+		for (const password of passwords) {
+			const word = quote([password]);
+
+			it(`masks ${word} whole and nothing after it`, () => {
+				for (const [before, after] of [
+					["docker exec -e DOKPLOY_DB_PASSWORD=", " -i c sh"],
+					["mysqldump --password=", " db"],
+					["mongorestore --password ", " --db appdb"],
+					["mysql -u root -p", " db"],
+				] as const) {
+					expect(redactSensitiveText(`${before}${word}${after}`)).toBe(
+						`${before}${REDACTED_SECRET_VALUE}${after}`,
+					);
+				}
+			});
+
+			it(`shows no part of ${word} in the database commands`, () => {
+				// The user of a compose backup is not validated, and one with a space
+				// or a `!` changes how the whole inner command is quoted.
+				for (const user of ["app", "ap p", "ap!p", "ap'p"]) {
+					const commands = [
+						getMysqlRestoreCommand("appdb", password),
+						getMariadbRestoreCommand("appdb", user, password),
+						getMongoRestoreCommand("appdb", user, password),
+						getMysqlBackupCommand("appdb", password),
+						getMariadbBackupCommand("appdb", user, password),
+					];
+					for (const command of commands) {
+						const error = new ExecError(`Command failed: ${command}`, {
+							command,
+						});
+
+						expect(visiblePart(error.message, password)).toEqual([]);
+						expect(visiblePart(error.command ?? "", password)).toEqual([]);
+					}
+				}
+			});
+		}
+
+		it("reads the other ways to join pieces", () => {
+			for (const value of [
+				String.raw`'we'\''ird x'`,
+				String.raw`'we'\'\''ird x'`,
+				`'we'"''"'ird x'`,
+				`"we'"'"'ird x"`,
+				String.raw`\"we'ird x\"`,
+				String.raw`\"we\\\"ird x\"`,
+			]) {
+				expect(redactSensitiveText(`FOO_TOKEN=${value} next`)).toBe(
+					`FOO_TOKEN=${REDACTED_SECRET_VALUE} next`,
+				);
+			}
+		});
+
+		it("keeps a variable reference and hides a word holding more", () => {
+			const options = { broadKeys: true, keepVariableReferences: true };
+
+			expect(redactSensitiveText(`run FOO_PASSWORD="$BAR" next`, options)).toBe(
+				`run FOO_PASSWORD="$BAR" next`,
+			);
+			expect(
+				redactSensitiveText(`run FOO_PASSWORD='$BAR'"'"'ird x' next`, options),
+			).toBe(`run FOO_PASSWORD=${REDACTED_SECRET_VALUE} next`);
+		});
+
+		// What the pattern gave before it read several pieces, with # for the mask:
+		// text, default options, broad options when they differ. The broad options
+		// read a line that is one assignment to its end, whatever the value.
+		const unchanged: [string, string, string?][] = [
+			[
+				`{"cmd":"FOO_TOKEN='abc'","x":"y z"}`,
+				`{"cmd":"FOO_TOKEN=#","x":"y z"}`,
+			],
+			[`["FOO_TOKEN='abc'", "OTHER=1 2"]`, `["FOO_TOKEN=#", "OTHER=1 2"]`],
+			[
+				`sh -c "FOO_TOKEN='abc'" && echo "done now"`,
+				`sh -c "FOO_TOKEN=#" && echo "done now"`,
+			],
+			[
+				`echo "FOO_TOKEN='abc'" > "file name"`,
+				`echo "FOO_TOKEN=#" > "file name"`,
+			],
+			[`FOO_TOKEN='abc',user='bob'`, `FOO_TOKEN=#,user='bob'`, "FOO_TOKEN=#"],
+			[`FOO_TOKEN="abc",user="bob"`, `FOO_TOKEN=#,user="bob"`, "FOO_TOKEN=#"],
+			[`call(FOO_TOKEN='abc')`, "call(FOO_TOKEN=#)"],
+			[`<db FOO_TOKEN="abc"/><x y="1 2"/>`, `<db FOO_TOKEN=#/><x y="1 2"/>`],
+			[`FOO_TOKEN='abc'\nsay 'hello there'`, `FOO_TOKEN=#\nsay 'hello there'`],
+			[`FOO_TOKEN="abc"\nsay "hello there"`, `FOO_TOKEN=#\nsay "hello there"`],
+			[
+				`FOO_TOKEN=abc"def\nline two\nline "three" here`,
+				`FOO_TOKEN=#\nline two\nline "three" here`,
+			],
+			[
+				`FOO_TOKEN=abc'def\nthe build isn't done\nnext`,
+				`FOO_TOKEN=#\nthe build isn't done\nnext`,
+			],
+			[
+				`{"msg":"FOO_TOKEN=abc"}\n{"msg":"next line"}`,
+				`{"msg":"FOO_TOKEN=#\n{"msg":"next line"}`,
+			],
+			["FOO_TOKEN=abc next", "FOO_TOKEN=# next", "FOO_TOKEN=#"],
+			[
+				`tool --password 'a b' --other 'c d'`,
+				`tool --password # --other 'c d'`,
+			],
+			[`mysql -u root -p'a b' db`, "mysql -u root -p# db"],
+			[`pg_dump --no-password 'db name'`, `pg_dump --no-password 'db name'`],
+		];
+
+		for (const [text, plain, broad = plain] of unchanged) {
+			it(`leaves the text around the value in ${JSON.stringify(text)}`, () => {
+				const masked = (expected: string) =>
+					expected.replaceAll("#", REDACTED_SECRET_VALUE);
+
+				expect(redactSensitiveText(text)).toBe(masked(plain));
+				expect(
+					redactSensitiveText(text, {
+						broadKeys: true,
+						keepVariableReferences: true,
+					}),
+				).toBe(masked(broad));
+			});
+		}
+
+		it("keeps a quoted value over several lines whole", () => {
+			for (const value of [`"one two\nthree"`, `'one two\nthree'`]) {
+				expect(redactSensitiveText(`PRIVATE_KEY=${value}\nnext`)).toBe(
+					`PRIVATE_KEY=${REDACTED_SECRET_VALUE}\nnext`,
+				);
+			}
+		});
+
+		// Quotes in a row have the most ways to pair up. The broad options are the
+		// ones that run over whole logs and files.
+		it("stays fast on long lines of quotes", () => {
+			const size = 2_000_000;
+			const fill = (unit: string, head = "") =>
+				head + unit.repeat(Math.ceil(size / unit.length));
+			const lines = [
+				fill(`'a'"'"'b'"'"'`, "password="),
+				fill(`a'"'"'`, `password='"'"'`),
+				fill(`'"`, "password="),
+				fill(`'`, `password=''"`),
+				fill(`"`, `password=''`),
+				fill("a", `password=''"`),
+				fill("a", `password=\\"`),
+				fill(String.raw`\\\a`, `password=\\"`),
+				fill("\\", `password=\\"`),
+				fill(`'"'"'`, `password="`),
+				fill(`password=''"`),
+				fill(`password="\\`),
+				fill(`password=''' `),
+				fill(`password=\\"`),
+				fill(`password='"'"' `),
+			];
+			const startedAt = performance.now();
+
+			for (const line of lines) {
+				redactSensitiveText(line, { broadKeys: true });
+			}
+
+			expect(performance.now() - startedAt).toBeLessThan(15_000);
+		});
 	});
 
 	it("stores only redacted command output on ExecError", () => {

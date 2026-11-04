@@ -227,7 +227,6 @@ export const waitForApplicationRollout = (
 ) =>
 	waitForSwarmServiceConvergence(appName, serverId, {
 		quietStartAllowanceMs: APPLICATION_QUIET_START_ALLOWANCE_MS,
-		monitorTasks: true,
 	});
 
 const getImageName = async (application: ApplicationNested) => {

@@ -25,9 +25,11 @@ type AvatarForm = { image: string };
 const Option = ({
 	value,
 	gravatarUrl,
+	hashPending,
 }: {
 	value: string;
 	gravatarUrl: string | null;
+	hashPending?: boolean;
 }) => {
 	const form = useForm<AvatarForm>({ defaultValues: { image: value } });
 	return createElement(Form<AvatarForm>, {
@@ -39,14 +41,24 @@ const Option = ({
 				createElement(
 					RadioGroup,
 					{ value: getAvatarType(field.value) },
-					createElement(GravatarOption, { value: field.value, gravatarUrl }),
+					createElement(GravatarOption, {
+						value: field.value,
+						gravatarUrl,
+						hashPending,
+					}),
 				),
 		}),
 	});
 };
 
-const render = (value: string, gravatarUrl: string | null) =>
-	renderToStaticMarkup(createElement(Option, { value, gravatarUrl }));
+const render = (
+	value: string,
+	gravatarUrl: string | null,
+	hashPending?: boolean,
+) =>
+	renderToStaticMarkup(
+		createElement(Option, { value, gravatarUrl, hashPending }),
+	);
 
 describe("Gravatar option on the Profile page", () => {
 	it.each([
@@ -86,6 +98,15 @@ describe("Gravatar option on the Profile page", () => {
 
 	it("renders nothing without a hash and without a saved Gravatar", () => {
 		expect(render("/avatars/avatar-1.png", null)).not.toContain('role="radio"');
+	});
+
+	it("holds the option's place while the hash is computed, with no request and no selectable value", () => {
+		const html = render("/avatars/avatar-1.png", null, true);
+
+		expect(html).toContain('role="radio"');
+		expect(html).toContain("disabled");
+		expect(html).not.toContain("gravatar.com");
+		expect(html).not.toContain("<img");
 	});
 
 	it("builds the Gravatar URL in one place, so the avatar list cannot request it on render", () => {

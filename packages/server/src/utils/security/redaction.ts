@@ -8,10 +8,33 @@ export type SecretRecord = Record<string, unknown>;
 const SENSITIVE_KEY_PATTERN =
 	"(?:access[_-]?key|api[_-]?key|authorization|credential|private[_-]?key|refresh[_-]?token|secret|token|password|passwd|pwd)";
 
-// shell-quote leaves values bare with backslash escapes (pa\&ss) or wraps them
-// in double quotes with escaped quotes, so a value ends at the first unescaped
-// separator, not at the first separator character.
-const SHELL_VALUE_PATTERN = String.raw`"(?:\\.|[^"\\])*"|'[^']*'|(?:\\.|[^\s;&|\\])+`;
+// What shell-quote writes for a value, alone and quoted again for `sh -c`. The
+// value ends at the first separator outside these forms, not at the first
+// separator character:
+//
+//   alone         in sh -c '...'                    in sh -c "..."
+//   a\&b          a\&b                              a\\&b
+//   'a b'         '"'"'a b'"'"'                     'a b'
+//   "a'b"         "a'"'"'b"                         \"a'b\"
+//   'a'"'"'b!'    '"'"'a'"'"'"'"'"'"'"'"'b!'"'"'    (`!` and `'` force the middle form)
+const BARE_PIECE = String.raw`(?:\\\\[;&|]|\\.|[^\s;&|\\])`;
+const QUOTED_PIECE = String.raw`"(?:'"'"'(?!")|\\.|[^"\\])*"|'[^']*'`;
+const ESCAPED_QUOTED_PIECE = String.raw`\\"(?:\\\\\\.|\\\\(?!\\)|\\[^"\\]|[^"\\])*\\"`;
+
+// Only these continue a word after a quoted piece; `\'` is how people write it
+// by hand. Any other quote there usually closes a string around the assignment,
+// as in `"TOKEN='abc'", "next"`, and reading it as a piece would swallow the text
+// up to the next quote, whole lines of a log included.
+const QUOTE_JOINT = String.raw`"'+"|'"+'|\\'`;
+
+// In `sh -c '...'` the value's first quote closes the outer string, so its pieces
+// start one character later. What follows the run of quotes tells this from a
+// value that starts with `"'`, written `'"'"'"'a b'`.
+const OUTER_QUOTE_END = `'(?=(?:"'"'"')*"'"'(?!"'))`;
+
+// Nothing may follow this in a regex: with no way to fail after it, a long value
+// never backtracks.
+const SHELL_VALUE_PATTERN = `(?:${OUTER_QUOTE_END}|${QUOTED_PIECE})(?:(?:${QUOTE_JOINT})+(?:${QUOTED_PIECE})?)*|${ESCAPED_QUOTED_PIECE}${BARE_PIECE}*|${BARE_PIECE}+`;
 
 export const isRedactedSecretValue = (value: unknown) =>
 	value === REDACTED_SECRET_VALUE;
@@ -84,6 +107,30 @@ const redactNestedServerSecrets = <T>(server: T): T => {
 
 	return redacted as T;
 };
+
+// Everything up to the last @ hides, so a password with a raw @ or / never shows in
+// part. A @ in a path hides too much of that URL, which is the safer way to be wrong.
+export const redactUrlPassword = <T extends string | null | undefined>(
+	url: T,
+): T | string => {
+	const at = url?.lastIndexOf("@") ?? -1;
+	if (!url || at === -1) {
+		return url;
+	}
+	const scheme = url.indexOf("://");
+	const start = scheme === -1 ? 0 : scheme + 3;
+	const colon = url.slice(start, at).indexOf(":");
+	const user = colon === -1 ? "" : url.slice(start, start + colon + 1);
+	return `${url.slice(0, start)}${user}${REDACTED_SECRET_VALUE}${url.slice(at)}`;
+};
+
+// A URL that comes back as it was shown means "keep what is stored". An edited one
+// is saved as sent: the stored password never travels to another host, for the same
+// reason as assertStoredSecretTargetUnchanged.
+export const keepStoredUrlPassword = <T extends string | null | undefined>(
+	next: T,
+	stored: string | null | undefined,
+) => (next && next === redactUrlPassword(stored) ? stored : next);
 
 export type SharedEnvReadAccess = {
 	environmentEnv: boolean;
@@ -213,6 +260,11 @@ export const redactDatabaseServiceSecretsFor = <
 	const withRelations = { ...redacted };
 	if ("server" in withRelations) {
 		withRelations.server = redactNestedServerSecrets(withRelations.server);
+	}
+	if ("sqldPrimaryUrl" in withRelations) {
+		withRelations.sqldPrimaryUrl = redactUrlPassword(
+			withRelations.sqldPrimaryUrl as string | null | undefined,
+		);
 	}
 	return redactServiceSharedEnv(withRelations as T, sharedEnvAccess);
 };
@@ -401,6 +453,15 @@ type KeyPatterns = {
 	afterAuthorization: RegExp[];
 };
 
+// This rule also runs over whole command output, so it has to stay linear on a
+// long line without spaces. A quoted key checks once that a value follows, or it
+// would rescan the string from every keyword inside it. A bare key starts at its
+// keyword: the keyword begins with a word character and a separator is not one,
+// so a boundary always exists before it and scanning for one proves nothing.
+// Only what follows the keyword is bounded; 128 is well past the longest key
+// found in real configs and logs.
+const VALUE_AFTER_KEY = String.raw`\s*:\s*[^\s,}\]]`;
+
 const DEFAULT_KEY_PATTERNS: KeyPatterns = {
 	beforeAuthorization: [
 		new RegExp(
@@ -414,7 +475,7 @@ const DEFAULT_KEY_PATTERNS: KeyPatterns = {
 	],
 	afterAuthorization: [
 		new RegExp(
-			`((?:"[^"]*${SENSITIVE_KEY_PATTERN}[^"]*"|'[^']*${SENSITIVE_KEY_PATTERN}[^']*'|\\b[^\\s:,{]*${SENSITIVE_KEY_PATTERN}[^\\s:,{]*\\b)\\s*:\\s*)("[^"]*"|'[^']*'|[^\\s,}\\]]+)`,
+			`((?:"(?=[^"]*"${VALUE_AFTER_KEY})[^"]*${SENSITIVE_KEY_PATTERN}[^"]*"|'(?=[^']*'${VALUE_AFTER_KEY})[^']*${SENSITIVE_KEY_PATTERN}[^']*'|${SENSITIVE_KEY_PATTERN}[^\\s:,{]{0,128}\\b)\\s*:\\s*)("[^"]*"|'[^']*'|[^\\s,}\\]]+)`,
 			"gi",
 		),
 		// Negated flags such as pg_dump's `--no-password` take no value, so the
@@ -665,12 +726,15 @@ export function redactSensitiveText(
 	// mysql/mariadb clients take the password glued to -p. A separate word after
 	// -p is not a password, uppercase -P is the port, and -p of other tools
 	// (docker -p, ssh -p, compose -p) is a port or project name.
+	// A client word without a glued password takes the rest of its command, so
+	// the next client word there is not scanned again: it would find nothing.
 	redacted = redacted.replace(
 		new RegExp(
-			String.raw`(\b(?:mysql|mariadb)[a-z-]*(?:\\.|[^\n;&|\\])*?\s-p)(${SHELL_VALUE_PATTERN})`,
+			String.raw`(\b(?:mysql|mariadb)[a-z-]*(?:\\.|[^\n;&|\\])*?\s-p)(${SHELL_VALUE_PATTERN})|\b(?:mysql|mariadb)(?:[^\n;&|\\]+|\\.)*`,
 			"g",
 		),
-		hideRest,
+		(match, prefix?: string) =>
+			prefix === undefined ? match : hideRest(match, prefix),
 	);
 
 	redacted = redacted.replace(

@@ -51,15 +51,6 @@ export const buildMysqlPasswordChangeCommand = ({
 	return `docker exec -e DOKPLOY_DB_PASSWORD=${quoteShellArg(databaseRootPassword)} "$CONTAINER_ID" sh -c ${quoteShellArg(clientCommand)}`;
 };
 
-export const buildRedisPasswordChangeCommand = ({
-	databasePassword,
-	password,
-}: {
-	databasePassword: string;
-	password: string;
-}) =>
-	`docker exec "$CONTAINER_ID" redis-cli -a ${quoteShellArg(databasePassword)} CONFIG SET requirepass ${quoteShellArg(password)}`;
-
 export const buildMongoPasswordChangeCommand = ({
 	databasePassword,
 	databaseUser,

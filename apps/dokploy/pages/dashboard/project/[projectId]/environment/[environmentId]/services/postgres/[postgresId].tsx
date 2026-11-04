@@ -396,6 +396,8 @@ export async function getServerSideProps(
 				postgresId: params?.postgresId,
 			});
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
+			await helpers.settings.getIp.prefetch();
 
 			return {
 				props: {

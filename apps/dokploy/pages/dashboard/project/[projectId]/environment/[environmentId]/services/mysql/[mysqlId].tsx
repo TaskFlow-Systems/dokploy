@@ -399,6 +399,8 @@ export async function getServerSideProps(
 				mysqlId: params?.mysqlId,
 			});
 			await helpers.settings.isCloud.prefetch();
+			await helpers.user.getPermissions.prefetch();
+			await helpers.settings.getIp.prefetch();
 			return {
 				props: {
 					trpcState: helpers.dehydrate(),
