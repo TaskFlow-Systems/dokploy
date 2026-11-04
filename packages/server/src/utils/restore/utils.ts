@@ -66,8 +66,11 @@ export const getMongoRestoreCommand = (
 	databasePassword: string,
 ) => {
 	const safeDatabase = normalizeRestoreDatabaseName(database);
-	return getDockerExecShellCommand(
-		`mongorestore --username ${quoteRestoreShellArg(databaseUser)} --password ${quoteRestoreShellArg(databasePassword)} --authenticationDatabase admin --db ${quoteRestoreShellArg(safeDatabase)} --archive --drop`,
+	// mongorestore reads `--password -x` as a flag with no value followed by an
+	// option, and a password may start with `-`. Only the `=` form takes any value.
+	return getDockerExecShellCommandWithPassword(
+		`mongorestore --username=${quoteRestoreShellArg(databaseUser)} --password="$${RESTORE_PASSWORD_ENV}" --authenticationDatabase admin --db ${quoteRestoreShellArg(safeDatabase)} --archive --drop`,
+		databasePassword,
 	);
 };
 

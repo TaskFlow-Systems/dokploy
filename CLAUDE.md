@@ -23,6 +23,10 @@ A deployment's log stays where it was written. Reads and single removals find th
 
 The connection strings the panel shows come from `apps/dokploy/lib/mongo-connection-url.ts`. The external one always carries `directConnection=true`: a replica set names its member `<appName>:27017`, which resolves only inside the Docker network, so a driver outside that follows discovery cannot connect. The internal one leaves discovery on for a replica set. `mongosh` adds `directConnection=true` to a one-host URL that does not set it, so a check through `mongosh` sees what a driver does only with an explicit `directConnection=false`.
 
+## Mongo tool arguments
+
+`getMongoBackupCommand`, `getMongoRestoreCommand` and `buildMongoPasswordChangeCommand` pass `--username=<user>` and `--password="$DOKPLOY_DB_PASSWORD"`, with the password in `docker exec -e`. The password validator allows a leading `-`, and the `-p <value>` form fails on it however well the shell quotes it: `mongodump` and `mongorestore` refuse `-x` and `--port` before connecting, and `mongosh` also refuses a lone `-`. The text of a failed command reaches the UI, and an env assignment is what `redactSensitiveText` masks whole. `__test__/backups/mongo-password-argument.test.ts` fails if an upstream merge puts the old form back.
+
 ## Gravatar
 
 The Profile page contacts `www.gravatar.com` only after the user picks the @ option or when the account's image is already a Gravatar, because the request carries a hash of the user's email. `GravatarOption` (`components/dashboard/settings/profile/gravatar-option.tsx`) renders the `<img>` only then; computing the hash in `profile-form.tsx` stays in the browser. `__test__/settings/gravatar-on-request.test.ts` fails if an upstream merge puts the URL back into the avatar list.

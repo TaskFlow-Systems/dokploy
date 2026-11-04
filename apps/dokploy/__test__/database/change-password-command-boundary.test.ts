@@ -363,10 +363,11 @@ describe("database change-password command boundary", () => {
 		const command = mocks.execAsyncRemote.mock.calls[0]?.[1] as string;
 		const js =
 			'db.getSiblingDB("admin").changeUserPassword("dokploy_user", "safe|stillAllowed")';
-		expect(command).toContain(`mongosh -u ${quoteShellArg(databaseUser)}`);
-		expect(command).toContain(`-p ${quoteShellArg(databasePassword)}`);
-		expect(command).toContain(`--eval ${quoteShellArg(js)}`);
-		expect(command).not.toContain(`-p '${databasePassword}'`);
+		expect(command).toContain(
+			`docker exec -e DOKPLOY_DB_PASSWORD=${quoteShellArg(databasePassword)} "$CONTAINER_ID" sh -c ${quoteShellArg(
+				`mongosh --username=${quoteShellArg(databaseUser)} --password="$DOKPLOY_DB_PASSWORD" --authenticationDatabase admin --eval ${quoteShellArg(js)}`,
+			)}`,
+		);
 		expect(command).not.toContain(
 			`changeUserPassword("${databaseUser}", ${password})`,
 		);

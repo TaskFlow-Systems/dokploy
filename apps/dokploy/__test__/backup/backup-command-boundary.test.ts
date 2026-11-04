@@ -191,9 +191,11 @@ describe("backup command and schema boundaries", () => {
 	it("quotes database credentials inside docker exec backup commands", () => {
 		const command = getMongoBackupCommand("appdb", "$(id)", "`id`");
 
-		expect(command).toContain('docker exec -i "$CONTAINER_ID" bash -c');
-		expect(command).not.toContain("-u $(id)");
-		expect(command).not.toContain("-p `id`");
+		expect(command).toContain(
+			'docker exec -e DOKPLOY_DB_PASSWORD=\\`id\\` -i "$CONTAINER_ID" bash -c',
+		);
+		expect(command).not.toContain("--username=$(id)");
+		expect(command).not.toContain("--password=`id`");
 		expect(command).toContain("mongodump");
 		expect(command).toContain("authenticationDatabase admin");
 	});
