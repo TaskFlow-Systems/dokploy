@@ -16,6 +16,11 @@ const nextConfig = {
 		ignoreBuildErrors: true,
 	},
 	transpilePackages: ["@dokploy/server"],
+	// Nothing here uses next/image. This turns /_next/image into a 404, so anyone
+	// who can reach the panel cannot make it parse images in C through sharp.
+	images: {
+		unoptimized: true,
+	},
 	async headers() {
 		return [
 			{
