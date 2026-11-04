@@ -91,6 +91,7 @@ import {
 	SidebarMenu,
 	SidebarMenuButton,
 	SidebarMenuItem,
+	SidebarMenuSkeleton,
 	SidebarMenuSub,
 	SidebarMenuSubButton,
 	SidebarMenuSubItem,
@@ -166,7 +167,7 @@ type Menu = {
 // Consists of unfiltered home, settings, and help items
 // The items are filtered based on the user's role and permissions
 // The `isEnabled` function is called to determine if the item should be displayed
-const MENU: Menu = {
+export const MENU: Menu = {
 	home: [
 		{
 			isSingle: true,
@@ -488,7 +489,7 @@ const MENU: Menu = {
  * Creates a menu based on the current user's role and permissions
  * @returns a menu object with the home, settings, and help items
  */
-function createMenuForAuthUser(opts: {
+export function createMenuForAuthUser(opts: {
 	auth?: AuthQueryOutput;
 	permissions?: PermissionsOutput;
 	isCloud: boolean;
@@ -530,6 +531,27 @@ function createMenuForAuthUser(opts: {
 		settings: filterEnabled(MENU.settings),
 		help: helpItems,
 	};
+}
+
+/**
+ * A gated link that appears once the user's permissions arrive pushes everything
+ * below it down, so a pointer aimed at a link lands on another one. Until then only
+ * the links above the first gated one are in their final place.
+ */
+export function linksAboveFirstGated(items: NavItem[]): NavItem[] {
+	const firstGated = items.findIndex((item) => item.isEnabled);
+	return firstGated === -1 ? items : items.slice(0, firstGated);
+}
+
+function MenuSkeletonRows({ rows }: { rows: number }) {
+	return Array.from({ length: rows }, (_, index) => (
+		<SidebarMenuItem key={index}>
+			<SidebarMenuSkeleton
+				showIcon
+				className="group-data-[collapsible=icon]:[&>[data-sidebar=menu-skeleton-text]]:hidden"
+			/>
+		</SidebarMenuItem>
+	));
 }
 
 /**
@@ -632,7 +654,13 @@ function SidebarLogo() {
 	return (
 		<>
 			{isLoading ? (
-				<div className="flex flex-row gap-2 items-center justify-center text-sm text-muted-foreground min-h-[5vh] pt-4">
+				// Same height as the selector and the bell below, so the menu under the header does not move when they replace it.
+				<div
+					className={cn(
+						"flex flex-row gap-2 items-center justify-center text-sm text-muted-foreground",
+						isCollapsed ? "h-20" : "h-12",
+					)}
+				>
 					<Loader2 className="animate-spin size-4" />
 				</div>
 			) : (
@@ -970,9 +998,10 @@ export default function Page({ children }: Props) {
 	}, []);
 
 	const pathname = usePathname();
-	const { data: auth } = api.user.get.useQuery();
-	const { data: permissions } = api.user.getPermissions.useQuery();
-	const { data: dokployVersionData } =
+	const { data: auth, isPending: isAuthPending } = api.user.get.useQuery();
+	const { data: permissions, isPending: isPermissionsPending } =
+		api.user.getPermissions.useQuery();
+	const { data: dokployVersionData, isPending: isVersionPending } =
 		api.settings.getDokployVersionData.useQuery();
 	const { data: whitelabeling } = api.whitelabeling.get.useQuery(undefined, {
 		staleTime: 5 * 60 * 1000,
@@ -980,7 +1009,9 @@ export default function Page({ children }: Props) {
 	});
 
 	const includesProjects = pathname?.includes("/dashboard/project");
-	const { data: isCloud } = api.settings.isCloud.useQuery();
+	const { data: isCloud, isPending: isCloudPending } =
+		api.settings.isCloud.useQuery();
+	const isMenuPending = isAuthPending || isPermissionsPending || isCloudPending;
 
 	const {
 		home: filteredHome,
@@ -997,6 +1028,13 @@ export default function Page({ children }: Props) {
 		[...filteredHome, ...filteredSettings],
 		pathname,
 	);
+
+	const homeLinks = isMenuPending
+		? linksAboveFirstGated(MENU.home)
+		: filteredHome;
+	const settingsLinks = isMenuPending
+		? linksAboveFirstGated(MENU.settings)
+		: filteredSettings;
 
 	if (!isLoaded) {
 		return <div className="w-full h-screen bg-background" />; // Placeholder mientras se carga
@@ -1033,7 +1071,7 @@ export default function Page({ children }: Props) {
 					<SidebarGroup>
 						<SidebarGroupLabel>Home</SidebarGroupLabel>
 						<SidebarMenu>
-							{filteredHome.map((item) => {
+							{homeLinks.map((item) => {
 								const isSingle = item.isSingle !== false;
 								const isActive = isSingle
 									? isActiveRoute({ itemUrl: item.url, pathname })
@@ -1056,6 +1094,7 @@ export default function Page({ children }: Props) {
 													className={cn(isActive && "bg-border")}
 												>
 													<Link
+														prefetch={false}
 														href={item.url}
 														className="flex w-full items-center gap-2"
 													>
@@ -1091,6 +1130,7 @@ export default function Page({ children }: Props) {
 																		className={cn(isActive && "bg-border")}
 																	>
 																		<Link
+																			prefetch={false}
 																			href={subItem.url}
 																			className="flex w-full items-center"
 																		>
@@ -1117,12 +1157,15 @@ export default function Page({ children }: Props) {
 									</Collapsible>
 								);
 							})}
+							{isMenuPending && (
+								<MenuSkeletonRows rows={MENU.home.length - homeLinks.length} />
+							)}
 						</SidebarMenu>
 					</SidebarGroup>
 					<SidebarGroup>
 						<SidebarGroupLabel>Settings</SidebarGroupLabel>
 						<SidebarMenu className="gap-1">
-							{filteredSettings.map((item) => {
+							{settingsLinks.map((item) => {
 								const isSingle = item.isSingle !== false;
 								const isActive = isSingle
 									? isActiveRoute({ itemUrl: item.url, pathname })
@@ -1145,6 +1188,7 @@ export default function Page({ children }: Props) {
 													className={cn(isActive && "bg-border")}
 												>
 													<Link
+														prefetch={false}
 														href={item.url}
 														className="flex w-full items-center gap-2"
 													>
@@ -1180,6 +1224,7 @@ export default function Page({ children }: Props) {
 																		className={cn(isActive && "bg-border")}
 																	>
 																		<Link
+																			prefetch={false}
 																			href={subItem.url}
 																			className="flex w-full items-center"
 																		>
@@ -1206,35 +1251,42 @@ export default function Page({ children }: Props) {
 									</Collapsible>
 								);
 							})}
+							{isMenuPending && (
+								<MenuSkeletonRows
+									rows={MENU.settings.length - settingsLinks.length}
+								/>
+							)}
 						</SidebarMenu>
 					</SidebarGroup>
-					<SidebarGroup className="group-data-[collapsible=icon]:hidden">
-						<SidebarGroupLabel>Extra</SidebarGroupLabel>
-						<SidebarMenu>
-							{help.map((item: ExternalLink) => (
-								<SidebarMenuItem key={item.name}>
-									<SidebarMenuButton asChild>
-										<a
-											href={item.url}
-											target="_blank"
-											rel="noopener noreferrer"
-											className="flex w-full items-center gap-2"
-										>
-											<span className="mr-2">
-												<item.icon className="h-4 w-4" />
-											</span>
-											<span>{item.name}</span>
-										</a>
-									</SidebarMenuButton>
-								</SidebarMenuItem>
-							))}
-						</SidebarMenu>
-					</SidebarGroup>
+					{!isMenuPending && (
+						<SidebarGroup className="group-data-[collapsible=icon]:hidden">
+							<SidebarGroupLabel>Extra</SidebarGroupLabel>
+							<SidebarMenu>
+								{help.map((item: ExternalLink) => (
+									<SidebarMenuItem key={item.name}>
+										<SidebarMenuButton asChild>
+											<a
+												href={item.url}
+												target="_blank"
+												rel="noopener noreferrer"
+												className="flex w-full items-center gap-2"
+											>
+												<span className="mr-2">
+													<item.icon className="h-4 w-4" />
+												</span>
+												<span>{item.name}</span>
+											</a>
+										</SidebarMenuButton>
+									</SidebarMenuItem>
+								))}
+							</SidebarMenu>
+						</SidebarGroup>
+					)}
 				</SidebarContent>
 				<SidebarFooter>
 					<SidebarMenu className="flex flex-col gap-2">
 						{!isCloud && permissions?.organization.update && (
-							<SidebarMenuItem>
+							<SidebarMenuItem className="empty:hidden">
 								<UpdateServerButton />
 							</SidebarMenuItem>
 						)}
@@ -1246,18 +1298,19 @@ export default function Page({ children }: Props) {
 								{whitelabeling.footerText}
 							</div>
 						)}
-						{dokployVersionData && (
+						{/* The labels hold the block's height until the versions arrive, so the user menu above it does not jump. */}
+						{(isVersionPending || dokployVersionData) && (
 							<div className="px-3 text-[11px] leading-5 text-muted-foreground group-data-[collapsible=icon]:hidden">
 								<div className="flex items-center justify-between gap-3">
 									<span>Official</span>
 									<span className="truncate font-medium">
-										{dokployVersionData.officialVersion}
+										{dokployVersionData?.officialVersion}
 									</span>
 								</div>
 								<div className="flex items-center justify-between gap-3">
 									<span>Fork</span>
 									<span className="truncate font-medium">
-										{dokployVersionData.forkVersion}
+										{dokployVersionData?.forkVersion}
 									</span>
 								</div>
 							</div>
@@ -1279,6 +1332,7 @@ export default function Page({ children }: Props) {
 										<BreadcrumbItem className="block">
 											<BreadcrumbLink asChild>
 												<Link
+													prefetch={false}
 													href={activeItem?.url || "/"}
 													className="flex items-center gap-1.5"
 												>

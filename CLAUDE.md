@@ -17,19 +17,35 @@ Build commands in `services/application.ts` and `services/compose.ts` go through
 
 A deployment's log stays where it was written. Reads and single removals find that place through `getDeploymentLogServerId` (`packages/server/src/utils/deployments/log-server.ts`): the row's build server, otherwise the owning service's server, otherwise the panel. `deployment.serverId` is the exception: it marks a server's setup or hardening run, whose log the panel keeps on its own disk, so nothing connects to that server for it and `getAccessibleServerIds` is the only organization check on reading it. Deleting an application cascades to its deployment rows before `removeDeployments` runs, so past build servers come from the rows loaded with the application. `removeDeployment` keeps the row when the log could not be removed, so the removal can be repeated. The rotation of old deployments drops the row anyway and opens one connection per server, so a dead server neither stops a new deployment nor delays later ones again.
 
+## Redis start
+
+`buildRedis` starts a database with `REDIS_START_SCRIPT`, which reads the password from `DOKPLOY_DB_PASSWORD` in Env, so the shell never parses it. `REDIS_PASSWORD` stays in Env for the container, but the service env can set that name and dotenv changes some values, so nothing starts from it. `exec` makes `redis-server` PID 1: with `/bin/sh -c` alone, dash in the Debian image stays PID 1 and never passes SIGTERM on, so a stop ends in SIGKILL with no final save. `command: ""` and `args: []` are what the custom command form saves when left empty, and they count as no override. An empty password stops the start, because Redis takes it as no password. `CONFIG SET requirepass` from the panel's password change lasts until the task restarts: Env keeps the old password until the next deploy. Redis 6 reads a password that starts with `--` as an option name; 7 and up do not. `redis-password.real.test.ts` runs this on real Docker, including the old command as the starting point.
+
 ## Mongo replica sets
 
 `replicaSets: true` replaces the image entrypoint with the script in `packages/server/src/utils/databases/mongo.ts`, so `MONGO_INITDB_ROOT_*` do nothing there and the script itself runs `mongod --auth --keyFile`. The key file is generated at `/data/db/.dokploy-keyfile`, in the data volume, so it goes with the data through a volume backup or a rebuild. Credentials reach the script through `DOKPLOY_DB_USER` and `DOKPLOY_DB_PASSWORD` in Env, never through its text. Data without a key file gets one more start without access control on the next deploy, which makes the stored user and password valid, and then restarts with it; nothing changes for a running database until that deploy. `mongo-replica-set-auth.real.test.ts` runs all of this on real Docker, including the old script as the starting point. It uses `mongo:7`: `mongod` 8 refuses to start on kernels from 6.19 up to 7.0.13 (SERVER-121912), and GitHub-hosted runners have 7.0.0.
 
 The connection strings the panel shows come from `apps/dokploy/lib/mongo-connection-url.ts`. The external one always carries `directConnection=true`: a replica set names its member `<appName>:27017`, which resolves only inside the Docker network, so a driver outside that follows discovery cannot connect. The internal one leaves discovery on for a replica set. `mongosh` adds `directConnection=true` to a one-host URL that does not set it, so a check through `mongosh` sees what a driver does only with an explicit `directConnection=false`.
 
+## Database connection strings
+
+The strings the panel shows for Postgres, MySQL, MariaDB, Redis and libSQL come from `apps/dokploy/lib/database-connection-url.ts`, and Mongo's builders use its `encodeCredentials` and `formatUrlHost`. The user, the password and the database name are percent-encoded, because `DATABASE_PASSWORD_REGEX` allows `@ : ? # %` and no validator limits the name. A host with a colon gets brackets, because `getPublicIpWithFallback` falls back to IPv6 and `server.ipAddress` accepts any text. Two clients fail on such a string for reasons of their own: `@libsql/client` refuses any URL with credentials, and `node-redis` looks up the address with its brackets.
+
 ## Gravatar
 
 The Profile page contacts `www.gravatar.com` only after the user picks the @ option or when the account's image is already a Gravatar, because the request carries a hash of the user's email. `GravatarOption` (`components/dashboard/settings/profile/gravatar-option.tsx`) renders the `<img>` only then; computing the hash in `profile-form.tsx` stays in the browser. `__test__/settings/gravatar-on-request.test.ts` fails if an upstream merge puts the URL back into the avatar list.
 
+## Sidebar while permissions load
+
+`components/layouts/side.tsx` shows a link only where it will stay. Until `user.get`, `user.getPermissions` and `settings.isCloud` have answered, the menu shows the links above the first gated item (Home and Projects) and `SidebarMenuSkeleton` rows for the rest, so a link that appears later cannot push another one under the pointer and no link shows that the user may not use. A failed request ends the wait after React Query's retries, about 7 s, and then only the links without a gate remain. An item with `isEnabled` placed above Projects would hold that link back too. The header's spinner has the height of the organization selector (`h-12`, `h-20` when collapsed), and the footer keeps the version labels until the versions arrive; a whitelabel footer text still moves the user menu up when it arrives, because its length is not known in advance. `__test__/components/sidebar-menu-pending.test.ts` checks that the early links keep their place for an owner and for a member with nothing allowed.
+
 ## Service page tabs
 
 The eight pages under `pages/dashboard/project/[projectId]/environment/[environmentId]/services/` load each tab's code on first open through `lazyTab` (`components/dashboard/shared/lazy-service-tabs.tsx`), and each `TabsTrigger` starts that load with `onPointerEnter={Tab.preload}`. A tab with several components gets one module (`show-*-general-tab`, `show-*-advanced-tab`), so it appears at once. What the page header shows stays a normal import. `DashboardLayout` renders nothing until mounted, so the dashboard has no server-rendered content. After an upstream merge, check that no tab came back as a normal import.
+
+## Sidebar links
+
+`next/link` prefetches the page of every link in the viewport and then runs that page's module on idle, also from the browser cache, so the sidebar made each dashboard load fetch and execute 17 pages nobody had opened. Its links and the breadcrumb's plain link take `prefetch={false}`, which still loads a page when the pointer or a finger reaches the link. On a slow link this makes the first click on a page slower, once per page per panel build; a normal desktop does not notice. Links inside a page keep prefetching, because they are likely next clicks. `sidebar-no-prefetch.test.ts` fails if an upstream merge drops the prop.
 
 ## Stripe in the browser
 
