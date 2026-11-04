@@ -3,8 +3,6 @@ import {
 	createMount,
 	createRedis,
 	deployRedis,
-	execAsync,
-	execAsyncRemote,
 	findRedisById,
 	getAccessibleServerIds,
 	getContainerLogs,
@@ -26,7 +24,7 @@ import {
 	checkServicePermissionAndAccess,
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
-import { getServiceContainerCommand } from "@dokploy/server/utils/backups/utils";
+import { changeRedisPassword } from "@dokploy/server/utils/databases/redis-password";
 import {
 	preserveSecretPlaceholderFields,
 	redactDatabaseServiceSecrets,
@@ -37,7 +35,6 @@ import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
 import { audit } from "@/server/api/utils/audit";
-import { buildRedisPasswordChangeCommand } from "@/server/api/utils/database-password";
 import { assertTargetEnvironmentAccess } from "@/server/api/utils/placement-access";
 import {
 	assertServiceEnvironmentReadAccess,
@@ -460,21 +457,6 @@ export const redisRouter = createTRPCRouter({
 			});
 
 			const rd = await findRedisById(redisId);
-			const { appName, serverId, databasePassword } = rd;
-
-			const containerCmd = getServiceContainerCommand(appName);
-			const passwordChangeCommand = buildRedisPasswordChangeCommand({
-				databasePassword,
-				password,
-			});
-			const command = `
-				CONTAINER_ID=$(${containerCmd})
-				if [ -z "$CONTAINER_ID" ]; then
-					echo "No running container found for ${appName}" >&2
-					exit 1
-				fi
-				${passwordChangeCommand}
-			`;
 
 			await db.transaction(async (tx) => {
 				await tx
@@ -482,18 +464,14 @@ export const redisRouter = createTRPCRouter({
 					.set({ databasePassword: password })
 					.where(eq(redisTable.redisId, redisId));
 
-				if (serverId) {
-					await execAsyncRemote(serverId, command);
-				} else {
-					await execAsync(command, { shell: "/bin/bash" });
-				}
+				await changeRedisPassword(rd, password);
 			});
 
 			await audit(ctx, {
 				action: "update",
 				resourceType: "service",
 				resourceId: redisId,
-				resourceName: appName,
+				resourceName: rd.appName,
 			});
 
 			return true;

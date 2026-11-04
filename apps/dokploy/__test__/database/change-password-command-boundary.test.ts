@@ -10,6 +10,7 @@ const createUpdateChain = () => ({
 
 const mocks = vi.hoisted(() => ({
 	audit: vi.fn(),
+	changeRedisPassword: vi.fn(),
 	checkServicePermissionAndAccess: vi.fn(),
 	dbTransaction: vi.fn(async (callback: (tx: unknown) => Promise<void>) =>
 		callback({
@@ -98,6 +99,10 @@ vi.mock("@dokploy/server/services/permission", () => ({
 	checkServiceAccess: mocks.noop,
 	checkServicePermissionAndAccess: mocks.checkServicePermissionAndAccess,
 	findMemberByUserId: mocks.noop,
+}));
+
+vi.mock("@dokploy/server/utils/databases/redis-password", () => ({
+	changeRedisPassword: mocks.changeRedisPassword,
 }));
 
 vi.mock("@/server/api/utils/audit", () => ({
@@ -318,28 +323,37 @@ describe("database change-password command boundary", () => {
 		expect(command).not.toContain(`ALTER USER '${databaseUser}'@'%'`);
 	});
 
-	it("quotes redis current and new passwords as shell args", async () => {
-		const databasePassword = "old'; touch /tmp/pwn; '";
-		const password = "safe|stillAllowed";
-		mocks.findRedisById.mockResolvedValue({
+	it("changes the redis password through the shared code, inside the row's transaction", async () => {
+		const row = {
 			appName: "redis-app",
-			databasePassword,
+			databasePassword: "old",
 			serverId: "server-1",
-		});
+		};
+		mocks.findRedisById.mockResolvedValue(row);
 
 		await expect(
 			callers().redis.changePassword({
 				redisId: "redis-1",
-				password,
+				password: "new",
 			}),
 		).resolves.toBe(true);
 
-		const command = mocks.execAsyncRemote.mock.calls[0]?.[1] as string;
-		expect(command).toContain(
-			`redis-cli -a ${quoteShellArg(databasePassword)} CONFIG SET requirepass ${quoteShellArg(password)}`,
-		);
-		expect(command).not.toContain(`-a '${databasePassword}'`);
-		expect(command).not.toContain(`requirepass ${password}`);
+		expect(mocks.changeRedisPassword).toHaveBeenCalledWith(row, "new");
+		expect(mocks.audit).toHaveBeenCalled();
+	});
+
+	it("fails the transaction when the redis change fails", async () => {
+		mocks.changeRedisPassword.mockRejectedValueOnce(new Error("spec update"));
+		mocks.audit.mockClear();
+
+		await expect(
+			callers().redis.changePassword({
+				redisId: "redis-1",
+				password: "new",
+			}),
+		).rejects.toThrow("spec update");
+
+		expect(mocks.audit).not.toHaveBeenCalled();
 	});
 
 	it("quotes mongo credentials and JavaScript eval literals", async () => {

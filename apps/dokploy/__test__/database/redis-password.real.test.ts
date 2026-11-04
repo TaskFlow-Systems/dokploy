@@ -7,8 +7,8 @@ import {
 	buildRedis,
 	type RedisNested,
 } from "@dokploy/server/utils/databases/redis";
+import { changeRedisPassword } from "@dokploy/server/utils/databases/redis-password";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { buildRedisPasswordChangeCommand } from "@/server/api/utils/database-password";
 
 const execFileAsync = promisify(execFile);
 
@@ -205,6 +205,53 @@ const redeploy = async (redis: RedisNested) => {
 	return before;
 };
 
+const changePassword = async (redis: RedisNested, password: string) => {
+	await changeRedisPassword(redis, password);
+	const changed = { ...redis, databasePassword: password };
+	await waitForPassword(internalUrl(changed), redis.appName);
+	return changed;
+};
+
+const expectOnlyNewPassword = async (
+	changed: RedisNested,
+	before: RedisNested,
+) => {
+	await expectOnlyPasswordAccepted(changed);
+	expect(await redisCli("-u", internalUrl(before), "PING")).toMatch(REFUSED);
+};
+
+const killTask = async (redis: RedisNested) => {
+	const killed = await runningContainerId(redis.appName);
+	await dockerCli("kill", killed);
+	await waitUntil("Swarm to restart the task", async () => {
+		const current = await runningContainerId(redis.appName);
+		return current !== "" && current !== killed;
+	});
+	await waitForPassword(internalUrl(redis), redis.appName);
+};
+
+const createOldCommandService = (redis: RedisNested, password: string) =>
+	docker.createService({
+		Name: redis.appName,
+		TaskTemplate: {
+			ContainerSpec: {
+				Image: IMAGE,
+				Env: [`REDIS_PASSWORD=${password}`],
+				Command: ["/bin/sh"],
+				Args: ["-c", `redis-server --requirepass ${password}`],
+				Mounts: [
+					{
+						Type: "volume",
+						Source: `${redis.appName}-data`,
+						Target: "/data",
+					},
+				],
+			},
+			Networks: [{ Target: NETWORK }],
+		},
+		EndpointSpec: { Mode: "dnsrr" },
+	});
+
 const freePort = () =>
 	new Promise<number>((resolve, reject) => {
 		const server = createServer();
@@ -384,28 +431,7 @@ describe("redis start command", () => {
 		"keeps the password and the last snapshot of a database on the old command over its next deploy",
 		async () => {
 			const redis = fixture("old-command", "stored-Passw0rd");
-			await docker.createService({
-				Name: redis.appName,
-				TaskTemplate: {
-					ContainerSpec: {
-						Image: IMAGE,
-						Command: ["/bin/sh"],
-						Args: [
-							"-c",
-							`redis-server --requirepass ${redis.databasePassword}`,
-						],
-						Mounts: [
-							{
-								Type: "volume",
-								Source: `${redis.appName}-data`,
-								Target: "/data",
-							},
-						],
-					},
-					Networks: [{ Target: NETWORK }],
-				},
-				EndpointSpec: { Mode: "dnsrr" },
-			});
+			await createOldCommandService(redis, redis.databasePassword);
 			await waitForPassword(internalUrl(redis), redis.appName);
 			await redisCli("-u", internalUrl(redis), "SET", "snapshot", "kept");
 			// The old shell stays PID 1 and keeps SIGTERM from Redis, so this one stop
@@ -433,38 +459,185 @@ describe("redis start command", () => {
 	);
 
 	it(
-		"follows the panel's password change and keeps it over the next deploy",
+		"keeps a password changed in the panel and the data over a task restart without a deploy",
 		async () => {
-			const redis = fixture("change", SPECIAL_PASSWORD);
+			const redis = fixture("change-restart", SPECIAL_PASSWORD);
+			await buildRedis(redis);
+			await waitForPassword(internalUrl(redis), redis.appName);
+			await redisCli("-u", internalUrl(redis), "SET", "marker", "kept");
+			const stopped = await runningContainerId(redis.appName);
+
+			const changed = await changePassword(redis, "#changed&(in)|<panel>");
+
+			expect(
+				await dockerCli("inspect", "-f", "{{.State.ExitCode}}", stopped),
+			).toBe("0");
+			await expectOnlyNewPassword(changed, redis);
+			expect(await redisCli("-u", internalUrl(changed), "GET", "marker")).toBe(
+				"kept",
+			);
+
+			await killTask(changed);
+
+			await expectOnlyNewPassword(changed, redis);
+			expect(await redisCli("-u", internalUrl(changed), "GET", "marker")).toBe(
+				"kept",
+			);
+			const { Spec } = await docker.getService(redis.appName).inspect();
+			expect(JSON.stringify(Spec)).not.toContain(
+				JSON.stringify(SPECIAL_PASSWORD).slice(1, -1),
+			);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"keeps the changed password over the next deploy",
+		async () => {
+			const redis = fixture("change-deploy", SPECIAL_PASSWORD);
 			await buildRedis(redis);
 			await waitForPassword(internalUrl(redis), redis.appName);
 			await redisCli("-u", internalUrl(redis), "SET", "marker", "kept");
 
-			const changed = { ...redis, databasePassword: "#changed&(in)|<panel>" };
-			const containerId = await runningContainerId(redis.appName);
-			await execFileAsync(
-				"bash",
-				[
-					"-c",
-					`CONTAINER_ID=${containerId}\n${buildRedisPasswordChangeCommand({
-						databasePassword: redis.databasePassword,
-						password: changed.databasePassword,
-					})}`,
-				],
-				{ timeout: 60_000 },
-			);
-			await expectOnlyPasswordAccepted(changed);
-			expect(await redisCli("-u", internalUrl(redis), "PING")).toMatch(REFUSED);
-
+			const changed = await changePassword(redis, "#changed&(in)|<panel>");
 			const stopped = await redeploy(changed);
 
 			expect(
 				await dockerCli("inspect", "-f", "{{.State.ExitCode}}", stopped),
 			).toBe("0");
-			await expectOnlyPasswordAccepted(changed);
-			expect(await redisCli("-u", internalUrl(redis), "PING")).toMatch(REFUSED);
+			await expectOnlyNewPassword(changed, redis);
 			expect(await redisCli("-u", internalUrl(changed), "GET", "marker")).toBe(
 				"kept",
+			);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"moves a database off the old command when its password changes, and saves first",
+		async () => {
+			const redis = fixture("change-old-command", "stored-Passw0rd");
+			await createOldCommandService(redis, redis.databasePassword);
+			await waitForPassword(internalUrl(redis), redis.appName);
+			await redisCli("-u", internalUrl(redis), "SET", "unsaved", "kept");
+
+			const changed = await changePassword(redis, "new-Passw0rd");
+
+			await expectOnlyNewPassword(changed, redis);
+			expect(await redisCli("-u", internalUrl(changed), "GET", "unsaved")).toBe(
+				"kept",
+			);
+			await killTask(changed);
+			await expectOnlyNewPassword(changed, redis);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"repairs a database whose restart undid an earlier change",
+		async () => {
+			const running = fixture("change-undone", "running-Passw0rd");
+			await createOldCommandService(running, running.databasePassword);
+			await waitForPassword(internalUrl(running), running.appName);
+			await redisCli("-u", internalUrl(running), "SET", "unsaved", "kept");
+
+			const panelShows = { ...running, databasePassword: "panel-Passw0rd" };
+			expect(await redisCli("-u", internalUrl(panelShows), "PING")).toMatch(
+				REFUSED,
+			);
+
+			const changed = await changePassword(panelShows, "new-Passw0rd");
+
+			await expectOnlyNewPassword(changed, running);
+			expect(await redisCli("-u", internalUrl(changed), "GET", "unsaved")).toBe(
+				"kept",
+			);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"stores the password of a stopped database for its next start",
+		async () => {
+			const redis = fixture("change-stopped", "stored-Passw0rd");
+			await buildRedis(redis);
+			await waitForPassword(internalUrl(redis), redis.appName);
+			await dockerCli("service", "scale", "-d", `${redis.appName}=0`);
+			await waitUntil(
+				"the task to stop",
+				async () => (await runningContainerId(redis.appName)) === "",
+			);
+
+			await changeRedisPassword(redis, "new-Passw0rd");
+			const changed = { ...redis, databasePassword: "new-Passw0rd" };
+
+			expect(await runningContainerId(redis.appName)).toBe("");
+			await waitForSettledService(redis.appName);
+			await dockerCli("service", "scale", "-d", `${redis.appName}=1`);
+			await waitForPassword(internalUrl(changed), redis.appName);
+			await expectOnlyNewPassword(changed, redis);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"fails the change and keeps the old password when Swarm goes back to the old spec",
+		async () => {
+			const redis = fixture("change-rollback", "stored-Passw0rd");
+			await buildRedis(redis);
+			await waitForPassword(internalUrl(redis), redis.appName);
+			await redisCli("-u", internalUrl(redis), "SET", "marker", "kept");
+			await waitForSettledService(redis.appName);
+
+			// The start refuses an empty password, as Redis 6 does a password that
+			// starts with --, so the new task exits and Swarm rolls the update back.
+			await expect(changeRedisPassword(redis, "")).rejects.toThrow(
+				/went back to the old one/,
+			);
+
+			await waitForPassword(internalUrl(redis), redis.appName);
+			await expectOnlyPasswordAccepted(redis);
+			expect(await redisCli("-u", internalUrl(redis), "GET", "marker")).toBe(
+				"kept",
+			);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"changes only the running Redis under a custom command, and fails when Redis refuses",
+		async () => {
+			const redis = fixture("change-custom", "stored-Passw0rd", {
+				command: "/bin/sh",
+				args: ["-c", 'exec redis-server --requirepass "$REDIS_PASSWORD"'],
+			});
+			await buildRedis(redis);
+			await waitForPassword(internalUrl(redis), redis.appName);
+			const running = await runningContainerId(redis.appName);
+
+			await expect(
+				changeRedisPassword(
+					{ ...redis, databasePassword: "not-the-password" },
+					"other-Passw0rd",
+				),
+			).rejects.toThrow(/refused/);
+			await expectOnlyPasswordAccepted(redis);
+
+			const changed = await changePassword(redis, "new-Passw0rd");
+
+			expect(await runningContainerId(redis.appName)).toBe(running);
+			await expectOnlyNewPassword(changed, redis);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"reports a database that was never deployed as not running",
+		async () => {
+			const redis = fixture("change-missing", "stored-Passw0rd");
+
+			await expect(changeRedisPassword(redis, "new-Passw0rd")).rejects.toThrow(
+				/No running container found/,
 			);
 		},
 		REAL_TEST_TIMEOUT,
