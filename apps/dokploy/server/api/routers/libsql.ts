@@ -25,6 +25,7 @@ import {
 	checkServicePermissionAndAccess,
 } from "@dokploy/server/services/permission";
 import {
+	keepStoredUrlPassword,
 	preserveSecretPlaceholderFields,
 	redactDatabaseServiceSecrets,
 	redactDatabaseServiceSecretsFor,
@@ -440,13 +441,16 @@ export const libsqlRouter = createTRPCRouter({
 				service: ["create"],
 			});
 			const currentLibsql = await findLibsqlById(libsqlId);
-			const libsql = await updateLibsqlById(
-				libsqlId,
-				preserveSecretPlaceholderFields(rest, currentLibsql, [
+			const libsql = await updateLibsqlById(libsqlId, {
+				...preserveSecretPlaceholderFields(rest, currentLibsql, [
 					"env",
 					"databasePassword",
 				]),
-			);
+				sqldPrimaryUrl: keepStoredUrlPassword(
+					rest.sqldPrimaryUrl,
+					currentLibsql.sqldPrimaryUrl,
+				),
+			});
 
 			if (!libsql) {
 				throw new TRPCError({

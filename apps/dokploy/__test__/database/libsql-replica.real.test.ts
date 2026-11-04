@@ -256,6 +256,57 @@ const redeploy = async (libsql: LibsqlNested) => {
 	);
 };
 
+const createNamespace = (libsql: LibsqlNested, namespace: string) =>
+	curl(
+		"-o",
+		"/dev/null",
+		"-w",
+		"%{http_code}",
+		"-X",
+		"POST",
+		"-H",
+		"Content-Type: application/json",
+		"-d",
+		"{}",
+		`http://${libsql.appName}:5000/v1/namespaces/${namespace}/create`,
+	);
+
+const adminPortStatus = (libsql: LibsqlNested) =>
+	curl(
+		"-o",
+		"/dev/null",
+		"-w",
+		"%{http_code}",
+		`http://${libsql.appName}:5000/metrics`,
+	);
+
+// An answer on 8080 does not mean this port is up yet: a run under load found it closed.
+const waitForAdminPort = (libsql: LibsqlNested) =>
+	waitUntil(
+		`${libsql.appName}'s admin port`,
+		async () => (await adminPortStatus(libsql)) === "200",
+		() => describeService(libsql.appName),
+	);
+
+// What the previous build deployed for "": no command, so the image's wrapper owned
+// the data as its own user and opened no admin port.
+const deployThroughEntrypoint = (libsql: LibsqlNested, ...flags: string[]) =>
+	dockerCli(
+		"service",
+		"create",
+		"--detach",
+		"--name",
+		libsql.appName,
+		"--network",
+		NETWORK,
+		"--endpoint-mode",
+		"dnsrr",
+		"--mount",
+		`type=volume,source=${libsql.appName}-data,target=/var/lib/sqld`,
+		...flags,
+		IMAGE,
+	);
+
 const listSetAside = async (libsql: LibsqlNested) => {
 	const output = await dockerCli(
 		"exec",
@@ -424,20 +475,8 @@ describe("libsql replica", () => {
 			const primary = await deployPrimary("ns-primary", {
 				enableNamespaces: true,
 			});
-			const created = await curl(
-				"-o",
-				"/dev/null",
-				"-w",
-				"%{http_code}",
-				"-X",
-				"POST",
-				"-H",
-				"Content-Type: application/json",
-				"-d",
-				"{}",
-				`http://${primary.appName}:5000/v1/namespaces/tenant/create`,
-			);
-			expect(created).toBe("200");
+			await waitForAdminPort(primary);
+			expect(await createNamespace(primary, "tenant")).toBe("200");
 			await sql(primary, "create table n(v text)", "tenant");
 			await sql(primary, "insert into n values ('in-tenant')", "tenant");
 
@@ -457,6 +496,87 @@ describe("libsql replica", () => {
 				["in-tenant", "through-replica"],
 				"tenant",
 			);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"runs both nodes with namespaces and the admin port when the custom command is cleared",
+		async () => {
+			const primary = await deployPrimary("cleared-primary", {
+				command: "",
+				enableNamespaces: true,
+			});
+			await waitForAdminPort(primary);
+			expect(await createNamespace(primary, "tenant")).toBe("200");
+			await sql(primary, "create table n(v text)", "tenant");
+			await sql(primary, "insert into n values ('in-tenant')", "tenant");
+
+			const replica = replicaOf(primary, "cleared-replica", {
+				command: "",
+				enableNamespaces: true,
+			});
+			await buildLibsql(replica);
+			await waitForRows(replica, "select v from n", ["in-tenant"], "tenant");
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"keeps the data of a service that ran the image's entrypoint when a cleared command moves it to the default one",
+		async () => {
+			const moved = fixture("entrypoint", { command: "" });
+			await deployThroughEntrypoint(moved);
+			await waitUntil(
+				`${moved.appName} to answer`,
+				async () => {
+					await runSql(moved.appName, "create table if not exists t(v text)");
+					return true;
+				},
+				() => describeService(moved.appName),
+			);
+			await runSql(moved.appName, "insert into t values ('kept')");
+			expect(await adminPortStatus(moved).catch(() => "closed")).toBe("closed");
+
+			await redeploy(moved);
+
+			await waitForRows(moved, "select v from t", ["kept"]);
+			await sql(moved, "insert into t values ('written-after')");
+			await waitForRows(moved, "select count(*) from t", [2]);
+			await waitForAdminPort(moved);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"keeps a replica that ran the image's entrypoint replicating, with nothing set aside",
+		async () => {
+			const primary = await deployPrimary("entrypoint-source");
+			await sql(primary, "create table t(v text)");
+			await sql(primary, "insert into t values ('before-move')");
+
+			const moved = replicaOf(primary, "entrypoint-replica", { command: "" });
+			await deployThroughEntrypoint(
+				moved,
+				"--env",
+				"SQLD_NODE=replica",
+				"--env",
+				`SQLD_PRIMARY_URL=${moved.sqldPrimaryUrl}`,
+			);
+			await waitUntil(
+				`${moved.appName} to replicate`,
+				async () =>
+					JSON.stringify(await runSql(moved.appName, "select v from t")) ===
+					JSON.stringify(["before-move"]),
+				() => describeService(moved.appName),
+			);
+
+			await redeploy(moved);
+
+			await waitForRows(moved, "select count(*) from t", [1]);
+			await sql(primary, "insert into t values ('after-move')");
+			await waitForRows(moved, "select count(*) from t", [2]);
+			expect(await listSetAside(moved)).toEqual([]);
 		},
 		REAL_TEST_TIMEOUT,
 	);

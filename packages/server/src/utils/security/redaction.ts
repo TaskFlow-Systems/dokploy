@@ -85,6 +85,30 @@ const redactNestedServerSecrets = <T>(server: T): T => {
 	return redacted as T;
 };
 
+// Everything up to the last @ hides, so a password with a raw @ or / never shows in
+// part. A @ in a path hides too much of that URL, which is the safer way to be wrong.
+export const redactUrlPassword = <T extends string | null | undefined>(
+	url: T,
+): T | string => {
+	const at = url?.lastIndexOf("@") ?? -1;
+	if (!url || at === -1) {
+		return url;
+	}
+	const scheme = url.indexOf("://");
+	const start = scheme === -1 ? 0 : scheme + 3;
+	const colon = url.slice(start, at).indexOf(":");
+	const user = colon === -1 ? "" : url.slice(start, start + colon + 1);
+	return `${url.slice(0, start)}${user}${REDACTED_SECRET_VALUE}${url.slice(at)}`;
+};
+
+// A URL that comes back as it was shown means "keep what is stored". An edited one
+// is saved as sent: the stored password never travels to another host, for the same
+// reason as assertStoredSecretTargetUnchanged.
+export const keepStoredUrlPassword = <T extends string | null | undefined>(
+	next: T,
+	stored: string | null | undefined,
+) => (next && next === redactUrlPassword(stored) ? stored : next);
+
 export type SharedEnvReadAccess = {
 	environmentEnv: boolean;
 	projectEnv: boolean;
@@ -213,6 +237,11 @@ export const redactDatabaseServiceSecretsFor = <
 	const withRelations = { ...redacted };
 	if ("server" in withRelations) {
 		withRelations.server = redactNestedServerSecrets(withRelations.server);
+	}
+	if ("sqldPrimaryUrl" in withRelations) {
+		withRelations.sqldPrimaryUrl = redactUrlPassword(
+			withRelations.sqldPrimaryUrl as string | null | undefined,
+		);
 	}
 	return redactServiceSharedEnv(withRelations as T, sharedEnvAccess);
 };

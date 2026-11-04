@@ -252,6 +252,10 @@ export const apiUpdateLibsql = createSchema
 	.partial()
 	.extend({
 		libsqlId: z.string().min(1),
+		// .partial() keeps a default, which would then overwrite the stored value on
+		// every update that does not send the field.
+		enableNamespaces: z.boolean().optional(),
+		dockerImage: z.string().optional(),
 	})
 	.omit({ serverId: true, environmentId: true });
 
