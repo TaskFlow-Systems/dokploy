@@ -17,7 +17,9 @@ import { buildMongoPasswordChangeCommand } from "@/server/api/utils/database-pas
 
 const execFileAsync = promisify(execFile);
 
-const IMAGE = "mongo:8";
+// mongod 8 refuses to start on kernels from 6.19 up to 7.0.13 (SERVER-121912),
+// and GitHub-hosted runners have 7.0.0.
+const IMAGE = "mongo:7";
 const REAL_TEST_TIMEOUT = 240_000;
 const WAIT_TIMEOUT_MS = 120_000;
 
