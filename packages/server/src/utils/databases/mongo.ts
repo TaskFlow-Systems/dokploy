@@ -18,6 +18,118 @@ export type MongoNested = InferResultType<
 	{ mounts: true; environment: { with: { project: true } } }
 >;
 
+// Runs on every start. The credentials and the member address come from Env, so
+// the script holds no value that needs quoting. hello needs no sign-in, and with
+// access control on and no user yet, the localhost exception allows rs.initiate
+// and the first createUser.
+const REPLICA_SET_SETUP = `
+const admin = db.getSiblingDB("admin");
+const user = process.env.DOKPLOY_DB_USER;
+const pwd = process.env.DOKPLOY_DB_PASSWORD;
+const roles = [{ role: "root", db: "admin" }];
+
+let signedIn = true;
+try {
+	admin.auth(user, pwd);
+} catch {
+	signedIn = false;
+}
+
+for (let i = 0; i < 120 && !db.hello().isWritablePrimary; i++) {
+	if (!db.hello().setName) {
+		try {
+			rs.initiate({
+				_id: "rs0",
+				members: [{ _id: 0, host: process.env.DOKPLOY_REPLICA_MEMBER, priority: 1 }]
+			});
+		} catch (error) {
+			print("[dokploy] rs.initiate: " + error.message);
+		}
+	}
+	sleep(1000);
+}
+if (!db.hello().isWritablePrimary) {
+	throw new Error("this member did not become primary");
+}
+
+if (!signedIn) {
+	try {
+		admin.createUser({ user, pwd, roles });
+	} catch (error) {
+		const userExists = error.code === 51003;
+		if (!userExists) throw error;
+		admin.updateUser(user, { pwd, roles });
+	}
+}
+print("[dokploy] Replica set is ready.");
+`;
+
+// The key file lives next to the data: a volume backup carries it, and a rebuild
+// that drops the volume replaces both. With one member it only has to exist,
+// since --replSet with --auth refuses to start without it.
+const REPLICA_SET_STARTUP_SCRIPT = `
+#!/bin/bash
+KEY_FILE=/data/db/.dokploy-keyfile
+
+start_mongod() {
+	mongod --port 27017 --replSet rs0 --bind_ip_all "$@" &
+	MONGOD_PID=$!
+}
+
+stop_mongod() {
+	kill -TERM "$MONGOD_PID" 2>/dev/null
+	wait "$MONGOD_PID"
+}
+
+wait_for_mongod() {
+	until mongosh --quiet --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
+		kill -0 "$MONGOD_PID" 2>/dev/null || exit 1
+		sleep 1
+	done
+}
+
+create_key_file() {
+	rm -f "$KEY_FILE.tmp"
+	(umask 077; head -c 756 /dev/urandom | base64 > "$KEY_FILE.tmp")
+	chmod 400 "$KEY_FILE.tmp"
+	mv "$KEY_FILE.tmp" "$KEY_FILE"
+}
+
+set_up_replica_set() {
+	mongosh --quiet --eval '${REPLICA_SET_SETUP}'
+}
+
+# bash as PID 1 ignores the stop signal unless it traps it, and mongod would then
+# be killed at the end of the grace period instead of shutting down.
+trap 'stop_mongod; exit 0' TERM INT
+
+if [ ! -f "$KEY_FILE" ]; then
+	if [ -e /data/db/WiredTiger ]; then
+		# Data from before access control. The stored password was never enforced
+		# and may differ from the user's, so one more open start makes the stored
+		# credentials valid before the database starts refusing everyone else.
+		echo "[dokploy] Turning on access control for this replica set. Clients without credentials are refused from now on."
+		start_mongod
+		wait_for_mongod
+		if set_up_replica_set; then
+			mongosh --quiet --eval 'print("[dokploy] Users that keep access, check for unknown ones: " + db.adminCommand({ usersInfo: { forAllDBs: true } }).users.map((u) => u.db + "." + u.user).join(", "))'
+			stop_mongod
+			create_key_file
+		else
+			echo "[dokploy] ERROR: could not set up the stored user. Access control stays off, the next deploy tries again."
+		fi
+	else
+		create_key_file
+	fi
+fi
+
+if [ -f "$KEY_FILE" ]; then
+	start_mongod --auth --keyFile "$KEY_FILE"
+	wait_for_mongod
+	set_up_replica_set || echo "[dokploy] Setup did not finish, see the error above. A rejected sign-in is expected after a password change until the next deploy; otherwise check the stored username and password."
+fi
+`;
+
 export const buildMongo = async (rawMongo: MongoNested) => {
 	const mongo = await withResolvedVaultRefs(rawMongo);
 	const {
@@ -36,52 +148,6 @@ export const buildMongo = async (rawMongo: MongoNested) => {
 		mounts,
 		replicaSets,
 	} = mongo;
-
-	const startupScript = `
-#!/bin/bash
-${
-	replicaSets
-		? `
-mongod --port 27017 --replSet rs0 --bind_ip_all &
-MONGOD_PID=$!
-
-# Wait for MongoDB to be ready
-while ! mongosh --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
-	sleep 2
-done
-
-# Check if replica set is already initialized
-REPLICA_STATUS=$(mongosh --quiet --eval "rs.status().ok || 0")
-
-if [ "$REPLICA_STATUS" != "1" ]; then
-	echo "Initializing replica set..."
-	mongosh --eval '
-	rs.initiate({
-		_id: "rs0",
-		members: [{ _id: 0, host: "${appName}:27017", priority: 1 }]
-	});
-
-    // Wait for the replica set to initialize
-	while (!rs.isMaster().ismaster) {
-		sleep(1000);
-	}
-
-    // Create root user after replica set is initialized and we are primary
-	db.getSiblingDB("admin").createUser({
-		user: "${databaseUser}",
-		pwd: "${databasePassword}",
-		roles: ["root"]
-	});
-	'
-
-else
-	echo "Replica set already initialized."
-fi
-`
-		: ""
-}
-
-${command ?? "wait $MONGOD_PID"}`;
 
 	const defaultMongoEnv = `MONGO_INITDB_ROOT_USERNAME="${databaseUser}"\nMONGO_INITDB_ROOT_PASSWORD="${databasePassword}"${replicaSets ? "\nMONGO_INITDB_DATABASE=admin" : ""}${
 		env ? `\n${env}` : ""
@@ -130,14 +196,24 @@ ${command ?? "wait $MONGOD_PID"}`;
 			ContainerSpec: {
 				HealthCheck,
 				Image: dockerImage,
-				Env: envVariables,
+				Env: replicaSets
+					? [
+							...envVariables,
+							`DOKPLOY_DB_USER=${databaseUser}`,
+							`DOKPLOY_DB_PASSWORD=${databasePassword}`,
+							`DOKPLOY_REPLICA_MEMBER=${appName}:27017`,
+						]
+					: envVariables,
 				Mounts: [...volumesMount, ...bindsMount, ...filesMount],
 				...(StopGracePeriod !== null &&
 					StopGracePeriod !== undefined && { StopGracePeriod }),
 				...(replicaSets
 					? {
 							Command: ["/bin/bash"],
-							Args: ["-c", startupScript],
+							Args: [
+								"-c",
+								`${REPLICA_SET_STARTUP_SCRIPT}\n${command ?? 'wait "$MONGOD_PID"'}`,
+							],
 						}
 					: {}),
 				...(command &&

@@ -78,7 +78,11 @@ export const ShowGeneralMongo = ({ mongoId }: Props) => {
 							{canDeploy && (
 								<DialogAction
 									title="Deploy Mongo"
-									description="Are you sure you want to deploy this mongo?"
+									description={
+										data?.replicaSets
+											? "Are you sure you want to deploy this mongo? This replica set requires the username and password. If it was deployed before that requirement, this deploy turns it on and clients without credentials lose access."
+											: "Are you sure you want to deploy this mongo?"
+									}
 									type="default"
 									onClick={async () => {
 										setIsDeploying(true);
