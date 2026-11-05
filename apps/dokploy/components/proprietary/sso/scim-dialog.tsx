@@ -168,7 +168,8 @@ export const ScimDialog = ({ children }: Props) => {
 								your IdP&apos;s SCIM configuration.
 							</p>
 							<div className="mt-2 flex items-center gap-2">
-								<p className="flex-1 break-all rounded-md bg-background px-2 py-1.5 font-mono text-xs">
+								{/* ph-no-capture keeps the token out of session replay. */}
+								<p className="ph-no-capture flex-1 break-all rounded-md bg-background px-2 py-1.5 font-mono text-xs">
 									{issuedToken.token}
 								</p>
 								<Button

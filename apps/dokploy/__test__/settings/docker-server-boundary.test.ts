@@ -527,7 +527,7 @@ describe("settings Docker server boundary", () => {
 		await expect(createCaller().updateServer()).resolves.toBe(true);
 
 		expect(mocks.getAgentHitsUpdateCommand).toHaveBeenCalledWith(
-			"v0.30.6",
+			"v0.31.0",
 			"off_v0.29.8/Fork_159+next",
 			"v0.30.0",
 			undefined,
@@ -587,7 +587,7 @@ describe("settings Docker server boundary", () => {
 		expect(mocks.reloadDockerResource).toHaveBeenCalledWith(
 			"dokploy",
 			undefined,
-			"v0.30.6",
+			"v0.31.0",
 		);
 		log.mockRestore();
 	});
@@ -606,7 +606,7 @@ describe("settings Docker server boundary", () => {
 		);
 
 		expect(mocks.getAgentHitsUpdateCommand).toHaveBeenCalledWith(
-			"v0.30.6",
+			"v0.31.0",
 			"off_v0.29.8/Fork_159+next",
 			"v0.30.0",
 			4,

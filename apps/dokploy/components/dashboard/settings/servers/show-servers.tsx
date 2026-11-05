@@ -11,6 +11,7 @@ import {
 	RefreshCw,
 	ServerIcon,
 	Settings,
+	ShieldCheck,
 	Terminal,
 	Trash2,
 	User,
@@ -38,6 +39,7 @@ import { ShowServerActions } from "./actions/show-server-actions";
 import { DeleteServerModal } from "./delete-server-modal";
 import { HandleServers } from "./handle-servers";
 import { PanelHostStack } from "./panel-host-stack";
+import { ShowServerSecurity } from "./security/show-server-security";
 import { ServerComponentsUpdate } from "./server-components-update";
 import { SetupServer } from "./setup-server";
 import { ShowMonitoringModal } from "./show-monitoring-modal";
@@ -342,6 +344,28 @@ export const ShowServers = () => {
 																							</TerminalModal>
 																							<TooltipContent>
 																								<p>Terminal</p>
+																							</TooltipContent>
+																						</Tooltip>
+																					)}
+
+																				{server.sshKeyId &&
+																					permissions?.server.read && (
+																						<Tooltip>
+																							<ShowServerSecurity
+																								serverId={server.serverId}
+																							>
+																								<TooltipTrigger asChild>
+																									<Button
+																										variant="outline"
+																										size="icon"
+																										className="h-9 w-9"
+																									>
+																										<ShieldCheck className="h-4 w-4" />
+																									</Button>
+																								</TooltipTrigger>
+																							</ShowServerSecurity>
+																							<TooltipContent>
+																								<p>Security</p>
 																							</TooltipContent>
 																						</Tooltip>
 																					)}

@@ -937,7 +937,15 @@ const EnvironmentPage = (
 		);
 	};
 
-	const handleServiceDelete = async (service: Services) => {
+	const closeServiceDeleteDialog = () => {
+		setServiceToDelete(null);
+		setDeleteVolumes(false);
+	};
+
+	const handleServiceDelete = async (
+		service: Services,
+		deleteVolumes = false,
+	) => {
 		const actions = getServiceActions(service);
 		const idKey = getServiceIdKey(service);
 		if (!actions || !idKey) return;
@@ -946,6 +954,7 @@ const EnvironmentPage = (
 			(async () => {
 				await actions.delete.mutateAsync({
 					[idKey]: service.id,
+					...(service.type === "compose" ? { deleteVolumes } : {}),
 				} as any);
 			})(),
 			{
@@ -958,7 +967,7 @@ const EnvironmentPage = (
 					`Error deleting ${service.name}: ${error instanceof Error ? error.message : "Unknown error"}`,
 			},
 		);
-		setServiceToDelete(null);
+		closeServiceDeleteDialog();
 	};
 
 	// Get unique servers from services
@@ -1369,7 +1378,10 @@ const EnvironmentPage = (
 												{/* Bulk Delete Dialog */}
 												<Dialog
 													open={isBulkDeleteDialogOpen}
-													onOpenChange={setIsBulkDeleteDialogOpen}
+													onOpenChange={(open) => {
+														setIsBulkDeleteDialogOpen(open);
+														if (!open) setDeleteVolumes(false);
+													}}
 												>
 													<DialogContent>
 														<DialogHeader>
@@ -1799,7 +1811,7 @@ const EnvironmentPage = (
 			{/* Single Service Delete Dialog */}
 			<Dialog
 				open={!!serviceToDelete}
-				onOpenChange={(open) => !open && setServiceToDelete(null)}
+				onOpenChange={(open) => !open && closeServiceDeleteDialog()}
 			>
 				<DialogContent>
 					<DialogHeader>
@@ -1810,15 +1822,32 @@ const EnvironmentPage = (
 							This action cannot be undone.
 						</DialogDescription>
 					</DialogHeader>
+					{serviceToDelete?.type === "compose" && (
+						<div className="flex items-center space-x-2">
+							<Checkbox
+								id="deleteServiceVolumes"
+								checked={deleteVolumes}
+								onCheckedChange={(checked) =>
+									setDeleteVolumes(checked === true)
+								}
+							/>
+							<label
+								htmlFor="deleteServiceVolumes"
+								className="text-sm font-medium"
+							>
+								Delete volumes associated with this compose
+							</label>
+						</div>
+					)}
 					<DialogFooter>
-						<Button variant="outline" onClick={() => setServiceToDelete(null)}>
+						<Button variant="outline" onClick={closeServiceDeleteDialog}>
 							Cancel
 						</Button>
 						<Button
 							variant="destructive"
 							onClick={() => {
 								if (serviceToDelete) {
-									handleServiceDelete(serviceToDelete);
+									handleServiceDelete(serviceToDelete, deleteVolumes);
 								}
 							}}
 						>

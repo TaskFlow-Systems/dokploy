@@ -93,6 +93,7 @@ export const runWebServerBackup = async (backup: BackupSchedule) => {
 			writeStream.write(`Cleaning up temp file: ${cleanupCommand}\n`);
 			await execAsync(cleanupCommand);
 
+			// Only .git: code/ can hold compose ./ bind mounts and drop uploads.
 			await execAsync(
 				buildFilesystemCopyCommand(BASE_PATH, `${tempDir}/filesystem`),
 			);

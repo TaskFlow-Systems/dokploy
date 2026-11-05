@@ -22,6 +22,7 @@ type FakeConnection = EventEmitter & {
 const mocks = vi.hoisted(() => ({
 	canAccessDockerLogsWebSocket: vi.fn(),
 	canAccessDockerOverWss: vi.fn(),
+	containerBelongsToService: vi.fn(),
 	connections: [] as FakeConnection[],
 	findServerById: vi.fn(),
 	resolveServerDestinationHost: vi.fn(),
@@ -43,6 +44,10 @@ vi.mock("@dokploy/server/utils/servers/destination", () => ({
 
 vi.mock("../../server/wss/authorize", () => ({
 	canAccessDockerOverWss: mocks.canAccessDockerOverWss,
+}));
+
+vi.mock("../../server/wss/container-ownership", () => ({
+	containerBelongsToService: mocks.containerBelongsToService,
 }));
 
 vi.mock("../../server/wss/docker-permission", () => ({
@@ -166,6 +171,7 @@ describe("container logs socket", () => {
 		mocks.validateRequest.mockResolvedValue(AUTH);
 		mocks.canAccessDockerLogsWebSocket.mockResolvedValue(true);
 		mocks.canAccessDockerOverWss.mockResolvedValue(true);
+		mocks.containerBelongsToService.mockResolvedValue(true);
 		mocks.findServerById.mockResolvedValue(SERVER);
 		mocks.resolveServerDestinationHost.mockResolvedValue("203.0.113.10");
 		pty = { kill: vi.fn(), onData: vi.fn(), write: vi.fn() };
@@ -356,6 +362,35 @@ describe("container logs socket", () => {
 
 			await expect(closed).resolves.toEqual(["SSH error: refused"]);
 			await vi.waitFor(expectNoPingTimerLeft);
+		});
+	});
+
+	describe("container of a service", () => {
+		it("denies a container outside the service", async () => {
+			mocks.containerBelongsToService.mockResolvedValue(false);
+			const ws = new WebSocket(
+				`ws://127.0.0.1:${port}/docker-container-logs?containerId=dokploy-postgres&runType=native&serviceId=svc-1`,
+			);
+			const code = await new Promise<number>((resolve, reject) => {
+				ws.once("close", resolve);
+				ws.once("error", reject);
+			});
+
+			expect(code).toBe(4003);
+			expect(mocks.containerBelongsToService).toHaveBeenCalledWith(
+				"svc-1",
+				"dokploy-postgres",
+				null,
+				"native",
+			);
+			expect(mocks.spawn).not.toHaveBeenCalled();
+		});
+
+		it("streams logs of a container of the service", async () => {
+			mocks.containerBelongsToService.mockResolvedValue(true);
+			const ws = await open("containerId=task1&runType=swarm&serviceId=svc-1");
+			await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+			await closeClient(ws);
 		});
 	});
 });

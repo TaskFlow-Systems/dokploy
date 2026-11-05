@@ -68,6 +68,7 @@ vi.mock("@dokploy/server", () => ({
 }));
 
 vi.mock("@dokploy/server/index", () => ({
+	captureEvent: vi.fn(async () => undefined),
 	COMPONENTS_UPDATE_FAILED: "Components update failed ❌",
 	UPDATABLE_COMPONENTS: [
 		"docker",

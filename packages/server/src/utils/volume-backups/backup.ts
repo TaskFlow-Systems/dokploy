@@ -113,7 +113,7 @@ export const backupVolume = async (
 		`${volumeBackupPath}:/backup`,
 	);
 	const tarBackupCommand = quoteVolumeBackupShellArg(
-		`cd /volume_data && tar cvf ${quoteVolumeBackupShellArg(backupFileInContainer)} .`,
+		`cd /volume_data && tar cvf ${quoteVolumeBackupShellArg(backupFileInContainer)} . || [ $? -eq 1 ]`,
 	);
 	const quotedVolumeBackupPath = quoteVolumeBackupShellArg(volumeBackupPath);
 	const quotedBackupFilePath = quoteVolumeBackupShellArg(
@@ -126,6 +126,7 @@ export const backupVolume = async (
 		getRcloneS3Destination(safeDestination, bucketDestination),
 	]);
 
+	// GNU tar exits 1 when a file changes while being read, which is expected on a live volume
 	const backupCommand = `
 	set -e
 	echo "Volume name: ${safeVolumeName}"

@@ -7,6 +7,7 @@ import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
 import { onWebSocketConnection, readUpgradePathname } from "./connection";
+import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerLogsWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
 import {
@@ -98,6 +99,18 @@ export const setupDockerContainerLogsWebSocketServer = (
 		}
 
 		if (!(await canAccessDockerOverWss(user, session, serverId, serviceId))) {
+			ws.close(4003, "Not authorized");
+			return;
+		}
+		if (
+			serviceId &&
+			!(await containerBelongsToService(
+				serviceId,
+				containerId,
+				serverId,
+				runType,
+			))
+		) {
 			ws.close(4003, "Not authorized");
 			return;
 		}
