@@ -1692,7 +1692,12 @@ type SwarmConvergenceOptions = {
 	// and a HEALTHCHECK of the image itself show in no spec, so the limit cannot
 	// count them. A crash or "no suitable node" still ends the wait after `timeoutMs`.
 	quietStartAllowanceMs?: number;
+	readTimeoutMs?: number;
 };
+
+// A healthy daemon answers these reads in milliseconds, and a read that times out is
+// tried again until the wait's own limit, so this does not have to be generous.
+const SWARM_READ_TIMEOUT_MS = 30_000;
 
 export const waitForSwarmServiceConvergence = async (
 	appName: string,
@@ -1708,12 +1713,27 @@ export const waitForSwarmServiceConvergence = async (
 	let quietLimitMs: number | undefined;
 	let taskErrorSeenAt: number | undefined;
 
-	const readService = async () => ({
-		info: await service.inspect(),
-		tasks: await remoteDocker.listTasks({
-			filters: JSON.stringify({ service: [appName] }),
-		}),
-	});
+	const readService = async () => {
+		// The limits of this wait run only between reads, and SSH_KEEPALIVE sees a dead
+		// network, not a daemon that took the request and stays silent. Without this such
+		// a read never ends and the deployment keeps its slot in the queue for good.
+		const readTimeoutMs = options?.readTimeoutMs ?? SWARM_READ_TIMEOUT_MS;
+		const abortSignal = AbortSignal.timeout(readTimeoutMs);
+		try {
+			return {
+				info: await service.inspect({ abortSignal }),
+				tasks: await remoteDocker.listTasks({
+					abortSignal,
+					filters: JSON.stringify({ service: [appName] }),
+				}),
+			};
+		} catch (error) {
+			if (abortSignal.aborted) {
+				throw new Error(`no answer within ${readTimeoutMs}ms`);
+			}
+			throw error;
+		}
+	};
 	const pause = () => new Promise((resolve) => setTimeout(resolve, intervalMs));
 
 	while (true) {
