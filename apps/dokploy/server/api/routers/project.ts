@@ -40,6 +40,7 @@ import {
 	hasPermission,
 } from "@dokploy/server/services/permission";
 import { serviceColumns } from "@dokploy/server/services/project";
+import { environmentHasServices } from "@dokploy/server/utils/environments/has-services";
 import {
 	preserveSecretPlaceholderFields,
 	redactEnvironmentSharedEnvFor,
@@ -799,6 +800,15 @@ export const projectRouter = createTRPCRouter({
 					});
 				}
 				await checkProjectAccess(ctx, "delete", input.projectId);
+				// A row's removal cascades, but nothing stops the services behind it, and the
+				// panel can no longer see or remove them afterwards.
+				if (currentProject.environments.some(environmentHasServices)) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message:
+							"This project still has services. Delete them first, then delete the project.",
+					});
+				}
 				const deletedProject = await deleteProject(input.projectId);
 
 				await audit(ctx, {

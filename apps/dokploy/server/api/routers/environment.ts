@@ -18,6 +18,7 @@ import {
 	findMemberByUserId,
 	hasPermission,
 } from "@dokploy/server/services/permission";
+import { environmentHasServices } from "@dokploy/server/utils/environments/has-services";
 import {
 	preserveSecretPlaceholderFields,
 	redactDatabaseServiceSecrets,
@@ -389,6 +390,15 @@ export const environmentRouter = createTRPCRouter({
 				await checkEnvironmentDeletionPermission(ctx, environment.projectId);
 
 				await checkEnvironmentAccess(ctx, input.environmentId, "read");
+
+				// See project.remove: the cascade would leave the services running.
+				if (environmentHasServices(environment)) {
+					throw new TRPCError({
+						code: "CONFLICT",
+						message:
+							"This environment still has services. Delete them first, then delete the environment.",
+					});
+				}
 
 				const deletedEnvironment = await deleteEnvironment(input.environmentId);
 				await audit(ctx, {
