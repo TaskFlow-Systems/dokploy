@@ -66,6 +66,7 @@ const projectRow = () => ({
 	organizationId: "org-1",
 	name: "project",
 	env: "PROJECT_SECRET=secret",
+	environments: [],
 });
 
 const sourceEnvironment = () => ({

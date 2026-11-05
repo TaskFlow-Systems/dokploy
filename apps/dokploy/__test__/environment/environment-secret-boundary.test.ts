@@ -154,6 +154,18 @@ const environment = () => ({
 	project: project(),
 });
 
+const environmentWithoutServices = () => ({
+	...environment(),
+	applications: [],
+	compose: [],
+	libsql: [],
+	mariadb: [],
+	mongo: [],
+	mysql: [],
+	postgres: [],
+	redis: [],
+});
+
 const createSelectBuilder = (result: unknown[]) => {
 	const offset = vi.fn().mockResolvedValue(result);
 	const limit = vi.fn(() => ({ offset }));
@@ -264,6 +276,9 @@ describe("environment secret boundary", () => {
 			environmentId: "env-1",
 			name: "renamed",
 		});
+		serverMocks.findEnvironmentById.mockResolvedValue(
+			environmentWithoutServices(),
+		);
 		const removed = await caller.remove({ environmentId: "env-1" });
 
 		expect(updated?.env).toBe(REDACTED_SECRET_VALUE);
