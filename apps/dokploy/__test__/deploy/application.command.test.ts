@@ -88,6 +88,7 @@ vi.mock("@dokploy/server/utils/builders", async () => {
 	return {
 		...actual,
 		mechanizeDockerContainer: vi.fn(),
+		waitForApplicationRollout: vi.fn(),
 		getBuildCommand: vi.fn(),
 	};
 });

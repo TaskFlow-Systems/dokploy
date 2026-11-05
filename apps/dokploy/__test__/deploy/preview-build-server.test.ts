@@ -57,6 +57,7 @@ vi.mock("@dokploy/server/utils/builders", async () => {
 		...actual,
 		getBuildCommand: vi.fn().mockResolvedValue("build;"),
 		mechanizeDockerContainer: vi.fn(),
+		waitForApplicationRollout: vi.fn(),
 	};
 });
 
@@ -84,6 +85,7 @@ import { removePreviewDeployment } from "@dokploy/server/services/preview-deploy
 import {
 	getBuildCommand,
 	mechanizeDockerContainer,
+	waitForApplicationRollout,
 } from "@dokploy/server/utils/builders";
 import {
 	execAsync,
@@ -196,6 +198,35 @@ describe("preview deployments with a build server", () => {
 			registry,
 		});
 	});
+
+	it.each([
+		["deploys", deployPreviewApplication],
+		["rebuilds", rebuildPreviewApplication],
+	])(
+		"%s: waits on the deploy server and logs on the build server",
+		async (_, deploy) => {
+			setup();
+
+			await deploy({
+				applicationId: "app-1",
+				titleLog: "Preview",
+				descriptionLog: "",
+				previewDeploymentId: "preview-1",
+			});
+
+			expect(waitForApplicationRollout).toHaveBeenCalledWith(
+				"preview-app-abc-xyz",
+				"deploy-server",
+			);
+			const logLines = remoteCalls().filter(({ command }) =>
+				command.includes("base64 -d >>"),
+			);
+			expect(logLines.map(({ serverId }) => serverId)).toEqual([
+				"build-server",
+				"build-server",
+			]);
+		},
+	);
 
 	it("rebuilds on the build server", async () => {
 		setup();

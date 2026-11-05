@@ -241,6 +241,7 @@ describe("waitForSwarmServiceConvergence", () => {
 						state: "failed",
 						desired: "shutdown",
 						err: "task: non-zero exit (3)",
+						createdAt: "2026-11-04T10:00:11.000000000Z",
 					}),
 				];
 			});
@@ -340,6 +341,129 @@ describe("waitForSwarmServiceConvergence", () => {
 				);
 			},
 		);
+	});
+});
+
+describe("waitForSwarmServiceConvergence with the options of an application", () => {
+	const failedTask = task({
+		state: "failed",
+		desired: "shutdown",
+		err: "task: exit (3)",
+	});
+
+	beforeEach(() => {
+		inspect.mockReset();
+		listTasks.mockReset();
+	});
+
+	it("gives a quiet task the allowance, once per batch", async () => {
+		inspect.mockResolvedValue({
+			...service("updating"),
+			Spec: {
+				...service("updating").Spec,
+				Mode: { Replicated: { Replicas: 2 } },
+				UpdateConfig: { Parallelism: 1 },
+			},
+		});
+		listTasks.mockResolvedValue([task({ state: "preparing" })]);
+		const startedAt = Date.now();
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 10,
+				quietStartAllowanceMs: 50,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(110);
+		expect(message).toContain("did not converge within 110ms");
+		expect(message).toContain("still updating");
+	});
+
+	it("takes the short limit from the first sight of a task error", async () => {
+		inspect.mockResolvedValue(service("updating"));
+		const quiet = [task({ state: "preparing" })];
+		listTasks
+			.mockResolvedValueOnce(quiet)
+			.mockResolvedValueOnce(quiet)
+			.mockResolvedValue([
+				task({ state: "pending", err: "no suitable node (host-mode port)" }),
+			]);
+		const startedAt = Date.now();
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 30,
+				quietStartAllowanceMs: 60_000,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeLessThan(5_000);
+		expect(message).toContain("task error: no suitable node (host-mode port)");
+	});
+
+	it("does not take an error of an earlier deployment for this update", async () => {
+		inspect.mockResolvedValue({
+			...service(),
+			UpdatedAt: "2026-11-04T10:00:00.000000000Z",
+		});
+		listTasks.mockResolvedValue([
+			task({ state: "preparing", forceUpdate: 2 }),
+			{
+				...failedTask,
+				CreatedAt: "2026-11-04T09:00:00.000000000Z",
+			},
+		]);
+		const startedAt = Date.now();
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 10,
+				quietStartAllowanceMs: 100,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(110);
+		expect(message).not.toContain("task: exit (3)");
+	});
+
+	it("outlives a lost connection, because the update goes on without the panel", async () => {
+		inspect
+			.mockRejectedValueOnce(new Error("Keepalive timeout"))
+			.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([task({ state: "running" })]);
+
+		await waitForSwarmServiceConvergence("app", null, { intervalMs: 1 });
+
+		expect(inspect).toHaveBeenCalledTimes(2);
+	});
+
+	it("gives up on a connection that stays lost", async () => {
+		inspect.mockRejectedValue(new Error("Keepalive timeout"));
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 5,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(message).toContain("Could not read the state of service app");
+		expect(message).toContain("Keepalive timeout");
+	});
+
+	it("fails at once when the service is gone", async () => {
+		inspect.mockRejectedValue(
+			Object.assign(new Error("no such service"), { statusCode: 404 }),
+		);
+
+		const message = await failureOf(waitForSwarmServiceConvergence("app"));
+
+		expect(message).toContain("no such service");
+		expect(inspect).toHaveBeenCalledTimes(1);
 	});
 });
 
