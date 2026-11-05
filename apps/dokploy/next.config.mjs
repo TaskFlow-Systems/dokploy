@@ -6,6 +6,7 @@
 /** @type {import("next").NextConfig} */
 const nextConfig = {
 	reactStrictMode: true,
+	poweredByHeader: false,
 	experimental: {
 		webpackMemoryOptimizations: true,
 		// By default every page bundle is loaded at startup; on a small server
@@ -33,7 +34,19 @@ const nextConfig = {
 					},
 					{
 						key: "Content-Security-Policy",
-						value: "frame-ancestors 'none'",
+						value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+					},
+					{
+						key: "Permissions-Policy",
+						value: "camera=(), microphone=(), geolocation=()",
+					},
+					{
+						key: "X-Permitted-Cross-Domain-Policies",
+						value: "none",
+					},
+					{
+						key: "Cross-Origin-Opener-Policy",
+						value: "same-origin",
 					},
 					{
 						key: "X-Content-Type-Options",

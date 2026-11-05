@@ -6,6 +6,9 @@ import { Client } from "ssh2";
 import { ExecError } from "./ExecError";
 import { SSH_KEEPALIVE } from "./ssh-keepalive";
 
+// Alias kept for callers and tests written against the upstream name.
+export const sshKeepalive = SSH_KEEPALIVE;
+
 export class WriteFileRemoteError extends Error {
 	constructor(
 		message: string,

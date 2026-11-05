@@ -175,8 +175,10 @@ echo "Preparing for execution..."
 
 while true; do
     PROCESSES=$(ps -eo args | awk '$1 ~ /(^|\\/)docker$/')
+    # Swarm pulls don't show up in ps (moby/moby#53321)
+    PULLING=$(docker node ps self --filter desired-state=running --filter desired-state=ready --format '{{.CurrentState}}' 2>/dev/null | grep '^Preparing')
 
-    if [ -z "$PROCESSES" ]; then
+    if [ -z "$PROCESSES" ] && [ -z "$PULLING" ]; then
         echo "Docker is idle. Starting execution..."
         break
     fi
@@ -196,12 +198,21 @@ ${exec}
 echo "Execution completed."
 `;
 
+// A stopped Traefik must stay startable; keeping its container also keeps its image from `image prune --all`.
+const skipIfTraefikStopped = (command: string) => `
+if docker container inspect --format '{{.State.Running}}' dokploy-traefik dokploy-traefik-previous 2>/dev/null | grep -q false; then
+    echo "Skipping '${command}': dokploy-traefik is stopped"
+else
+    ${command}
+fi
+`;
+
 const cleanupCommands = {
-	containers: "docker container prune --force",
+	containers: skipIfTraefikStopped("docker container prune --force"),
 	images: "docker image prune --all --force",
 	volumes: "docker volume prune --all --force",
 	builders: "docker builder prune --all --force",
-	system: "docker system prune --all --force",
+	system: skipIfTraefikStopped("docker system prune --all --force"),
 };
 
 export const cleanupContainers = async (serverId?: string) => {

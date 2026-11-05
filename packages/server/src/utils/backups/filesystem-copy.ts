@@ -7,6 +7,8 @@ export const buildFilesystemCopyCommand = (
 ) => {
 	const excludes = [
 		"volume-backups/",
+		"applications/*/code/.git/",
+		"compose/*/code/.git/",
 		ENCRYPTION_KEY_BACKUP_FILE,
 		...ACME_DELETE_BACKUP_EXCLUDES,
 	]

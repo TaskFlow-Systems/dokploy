@@ -12,27 +12,42 @@ type MockCreateServiceOptions = {
 	[key: string]: unknown;
 };
 
-const { inspectMock, getServiceMock, createServiceMock, getRemoteDockerMock } =
-	vi.hoisted(() => {
-		const inspect = vi.fn<() => Promise<never>>();
-		const getService = vi.fn(() => ({ inspect }));
-		const createService = vi.fn<
-			(opts: MockCreateServiceOptions) => Promise<void>
-		>(async () => undefined);
-		const getRemoteDocker = vi.fn(async () => ({
-			getService,
-			createService,
-		}));
-		return {
-			inspectMock: inspect,
-			getServiceMock: getService,
-			createServiceMock: createService,
-			getRemoteDockerMock: getRemoteDocker,
-		};
-	});
+const {
+	inspectMock,
+	getServiceMock,
+	createServiceMock,
+	listTasksMock,
+	getRemoteDockerMock,
+} = vi.hoisted(() => {
+	const inspect = vi.fn<() => Promise<never>>();
+	const getService = vi.fn(() => ({ inspect }));
+	const createService = vi.fn<
+		(opts: MockCreateServiceOptions) => Promise<void>
+	>(async () => undefined);
+	const listTasks = vi.fn(async (): Promise<unknown[]> => []);
+	const getRemoteDocker = vi.fn(async () => ({
+		getService,
+		createService,
+		listTasks,
+	}));
+	return {
+		inspectMock: inspect,
+		getServiceMock: getService,
+		createServiceMock: createService,
+		listTasksMock: listTasks,
+		getRemoteDockerMock: getRemoteDocker,
+	};
+});
 
 vi.mock("@dokploy/server/utils/servers/remote-docker", () => ({
 	getRemoteDocker: getRemoteDockerMock,
+}));
+
+vi.mock("@dokploy/server/utils/process/execAsync", async (importOriginal) => ({
+	...(await importOriginal<
+		typeof import("@dokploy/server/utils/process/execAsync")
+	>()),
+	sleep: vi.fn(async () => undefined),
 }));
 
 const createApplication = (
@@ -72,9 +87,15 @@ describe("mechanizeDockerContainer", () => {
 		getServiceMock.mockClear();
 		createServiceMock.mockClear();
 		getRemoteDockerMock.mockClear();
+		listTasksMock.mockReset();
+		listTasksMock.mockResolvedValue([
+			{ Spec: { ForceUpdate: 0 }, Status: { State: "running" } },
+			{ Spec: { ForceUpdate: 3 }, Status: { State: "running" } },
+		]);
 		getRemoteDockerMock.mockResolvedValue({
 			getService: getServiceMock,
 			createService: createServiceMock,
+			listTasks: listTasksMock,
 		});
 	});
 
@@ -200,5 +221,7 @@ describe("mechanizeDockerContainer", () => {
 			expect(updateMock).toHaveBeenCalledTimes(1);
 			expect(updateMock.mock.calls[0]?.[0].Labels).toEqual({});
 		});
+
+		const oldTask = { Spec: { ForceUpdate: 2 }, Status: { State: "running" } };
 	});
 });

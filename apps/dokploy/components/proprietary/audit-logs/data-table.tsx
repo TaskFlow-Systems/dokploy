@@ -17,7 +17,7 @@ import {
 	tableFeatures,
 	useTable,
 } from "@tanstack/react-table";
-import { format } from "date-fns";
+import { endOfDay, format } from "date-fns";
 import { CalendarIcon, ChevronDown, X } from "lucide-react";
 import React from "react";
 import type { DateRange } from "react-day-picker";
@@ -50,6 +50,10 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import {
+	type AuditLogQueryFilters,
+	ExportAuditLogs,
+} from "./export-audit-logs";
 
 export const features = tableFeatures({
 	columnFilteringFeature,
@@ -137,9 +141,11 @@ interface DataTableProps {
 	columns: ColumnDef<typeof features, AuditLog>[];
 	data: AuditLog[];
 	total: number;
+	exportLimit?: number;
 	pageIndex: number;
 	pageSize: number;
 	filters: AuditLogFilters;
+	appliedFilters: AuditLogQueryFilters;
 	onPageChange: (page: number) => void;
 	onPageSizeChange: (size: number) => void;
 	onFilterChange: <K extends keyof AuditLogFilters>(
@@ -153,9 +159,11 @@ export function DataTable({
 	columns,
 	data,
 	total,
+	exportLimit,
 	pageIndex,
 	pageSize,
 	filters,
+	appliedFilters,
 	onPageChange,
 	onPageSizeChange,
 	onFilterChange,
@@ -270,7 +278,12 @@ export function DataTable({
 						<Calendar
 							mode="range"
 							selected={filters.dateRange}
-							onSelect={(range) => onFilterChange("dateRange", range)}
+							onSelect={(range) =>
+								onFilterChange(
+									"dateRange",
+									range?.to ? { ...range, to: endOfDay(range.to) } : range,
+								)
+							}
 							numberOfMonths={2}
 							autoFocus
 						/>
@@ -293,28 +306,35 @@ export function DataTable({
 						Clear
 					</Button>
 				)}
-				<DropdownMenu>
-					<DropdownMenuTrigger asChild>
-						<Button variant="outline" className="ml-auto">
-							Columns <ChevronDown className="ml-2 h-4 w-4" />
-						</Button>
-					</DropdownMenuTrigger>
-					<DropdownMenuContent align="end">
-						{table
-							.getAllColumns()
-							.filter((col) => col.getCanHide())
-							.map((col) => (
-								<DropdownMenuCheckboxItem
-									key={col.id}
-									className="capitalize"
-									checked={col.getIsVisible()}
-									onCheckedChange={(value) => col.toggleVisibility(!!value)}
-								>
-									{col.id}
-								</DropdownMenuCheckboxItem>
-							))}
-					</DropdownMenuContent>
-				</DropdownMenu>
+				<div className="ml-auto flex items-center gap-2">
+					<ExportAuditLogs
+						filters={appliedFilters}
+						total={total}
+						exportLimit={exportLimit}
+					/>
+					<DropdownMenu>
+						<DropdownMenuTrigger asChild>
+							<Button variant="outline">
+								Columns <ChevronDown className="ml-2 h-4 w-4" />
+							</Button>
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end">
+							{table
+								.getAllColumns()
+								.filter((col) => col.getCanHide())
+								.map((col) => (
+									<DropdownMenuCheckboxItem
+										key={col.id}
+										className="capitalize"
+										checked={col.getIsVisible()}
+										onCheckedChange={(value) => col.toggleVisibility(!!value)}
+									>
+										{col.id}
+									</DropdownMenuCheckboxItem>
+								))}
+						</DropdownMenuContent>
+					</DropdownMenu>
+				</div>
 			</div>
 
 			<div className="rounded-md border overflow-auto">

@@ -1,5 +1,6 @@
 import {
 	COMPONENTS_UPDATE_FAILED,
+	captureEvent,
 	createServer,
 	defaultCommand,
 	deleteServer,
@@ -10,6 +11,7 @@ import {
 	getAllContainerStats,
 	getContainerProcesses,
 	getDokployUrl,
+	getPostHogSessionId,
 	getPublicIpWithFallback,
 	getServicesByServerId,
 	getWebServerSettings,
@@ -257,6 +259,13 @@ export const serverRouter = createTRPCRouter({
 					resourceType: "server",
 					resourceId: project.serverId,
 					resourceName: project.name,
+				});
+				void captureEvent({
+					distinctId: user.id,
+					event: "server_created",
+					organizationId: ctx.session.activeOrganizationId,
+					sessionId: getPostHogSessionId(ctx.req.headers),
+					properties: { server_type: project.serverType },
 				});
 				return redactServer(project);
 			} catch (error) {
