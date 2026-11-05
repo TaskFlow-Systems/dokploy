@@ -68,7 +68,9 @@ const containerSpec = async (libsql: LibsqlNested) => {
 describe("buildLibsql replica spec", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mocks.inspect.mockRejectedValue(new Error("no such service"));
+		mocks.inspect.mockRejectedValue(
+			Object.assign(new Error("no such service"), { statusCode: 404 }),
+		);
 	});
 
 	it("hands the primary URL to sqld in Env", async () => {

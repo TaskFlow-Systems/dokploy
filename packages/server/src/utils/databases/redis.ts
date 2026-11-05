@@ -11,6 +11,7 @@ import {
 	generateVolumeMounts,
 	prepareEnvironmentVariables,
 } from "../docker/utils";
+import { createOrUpdateSwarmService } from "../docker/swarm-service";
 import { getRemoteDocker } from "../servers/remote-docker";
 import { withResolvedVaultRefs } from "../vault";
 
@@ -200,18 +201,5 @@ export const buildRedis = async (rawRedis: RedisNested) => {
 		},
 	};
 
-	try {
-		const service = docker.getService(appName);
-		const inspect = await service.inspect();
-		await service.update({
-			version: Number.parseInt(inspect.Version.Index),
-			...settings,
-			TaskTemplate: {
-				...settings.TaskTemplate,
-				ForceUpdate: inspect.Spec.TaskTemplate.ForceUpdate + 1,
-			},
-		});
-	} catch {
-		await docker.createService(settings);
-	}
+	await createOrUpdateSwarmService({ docker, appName, settings });
 };

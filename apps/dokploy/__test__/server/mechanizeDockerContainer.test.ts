@@ -81,7 +81,9 @@ const createApplication = (
 describe("mechanizeDockerContainer", () => {
 	beforeEach(() => {
 		inspectMock.mockReset();
-		inspectMock.mockRejectedValue(new Error("service not found"));
+		inspectMock.mockRejectedValue(
+			Object.assign(new Error("no such service"), { statusCode: 404 }),
+		);
 		getServiceMock.mockClear();
 		createServiceMock.mockClear();
 		getRemoteDockerMock.mockClear();
