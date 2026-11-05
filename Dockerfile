@@ -5,8 +5,9 @@
 FROM node:26.13.0-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS base
 ENV BUN_INSTALL="/root/.bun"
 ENV PATH="$BUN_INSTALL/bin:$PATH"
+# apt comes from the base image, which can lag behind a Debian security update.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends bash ca-certificates curl unzip \
+    && apt-get install -y --no-install-recommends apt bash ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
     && curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.4 \
     && ln -sf "$BUN_INSTALL/bin/bun" "$BUN_INSTALL/bin/bunx" \
