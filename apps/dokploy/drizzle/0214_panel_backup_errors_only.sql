@@ -1,0 +1,1 @@
+ALTER TABLE "notification" ADD COLUMN "dokployBackupErrorsOnly" boolean DEFAULT false NOT NULL;
