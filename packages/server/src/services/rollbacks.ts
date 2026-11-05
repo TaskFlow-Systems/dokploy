@@ -16,6 +16,7 @@ import {
 	prepareEnvironmentVariables,
 } from "../utils/docker/utils";
 import { execAsync, execAsyncRemote } from "../utils/process/execAsync";
+import { createOrUpdateSwarmService } from "../utils/docker/swarm-service";
 import { getRemoteDocker } from "../utils/servers/remote-docker";
 import { withResolvedVaultRefs } from "../utils/vault";
 import { type Application, findApplicationById } from "./application";
@@ -313,20 +314,5 @@ const rollbackApplication = async (
 		UpdateConfig,
 	};
 
-	try {
-		const service = docker.getService(appName);
-		const inspect = await service.inspect();
-
-		await service.update({
-			version: Number.parseInt(inspect.Version.Index),
-			...settings,
-			TaskTemplate: {
-				...settings.TaskTemplate,
-				ForceUpdate: inspect.Spec.TaskTemplate.ForceUpdate + 1,
-			},
-		});
-	} catch (error) {
-		console.error(error);
-		await docker.createService(settings);
-	}
+	await createOrUpdateSwarmService({ docker, appName, settings });
 };

@@ -5,6 +5,10 @@ import type { CreateServiceOptions } from "dockerode";
 import { getRegistryTag, uploadImageRemoteCommand } from "../cluster/upload";
 import { buildDokployLabels } from "../docker/dokploy-labels";
 import {
+	createOrUpdateSwarmService,
+	withNextForceUpdate,
+} from "../docker/swarm-service";
+import {
 	calculateResources,
 	generateBindMounts,
 	generateConfigContainer,
@@ -195,30 +199,19 @@ export const mechanizeDockerContainer = async (
 		UpdateConfig,
 	};
 
-	try {
-		const service = docker.getService(appName);
-		const inspect = await service.inspect();
-
-		await service.update({
-			version: Number.parseInt(inspect.Version.Index),
-			...settings,
+	await createOrUpdateSwarmService({
+		docker,
+		appName,
+		settings,
+		authConfig,
+		getUpdate: (spec, inspect) => ({
+			...withNextForceUpdate(spec, inspect),
 			// Dokploy sets no service-level labels of its own. A service update
 			// replaces the whole spec, so labels added outside Dokploy (e.g.
 			// traefik.* for the Swarm provider) are dropped unless carried over.
 			Labels: inspect.Spec?.Labels ?? {},
-			TaskTemplate: {
-				...settings.TaskTemplate,
-				ForceUpdate: inspect.Spec.TaskTemplate.ForceUpdate + 1,
-			},
-		});
-	} catch (error) {
-		console.log(error);
-		if (authConfig) {
-			await docker.createService(authConfig, settings);
-		} else {
-			await docker.createService(settings);
-		}
-	}
+		}),
+	});
 };
 
 export const waitForApplicationRollout = (

@@ -63,7 +63,9 @@ const containerSpec = async (mongo: MongoNested) => {
 describe("buildMongo replica set spec", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mocks.inspect.mockRejectedValue(new Error("no such service"));
+		mocks.inspect.mockRejectedValue(
+			Object.assign(new Error("no such service"), { statusCode: 404 }),
+		);
 	});
 
 	it("starts mongod with access control and a key file", async () => {

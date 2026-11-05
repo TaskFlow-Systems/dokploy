@@ -10,6 +10,7 @@ import {
 	generateVolumeMounts,
 	prepareEnvironmentVariables,
 } from "../docker/utils";
+import { createOrUpdateSwarmService } from "../docker/swarm-service";
 import { getRemoteDocker } from "../servers/remote-docker";
 import { withResolvedVaultRefs } from "../vault";
 import {
@@ -210,14 +211,10 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 			FailureAction: "rollback" as const,
 		},
 	};
-	try {
-		const service = docker.getService(appName);
-		const inspect = await service.inspect();
-		await service.update({
-			version: Number.parseInt(inspect.Version.Index),
-			...settings,
-		});
-	} catch {
-		await docker.createService(settings);
-	}
+	await createOrUpdateSwarmService({
+		docker,
+		appName,
+		settings,
+		getUpdate: (spec) => spec,
+	});
 };

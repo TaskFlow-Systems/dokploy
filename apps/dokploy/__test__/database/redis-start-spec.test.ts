@@ -61,7 +61,9 @@ const containerSpec = async (redis: RedisNested) => {
 describe("buildRedis start command", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		mocks.inspect.mockRejectedValue(new Error("no such service"));
+		mocks.inspect.mockRejectedValue(
+			Object.assign(new Error("no such service"), { statusCode: 404 }),
+		);
 	});
 
 	it("keeps the password out of the command and hands it over in Env", async () => {
