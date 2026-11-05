@@ -455,6 +455,65 @@ describe("waitForSwarmServiceConvergence with the options of an application", ()
 		expect(message).toContain("Keepalive timeout");
 	});
 
+	describe("a daemon that takes the request and stays silent", () => {
+		// Only the read's own signal ends this, so without one the test times out.
+		const silentRead = (options?: { abortSignal?: AbortSignal }) =>
+			new Promise<never>((_, reject) => {
+				options?.abortSignal?.addEventListener("abort", () => {
+					reject(
+						Object.assign(new Error("The operation was aborted"), {
+							name: "AbortError",
+						}),
+					);
+				});
+			});
+
+		it("reads again after a read that got no answer", async () => {
+			inspect
+				.mockImplementationOnce(silentRead)
+				.mockResolvedValue(service("completed"));
+			listTasks.mockResolvedValue([task({ state: "running" })]);
+
+			await waitForSwarmServiceConvergence("app", null, {
+				readTimeoutMs: 20,
+				intervalMs: 1,
+			});
+
+			expect(inspect).toHaveBeenCalledTimes(2);
+		});
+
+		it("gives up when the service read stays silent", async () => {
+			inspect.mockImplementation(silentRead);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 5,
+					readTimeoutMs: 20,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain("Could not read the state of service app");
+			expect(message).toContain("no answer within 20ms");
+		});
+
+		it("gives up when the task list stays silent", async () => {
+			inspect.mockResolvedValue(service("completed"));
+			listTasks.mockImplementation(silentRead);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 5,
+					readTimeoutMs: 20,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain("Could not read the state of service app");
+			expect(message).toContain("no answer within 20ms");
+		});
+	});
+
 	it("fails at once when the service is gone", async () => {
 		inspect.mockRejectedValue(
 			Object.assign(new Error("no such service"), { statusCode: 404 }),
