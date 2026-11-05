@@ -26,6 +26,9 @@ const MONITOR_MS = 5_000;
 const CRASH_LIMIT = { timeoutMs: 25_000 };
 // Often enough to catch a task in the moment it runs, which is when a crash looks fine.
 const CATCHES_EVERY_RUN = { ...CRASH_LIMIT, intervalMs: 50 };
+// Under load Swarm reports an exit late, so a task that lives close to Monitor can
+// look settled, and a restart loop gets several tries at that within the limit.
+const CRASH_AFTER_S = 1;
 
 // Same id as application.real.test.ts: the PR workflow removes services named
 // real-<kind>-<id>* after a cancelled run, and Docker is shared by CI runners.
@@ -262,7 +265,12 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 	);
 
 	it.each([
-		["a few seconds after it starts", "late", "sleep 3; exit 3", CRASH_LIMIT],
+		[
+			"a second after it starts",
+			"late",
+			`sleep ${CRASH_AFTER_S}; exit 3`,
+			CRASH_LIMIT,
+		],
 		["soon after it starts", "soon", "sleep 0.3; exit 3", CATCHES_EVERY_RUN],
 		["at once", "at-once", "exit 3", CATCHES_EVERY_RUN],
 	])(
@@ -653,7 +661,7 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 			statuses.length = 0;
 			vi.mocked(db.query.redis.findFirst).mockResolvedValue({
 				...redis,
-				...shellScript("sleep 3; exit 3"),
+				...shellScript(`sleep ${CRASH_AFTER_S}; exit 3`),
 			} as never);
 
 			await expect(rebuildDatabase(redis.redisId, "redis", 0)).rejects.toThrow(
