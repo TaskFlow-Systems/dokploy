@@ -16,6 +16,7 @@ import {
 	loadDockerCompose,
 	loadDockerComposeRemote,
 } from "@dokploy/server/utils/docker/domain";
+import { waitForStackRollout } from "@dokploy/server/utils/docker/stack-rollout";
 import type { ComposeSpecification } from "@dokploy/server/utils/docker/types";
 import {
 	normalizeRelativeFilePath,
@@ -25,6 +26,7 @@ import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications
 import { getBuildErrorMessage } from "@dokploy/server/utils/notifications/build-error-message";
 import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
 import {
+	appendToBuildLog,
 	createBuildRunner,
 	recordBuildFailure,
 } from "@dokploy/server/utils/process/build-process";
@@ -394,6 +396,33 @@ export const upsertComposeEnvironment = async (
 	});
 };
 
+// `docker stack deploy` exits 0 once it has written the specs, and so does
+// `--detach=false` after a rollback. Only the services themselves tell how it went.
+const rollOutStack = async (
+	compose: Pick<Compose, "composeType" | "appName" | "serverId">,
+	logPath: string,
+) => {
+	if (compose.composeType !== "stack") {
+		return;
+	}
+	await appendToBuildLog(
+		compose.serverId,
+		logPath,
+		"Waiting for Swarm to start the services of the stack...",
+	);
+	const waitedFor = await waitForStackRollout(
+		compose.appName,
+		compose.serverId,
+	);
+	await appendToBuildLog(
+		compose.serverId,
+		logPath,
+		waitedFor === 0
+			? "This stack has no service to wait for."
+			: `The stack runs the new version ✅ (${waitedFor} services)`,
+	);
+};
+
 export const deployCompose = async ({
 	composeId,
 	titleLog = "Manual deployment",
@@ -564,6 +593,7 @@ export const deployCompose = async ({
 		command += await getBuildComposeCommand(entity);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
 		await runBuildCommand(commandWithLog);
+		await rollOutStack(compose, deployment.logPath);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateCompose(composeId, {
@@ -693,6 +723,7 @@ export const rebuildCompose = async ({
 		command += await getBuildComposeCommand(compose);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
 		await runBuildCommand(commandWithLog);
+		await rollOutStack(compose, deployment.logPath);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateCompose(composeId, {

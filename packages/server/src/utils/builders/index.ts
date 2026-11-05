@@ -15,6 +15,7 @@ import {
 	generateFileMounts,
 	generateVolumeMounts,
 	prepareEnvironmentVariables,
+	QUIET_START_ALLOWANCE_MS,
 	waitForSwarmServiceConvergence,
 } from "../docker/utils";
 import { getRemoteDocker } from "../servers/remote-docker";
@@ -44,10 +45,6 @@ export type ApplicationNested = InferResultType<
 		environment: { with: { project: true } };
 	}
 >;
-
-// A pull on the node that runs the task and a HEALTHCHECK of the image itself
-// take as long as they take, and a false failure costs more than a late one.
-const APPLICATION_QUIET_START_ALLOWANCE_MS = 10 * 60_000;
 
 export const getBuildCommand = async (rawApplication: ApplicationNested) => {
 	const application = await withResolvedVaultRefs(rawApplication);
@@ -219,7 +216,7 @@ export const waitForApplicationRollout = (
 	serverId?: string | null,
 ) =>
 	waitForSwarmServiceConvergence(appName, serverId, {
-		quietStartAllowanceMs: APPLICATION_QUIET_START_ALLOWANCE_MS,
+		quietStartAllowanceMs: QUIET_START_ALLOWANCE_MS,
 	});
 
 const getImageName = async (application: ApplicationNested) => {

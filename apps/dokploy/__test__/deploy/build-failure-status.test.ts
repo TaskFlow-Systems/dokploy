@@ -14,8 +14,13 @@ const mocks = vi.hoisted(() => {
 		sendBuildSuccessNotifications: vi.fn(),
 		mechanizeDockerContainer: vi.fn(),
 		waitForApplicationRollout: vi.fn(),
+		waitForStackRollout: vi.fn(),
 	};
 });
+
+vi.mock("@dokploy/server/utils/docker/stack-rollout", () => ({
+	waitForStackRollout: mocks.waitForStackRollout,
+}));
 
 vi.mock("@dokploy/server/db", () => ({
 	db: {
@@ -239,6 +244,111 @@ describe("a build that loses the connection to its server", () => {
 		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "error");
 		expect(savedStatuses()).toContainEqual({ composeStatus: "error" });
 	});
+});
+
+describe("the rollout of a stack", () => {
+	const ROLLED_BACK = "Swarm rolled back the update of service stack_web";
+	const logged = (text: string) =>
+		mocks.execAsyncRemote.mock.calls.find(([, command]) =>
+			String(command).includes(
+				Buffer.from(text).toString("base64").slice(0, 24),
+			),
+		);
+
+	beforeEach(() => {
+		mocks.execAsyncRemote.mockReset();
+		mocks.execAsyncRemote.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.waitForStackRollout.mockReset();
+		mocks.waitForStackRollout.mockResolvedValue(2);
+	});
+
+	const asStack = () =>
+		vi
+			.mocked(db.query.compose.findFirst)
+			.mockResolvedValue({ ...compose, composeType: "stack" } as never);
+
+	it.each([
+		["deployment", deployCompose],
+		["rebuild", rebuildCompose],
+	])("waits for it on the stack's server after a %s", async (_, deploy) => {
+		asStack();
+
+		await deploy(composeRequest);
+
+		expect(mocks.waitForStackRollout).toHaveBeenCalledWith(
+			"stack",
+			"deploy-server",
+		);
+		const buildOrder =
+			mocks.execAsyncRemote.mock.invocationCallOrder.at(0) ?? 0;
+		expect(
+			mocks.waitForStackRollout.mock.invocationCallOrder[0],
+		).toBeGreaterThan(buildOrder);
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+		expect(savedStatuses()).toContainEqual({ composeStatus: "done" });
+		expect(logged("The stack runs the new version")).toBeDefined();
+	});
+
+	it.each([
+		["deployment", deployCompose],
+		["rebuild", rebuildCompose],
+	])("marks a %s as failed when a service rolled back", async (_, deploy) => {
+		asStack();
+		mocks.waitForStackRollout.mockRejectedValue(new Error(ROLLED_BACK));
+
+		await expect(deploy(composeRequest)).rejects.toThrow(ROLLED_BACK);
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "error");
+		expect(mocks.updateDeploymentStatus).not.toHaveBeenCalledWith(
+			"dep-1",
+			"done",
+		);
+		expect(savedStatuses()).toContainEqual({ composeStatus: "error" });
+		expect(logged(ROLLED_BACK)).toBeDefined();
+		expect(mocks.sendBuildSuccessNotifications).not.toHaveBeenCalled();
+	});
+
+	it("notifies with the reason after a failed deployment", async () => {
+		asStack();
+		mocks.waitForStackRollout.mockRejectedValue(new Error(ROLLED_BACK));
+
+		await expect(deployCompose(composeRequest)).rejects.toThrow(ROLLED_BACK);
+
+		expect(mocks.sendBuildErrorNotifications).toHaveBeenCalledWith(
+			expect.objectContaining({ errorMessage: ROLLED_BACK }),
+		);
+	});
+
+	it("says so when the stack has nothing to wait for", async () => {
+		asStack();
+		mocks.waitForStackRollout.mockResolvedValue(0);
+
+		await deployCompose(composeRequest);
+
+		expect(logged("This stack has no service to wait for")).toBeDefined();
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+	});
+
+	it.each([
+		["deployment", deployCompose],
+		["rebuild", rebuildCompose],
+	])(
+		"does not wait after a %s of the docker-compose type",
+		async (_, deploy) => {
+			vi.mocked(db.query.compose.findFirst).mockResolvedValue({
+				...compose,
+				composeType: "docker-compose",
+			} as never);
+
+			await deploy(composeRequest);
+
+			expect(mocks.waitForStackRollout).not.toHaveBeenCalled();
+			expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith(
+				"dep-1",
+				"done",
+			);
+		},
+	);
 });
 
 describe("a rollout that Swarm does not finish", () => {

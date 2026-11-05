@@ -59,6 +59,20 @@ const task = (fields: {
 	},
 });
 
+const endingService = (condition: string, state?: string) => {
+	const base = service(state);
+	return {
+		...base,
+		Spec: {
+			...base.Spec,
+			TaskTemplate: {
+				...base.Spec.TaskTemplate,
+				RestartPolicy: { Condition: condition },
+			},
+		},
+	};
+};
+
 const failureOf = (promise: Promise<void>) =>
 	promise.then(
 		() => "",
@@ -341,6 +355,171 @@ describe("waitForSwarmServiceConvergence", () => {
 				);
 			},
 		);
+	});
+});
+
+describe("a service whose restart policy lets it end", () => {
+	const options = { intervalMs: 1, timeoutMs: 40, quietStartAllowanceMs: 0 };
+
+	beforeEach(() => {
+		inspect.mockReset();
+		listTasks.mockReset();
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(Date.parse("2026-11-04T10:00:20.000Z"));
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	const pastUpdateGrace = () => vi.setSystemTime(Date.now() + 5_000);
+
+	it.each(["none", "on-failure"])(
+		"passes a task that completed with condition %s",
+		async (condition) => {
+			inspect.mockImplementation(async () => {
+				pastUpdateGrace();
+				return endingService(condition);
+			});
+			listTasks.mockResolvedValue([
+				task({ state: "complete", desired: "shutdown" }),
+			]);
+
+			await expect(
+				waitForSwarmServiceConvergence("job", null, options),
+			).resolves.toBeUndefined();
+		},
+	);
+
+	it("does not take a complete task for success with condition any", async () => {
+		inspect.mockImplementation(async () => {
+			pastUpdateGrace();
+			return service();
+		});
+		listTasks.mockResolvedValue([
+			task({ state: "complete", desired: "shutdown" }),
+		]);
+
+		expect(
+			await failureOf(waitForSwarmServiceConvergence("job", null, options)),
+		).toContain("did not converge");
+	});
+
+	it("fails at once when the last run failed and nothing replaces it", async () => {
+		inspect.mockImplementation(async () => {
+			pastUpdateGrace();
+			return endingService("none");
+		});
+		listTasks.mockResolvedValue([
+			task({
+				state: "failed",
+				desired: "shutdown",
+				err: "task: non-zero exit (3)",
+			}),
+		]);
+
+		const failure = await failureOf(
+			waitForSwarmServiceConvergence("job", null, options),
+		);
+
+		expect(failure).toContain("does not run it again");
+		expect(failure).toContain("non-zero exit (3)");
+		expect(inspect).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes by the newest task of a slot, so a retry that succeeds passes", async () => {
+		inspect.mockImplementation(async () => {
+			pastUpdateGrace();
+			return endingService("on-failure");
+		});
+		listTasks.mockResolvedValue([
+			{
+				...task({ id: "first", state: "failed", desired: "shutdown" }),
+				Slot: 1,
+				CreatedAt: "2026-11-04T10:00:01.000000000Z",
+			},
+			{
+				...task({ id: "retry", state: "complete", desired: "shutdown" }),
+				Slot: 1,
+				CreatedAt: "2026-11-04T10:00:05.000000000Z",
+			},
+		]);
+
+		await expect(
+			waitForSwarmServiceConvergence("job", null, options),
+		).resolves.toBeUndefined();
+	});
+
+	it("passes an update that Swarm paused only because a short task ended cleanly", async () => {
+		inspect.mockResolvedValue(endingService("none", "paused"));
+		listTasks.mockResolvedValue([
+			task({
+				state: "complete",
+				desired: "shutdown",
+				createdAt: "2026-11-04T10:00:05.000000000Z",
+			}),
+		]);
+
+		await expect(
+			waitForSwarmServiceConvergence("job", null, options),
+		).resolves.toBeUndefined();
+	});
+
+	it.each([
+		["the task failed", "failed", "2026-11-04T10:00:05.000000000Z"],
+		[
+			"the complete task is from before",
+			"complete",
+			"2026-11-04T09:00:00.000000000Z",
+		],
+	])("keeps a pause as a failure when %s", async (_, state, createdAt) => {
+		inspect.mockResolvedValue(endingService("none", "paused"));
+		listTasks.mockResolvedValue([
+			task({ state, desired: "shutdown", createdAt }),
+		]);
+
+		expect(
+			await failureOf(waitForSwarmServiceConvergence("job", null, options)),
+		).toContain("paused the update");
+	});
+
+	it("keeps a pause as a failure with condition any", async () => {
+		inspect.mockResolvedValue(service("paused"));
+		listTasks.mockResolvedValue([
+			task({
+				state: "complete",
+				desired: "shutdown",
+				createdAt: "2026-11-04T10:00:05.000000000Z",
+			}),
+		]);
+
+		expect(
+			await failureOf(waitForSwarmServiceConvergence("job", null, options)),
+		).toContain("paused the update");
+	});
+
+	it("does not fail on an old failed task while the update runs", async () => {
+		inspect
+			.mockResolvedValueOnce(endingService("none", "updating"))
+			.mockResolvedValue(endingService("none", "completed"));
+		listTasks
+			.mockResolvedValueOnce([task({ state: "failed", desired: "shutdown" })])
+			.mockResolvedValue([
+				{
+					...task({ id: "old", state: "failed", desired: "shutdown" }),
+					Slot: 1,
+					CreatedAt: "2026-11-04T10:00:01.000000000Z",
+				},
+				{
+					...task({ id: "new", state: "complete", desired: "shutdown" }),
+					Slot: 1,
+					CreatedAt: "2026-11-04T10:00:05.000000000Z",
+				},
+			]);
+
+		await expect(
+			waitForSwarmServiceConvergence("job", null, options),
+		).resolves.toBeUndefined();
 	});
 });
 
