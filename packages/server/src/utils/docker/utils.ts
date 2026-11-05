@@ -1581,6 +1581,7 @@ type SwarmServiceSpec = {
 	Mode?: { Replicated?: { Replicas?: number } };
 	UpdateConfig?: { Parallelism?: number; Monitor?: number; Delay?: number };
 	TaskTemplate?: {
+		RestartPolicy?: { Condition?: string };
 		ContainerSpec?: {
 			StopGracePeriod?: number;
 			Healthcheck?: {
@@ -1596,8 +1597,11 @@ type SwarmServiceSpec = {
 
 type SwarmTask = {
 	CreatedAt?: string;
+	DesiredState?: string;
+	NodeID?: string;
+	Slot?: number;
 	Version?: { Index?: number };
-	Status?: { Err?: string; Timestamp?: string };
+	Status?: { Err?: string; State?: string; Timestamp?: string };
 };
 
 type SwarmServiceState = {
@@ -1696,6 +1700,34 @@ const runningBeforeServiceChangeMs = (
 	);
 };
 
+// With a restart condition other than `any`, a task may end for good: migrations in a
+// stack are often written this way. Swarm then sets its DesiredState to `shutdown`, so
+// no running task stays behind, and its last run is what tells how the service did. A
+// replacement after a failure exists from the moment of the failure, so it is the newest.
+const endedRuns = (spec: SwarmServiceSpec | undefined, tasks: SwarmTask[]) => {
+	if ((spec?.TaskTemplate?.RestartPolicy?.Condition ?? "any") === "any") {
+		return [];
+	}
+	const newestOfSlot = new Map<string, SwarmTask>();
+	for (const task of tasks) {
+		const slot = String(task.Slot ?? task.NodeID);
+		const newest = newestOfSlot.get(slot);
+		if (
+			!newest ||
+			Date.parse(task.CreatedAt ?? "") > Date.parse(newest.CreatedAt ?? "")
+		) {
+			newestOfSlot.set(slot, task);
+		}
+	}
+	return [...newestOfSlot.values()].filter(
+		(task) => task.DesiredState !== "running",
+	);
+};
+
+// A pull on the node that runs the task and a HEALTHCHECK of the image itself
+// take as long as they take, and a false failure costs more than a late one.
+export const QUIET_START_ALLOWANCE_MS = 10 * 60_000;
+
 type SwarmConvergenceOptions = {
 	timeoutMs?: number;
 	intervalMs?: number;
@@ -1708,7 +1740,7 @@ type SwarmConvergenceOptions = {
 
 // A healthy daemon answers these reads in milliseconds, and a read that times out is
 // tried again until the wait's own limit, so this does not have to be generous.
-const SWARM_READ_TIMEOUT_MS = 30_000;
+export const SWARM_READ_TIMEOUT_MS = 30_000;
 
 export const waitForSwarmServiceConvergence = async (
 	appName: string,
@@ -1803,12 +1835,25 @@ export const waitForSwarmServiceConvergence = async (
 			info.UpdateStatus?.StartedAt ?? info.UpdatedAt,
 		);
 
+		const ended = endedRuns(info.Spec, tasks);
+		// Swarm counts any task that ends during Monitor against the update, exit 0
+		// included, so a short task of this update that did its work ends in `paused`.
+		const pausedByCleanEnd =
+			updateState === "paused" &&
+			ended.length >= desiredTasksCount &&
+			ended.every(
+				(task) =>
+					task.Status?.State === "complete" &&
+					Date.parse(task.CreatedAt ?? "") >=
+						Date.parse(info.UpdateStatus?.StartedAt ?? ""),
+			);
+
 		// The first sight decides: Swarm can replace `rollback_completed` with
 		// `completed` seconds later (seen with two replicas), and it reports
 		// `rollback_completed` before the old task is up, so the message says
 		// nothing about what runs.
 		const failure = updateState && FAILED_UPDATE_STATES[updateState];
-		if (failure) {
+		if (failure && !pausedByCleanEnd) {
 			throw new ServiceConvergenceError(
 				`Swarm ${failure.action} the update of service ${appName}: ${taskError ?? "a new task stopped or failed its health check"}. ${failure.outcome}`,
 			);
@@ -1828,10 +1873,25 @@ export const waitForSwarmServiceConvergence = async (
 			);
 		const rolloutFinished =
 			updateState === "completed" ||
+			pausedByCleanEnd ||
 			(updateState === undefined && noRolloutPending);
 
-		if (rolloutFinished && settledTasksCount >= desiredTasksCount) {
-			return;
+		if (rolloutFinished) {
+			const failedRun = ended.find(
+				(task) =>
+					task.Status?.State === "failed" || task.Status?.State === "rejected",
+			);
+			if (failedRun) {
+				throw new ServiceConvergenceError(
+					`Service ${appName} ended with an error, and its restart policy does not run it again: ${failedRun.Status?.Err ?? `last state: ${failedRun.Status?.State}`}`,
+				);
+			}
+			const completedRunsCount = ended.filter(
+				(task) => task.Status?.State === "complete",
+			).length;
+			if (settledTasksCount + completedRunsCount >= desiredTasksCount) {
+				return;
+			}
 		}
 
 		if (taskError) {
