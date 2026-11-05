@@ -39,6 +39,9 @@ export const notifications = pgTable("notification", {
 	volumeBackup: boolean("volumeBackup").notNull().default(false),
 	dokployRestart: boolean("dokployRestart").notNull().default(false),
 	dokployBackup: boolean("dokployBackup").notNull().default(false),
+	dokployBackupErrorsOnly: boolean("dokployBackupErrorsOnly")
+		.notNull()
+		.default(false),
 	dockerCleanup: boolean("dockerCleanup").notNull().default(false),
 	serverThreshold: boolean("serverThreshold").notNull().default(false),
 	notificationType: notificationType("notificationType").notNull(),
@@ -265,6 +268,10 @@ export const notificationsSchema = createInsertSchema(notifications);
 
 const notificationUpdateSecret = z.string().optional();
 
+// Outside .pick() and after .required(): API clients written before this field
+// keep working, and leaving it out of an update keeps the stored value.
+const dokployBackupErrorsOnly = z.boolean().optional();
+
 export const apiCreateSlack = notificationsSchema
 	.pick({
 		appBuildError: true,
@@ -281,7 +288,8 @@ export const apiCreateSlack = notificationsSchema
 		webhookUrl: z.string().min(1),
 		channel: z.string(),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateSlack = apiCreateSlack.partial().extend({
 	notificationId: z.string().min(1),
@@ -312,7 +320,8 @@ export const apiCreateTelegram = notificationsSchema
 		chatId: z.string().min(1),
 		messageThreadId: z.string(),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateTelegram = apiCreateTelegram.partial().extend({
 	notificationId: z.string().min(1),
@@ -343,7 +352,8 @@ export const apiCreateDiscord = notificationsSchema
 		webhookUrl: z.string().min(1),
 		decoration: z.boolean(),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateDiscord = apiCreateDiscord.partial().extend({
 	notificationId: z.string().min(1),
@@ -380,7 +390,8 @@ export const apiCreateEmail = notificationsSchema
 		fromAddress: z.string().min(1),
 		toAddresses: z.array(z.string()).min(1),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateEmail = apiCreateEmail.partial().extend({
 	notificationId: z.string().min(1),
@@ -415,7 +426,8 @@ export const apiCreateResend = notificationsSchema
 		fromAddress: z.string().min(1),
 		toAddresses: z.array(z.string()).min(1),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateResend = apiCreateResend.partial().extend({
 	notificationId: z.string().min(1),
@@ -448,7 +460,8 @@ export const apiCreateGotify = notificationsSchema
 		priority: z.number().min(1),
 		decoration: z.boolean(),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateGotify = apiCreateGotify.partial().extend({
 	notificationId: z.string().min(1),
@@ -485,7 +498,8 @@ export const apiCreateNtfy = notificationsSchema
 		accessToken: z.string().optional(),
 		priority: z.number().min(1),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateNtfy = apiCreateNtfy.partial().extend({
 	notificationId: z.string().min(1),
@@ -516,6 +530,7 @@ export const apiCreateMattermost = notificationsSchema
 		webhookUrl: z.string().url(),
 		channel: z.string().optional(),
 		username: z.string().optional(),
+		dokployBackupErrorsOnly,
 	})
 	.required({
 		name: true,
@@ -567,6 +582,7 @@ export const apiCreateCustom = notificationsSchema
 	.extend({
 		endpoint: z.string().min(1),
 		headers: z.record(z.string(), z.string()).optional(),
+		dokployBackupErrorsOnly,
 	});
 
 export const apiUpdateCustom = apiCreateCustom.partial().extend({
@@ -596,7 +612,8 @@ export const apiCreateLark = notificationsSchema
 	.extend({
 		webhookUrl: z.string().min(1),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateLark = apiCreateLark.partial().extend({
 	notificationId: z.string().min(1),
@@ -624,7 +641,8 @@ export const apiCreateTeams = notificationsSchema
 	.extend({
 		webhookUrl: z.string().min(1),
 	})
-	.required();
+	.required()
+	.extend({ dokployBackupErrorsOnly });
 
 export const apiUpdateTeams = apiCreateTeams.partial().extend({
 	notificationId: z.string().min(1),
@@ -653,6 +671,7 @@ export const apiCreatePushover = notificationsSchema
 		userKey: z.string().min(1),
 		apiToken: z.string().min(1),
 		priority: z.number().min(-2).max(2).default(0),
+		dokployBackupErrorsOnly,
 		retry: z.number().min(30).nullish(),
 		expire: z.number().min(1).max(10800).nullish(),
 	})
@@ -677,6 +696,7 @@ export const apiUpdatePushover = z.object({
 	appBuildError: z.boolean().optional(),
 	databaseBackup: z.boolean().optional(),
 	dokployBackup: z.boolean().optional(),
+	dokployBackupErrorsOnly,
 	volumeBackup: z.boolean().optional(),
 	dokployRestart: z.boolean().optional(),
 	name: z.string().optional(),

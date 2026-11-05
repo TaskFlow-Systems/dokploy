@@ -51,6 +51,10 @@ export const sendDokployBackupNotifications = async ({
 	});
 
 	for (const notification of notificationList) {
+		if (type === "success" && notification.dokployBackupErrorsOnly) {
+			continue;
+		}
+
 		const {
 			email,
 			discord,
