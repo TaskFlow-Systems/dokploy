@@ -119,7 +119,7 @@ RUN . /etc/os-release \
     && rm -rf /var/lib/apt/lists/*
 
 # Install rclone
-ARG RCLONE_VERSION=1.75.2
+ARG RCLONE_VERSION=1.76.0
 RUN apt-get update \
     && apt-get install -y --no-install-recommends unzip \
     && curl -fsSL "https://downloads.rclone.org/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.zip" -o /tmp/rclone.zip \
