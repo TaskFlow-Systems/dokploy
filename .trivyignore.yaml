@@ -5,9 +5,8 @@
 vulnerabilities:
   - id: CVE-2026-111943
     paths:
-      - usr/bin/rclone
       - usr/local/bin/railpack
-    statement: rclone 1.75.2 and Railpack 0.42.0 are built with Go 1.26.9; the fix needs Go 1.26.10.
+    statement: Railpack 0.42.0 is built with Go 1.26.9; the fix needs Go 1.26.10.
     expired_at: 2026-11-27
   - id: CVE-2026-78669
     paths:
@@ -27,10 +26,9 @@ vulnerabilities:
     expired_at: 2026-11-27
   - id: CVE-2026-78661
     paths:
-      - usr/bin/rclone
       - usr/libexec/docker/cli-plugins/docker-buildx
       - usr/libexec/docker/cli-plugins/docker-compose
       - usr/local/bin/pack
       - usr/local/bin/railpack
-    statement: The fix is golang.org/x/net 0.62.0. buildx 0.38.2, compose 5.7.0, pack 0.40.10 and Railpack 0.43.0, the latest releases, use older versions; rclone 1.76.0 has it but came out on 2026-11-06, under the one-day release age.
+    statement: The fix is golang.org/x/net 0.62.0. buildx 0.38.2, compose 5.7.0, pack 0.40.10 and Railpack 0.43.0, the latest releases, use older versions.
     expired_at: 2026-11-27
