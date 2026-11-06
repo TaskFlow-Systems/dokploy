@@ -11,7 +11,7 @@ export const PINNED_VERSIONS = {
 	nixpacks: "1.41.0",
 	railpack: "0.42.0",
 	buildpacks: "0.40.10",
-	rclone: "1.75.2",
+	rclone: "1.76.0",
 } as const;
 
 export const NIXPACKS_VERSION = PINNED_VERSIONS.nixpacks;

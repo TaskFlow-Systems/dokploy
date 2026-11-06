@@ -23,7 +23,7 @@
 | Nixpacks | 1.41.0 | последний релиз |
 | Railpack | 0.42.0 | образ фронтенда `railpack-frontend:v0.42.0`; 0.43.0 не берём: она меняет исключения в контексте сборки |
 | Buildpacks (pack) | 0.40.10 | последний релиз |
-| RClone | 1.75.2 | последний релиз, архив `downloads.rclone.org` |
+| RClone | 1.76.0 | последний релиз, архив `downloads.rclone.org`; собран с `golang.org/x/net` 0.62.0 и Go 1.27.3 |
 
 Postgres и Redis относятся к базе панели. На серверах VPS их нет.
 
