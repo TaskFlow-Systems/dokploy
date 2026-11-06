@@ -10,6 +10,7 @@ import {
 } from "@dokploy/server/db/schema";
 import { getBuildComposeCommand } from "@dokploy/server/utils/builders/compose";
 import { randomizeSpecificationFile } from "@dokploy/server/utils/docker/compose";
+import { waitForComposeContainers } from "@dokploy/server/utils/docker/compose-containers";
 import { extractComposeVariables } from "@dokploy/server/utils/docker/compose-variables";
 import {
 	cloneCompose,
@@ -396,30 +397,52 @@ export const upsertComposeEnvironment = async (
 	});
 };
 
-// `docker stack deploy` exits 0 once it has written the specs, and so does
-// `--detach=false` after a rollback. Only the services themselves tell how it went.
-const rollOutStack = async (
+// Both `docker stack deploy` and `docker compose up -d` exit 0 once they have written
+// the specs or started the containers, and `--detach=false` exits 0 after a rollback.
+// Only the services and containers themselves tell how it went.
+const rollOutCompose = async (
 	compose: Pick<Compose, "composeType" | "appName" | "serverId">,
 	logPath: string,
+	upStartedAt: number,
 ) => {
-	if (compose.composeType !== "stack") {
+	if (compose.composeType === "stack") {
+		await appendToBuildLog(
+			compose.serverId,
+			logPath,
+			"Waiting for Swarm to start the services of the stack...",
+		);
+		const waitedFor = await waitForStackRollout(
+			compose.appName,
+			compose.serverId,
+		);
+		await appendToBuildLog(
+			compose.serverId,
+			logPath,
+			waitedFor === 0
+				? "This stack has no service to wait for."
+				: `The stack runs the new version ✅ (${waitedFor} services)`,
+		);
+		return;
+	}
+	if (compose.composeType !== "docker-compose") {
 		return;
 	}
 	await appendToBuildLog(
 		compose.serverId,
 		logPath,
-		"Waiting for Swarm to start the services of the stack...",
+		"Checking that the containers stay up...",
 	);
-	const waitedFor = await waitForStackRollout(
+	const checked = await waitForComposeContainers(
 		compose.appName,
 		compose.serverId,
+		{ startedSince: upStartedAt },
 	);
 	await appendToBuildLog(
 		compose.serverId,
 		logPath,
-		waitedFor === 0
-			? "This stack has no service to wait for."
-			: `The stack runs the new version ✅ (${waitedFor} services)`,
+		checked === 0
+			? "This project has no container to check."
+			: `The containers run ✅ (${checked} containers)`,
 	);
 };
 
@@ -592,8 +615,9 @@ export const deployCompose = async ({
 		}
 		command += await getBuildComposeCommand(entity);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		const upStartedAt = Date.now();
 		await runBuildCommand(commandWithLog);
-		await rollOutStack(compose, deployment.logPath);
+		await rollOutCompose(compose, deployment.logPath, upStartedAt);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateCompose(composeId, {
@@ -722,8 +746,9 @@ export const rebuildCompose = async ({
 		command = "set -e;";
 		command += await getBuildComposeCommand(compose);
 		commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		const upStartedAt = Date.now();
 		await runBuildCommand(commandWithLog);
-		await rollOutStack(compose, deployment.logPath);
+		await rollOutCompose(compose, deployment.logPath, upStartedAt);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateCompose(composeId, {
