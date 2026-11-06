@@ -15,6 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 import { CertificateRenewal } from "./certificate-renewal";
+import { ExportCertificate } from "./export-certificate";
 import { InterruptedDeletion } from "./interrupted-deletion";
 import {
 	CountBadge,
@@ -152,15 +153,20 @@ const CertificateCell = ({
 				? "text-yellow-600 dark:text-yellow-400"
 				: "";
 	return (
-		<div className="flex flex-col gap-1 text-sm">
-			<span className={toneClassName}>
-				{certificate.daysLeft < 0
-					? `expired on ${date}`
-					: `expires on ${date}, ${certificate.daysLeft} days left`}
-			</span>
-			<span className="text-xs text-muted-foreground">
-				{certificate.issuer}
-			</span>
+		<div className="flex items-start gap-1">
+			<div className="flex flex-col gap-1 text-sm">
+				<span className={toneClassName}>
+					{certificate.daysLeft < 0
+						? `expired on ${date}`
+						: `expires on ${date}, ${certificate.daysLeft} days left`}
+				</span>
+				<span className="text-xs text-muted-foreground">
+					{certificate.issuer}
+				</span>
+			</div>
+			{!row.domain.startsWith("*.") && (
+				<ExportCertificate domain={row.domain} serverId={row.serverId} />
+			)}
 		</div>
 	);
 };

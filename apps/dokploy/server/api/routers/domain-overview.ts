@@ -1,6 +1,7 @@
 import {
 	clearStaleDeletionLock,
 	deleteUnusedCertificates,
+	exportCertificate,
 	getDomainOverview,
 	getTraefikLogs,
 	recoverInterruptedTraefik,
@@ -34,6 +35,45 @@ export const domainOverviewRouter = createTRPCRouter({
 			await checkPermission(ctx, { traefikFiles: ["read"] });
 			await assertTraefikFilesHostAccess(ctx, serverId ?? undefined);
 			return getTraefikLogs(ctx.session.activeOrganizationId, serverId);
+		}),
+	// A mutation, so the private key is never kept in the query cache or
+	// fetched again on window focus.
+	exportCertificate: protectedProcedure
+		.input(
+			z.object({
+				serverId: z.string().min(1).nullable(),
+				domain: z.string().min(1).max(253),
+			}),
+		)
+		.mutation(async ({ ctx, input }) => {
+			await checkPermission(ctx, { traefikFiles: ["read"] });
+			await assertTraefikFilesHostAccess(ctx, input.serverId ?? undefined);
+			await assertProtectedResourceAccess(ctx);
+			const result = await exportCertificate(
+				ctx.session.activeOrganizationId,
+				input.serverId,
+				input.domain,
+			);
+			console.info(
+				`[domain-overview] certificate export by ${ctx.user.id} on ${input.serverId ?? "local"}: ${result.domain}`,
+			);
+			try {
+				await audit(ctx, {
+					action: "download",
+					resourceType: "certificate",
+					resourceId: input.serverId ?? "local",
+					resourceName: result.domain,
+					metadata: {
+						serverId: input.serverId,
+						domain: result.domain,
+						names: result.names,
+						validTo: result.validTo,
+					},
+				});
+			} catch (error) {
+				console.error("[domain-overview] audit entry failed:", error);
+			}
+			return result;
 		}),
 	deleteUnusedCertificates: protectedProcedure
 		.input(
