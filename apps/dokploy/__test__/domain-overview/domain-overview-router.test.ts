@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	recoverInterruptedTraefik: vi.fn(),
 	createAuditLog: vi.fn(),
 	deleteUnusedCertificates: vi.fn(),
+	exportCertificate: vi.fn(),
 	findMember: vi.fn(),
 	findServers: vi.fn(),
 	getDomainOverview: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock("@dokploy/server/services/domain-overview", () => ({
 	clearStaleDeletionLock: mocks.clearStaleDeletionLock,
 	recoverInterruptedTraefik: mocks.recoverInterruptedTraefik,
 	deleteUnusedCertificates: mocks.deleteUnusedCertificates,
+	exportCertificate: mocks.exportCertificate,
 	getDomainOverview: mocks.getDomainOverview,
 	getTraefikLogs: mocks.getTraefikLogs,
 }));
@@ -422,5 +424,57 @@ describe.each([
 	it("runs for an admin", async () => {
 		await expect(call(createCaller("admin"))).resolves.toMatchObject(result);
 		expect(mocks[serviceName]).toHaveBeenCalledWith("org-1", "server-1");
+	});
+});
+
+describe("certificate export access", () => {
+	const input = { serverId: "server-1", domain: "app.example.test" };
+	const bundle = {
+		domain: "app.example.test",
+		names: ["app.example.test"],
+		validTo: "2027-01-01T00:00:00.000Z",
+		privateKey: "KEY",
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.findServers.mockResolvedValue([{ serverId: "server-1" }]);
+		mocks.hasValidLicense.mockResolvedValue(false);
+		mocks.exportCertificate.mockResolvedValue(bundle);
+	});
+
+	it("refuses a member, even with Traefik file access", async () => {
+		await expect(
+			createCaller("member").domainOverview.exportCertificate(input),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+		await expect(
+			createCaller("member", {
+				traefikFiles: true,
+			}).domainOverview.exportCertificate(input),
+		).rejects.toThrow("Local host operations require");
+		expect(mocks.exportCertificate).not.toHaveBeenCalled();
+	});
+
+	it("refuses an API key session", async () => {
+		await expect(
+			createCaller("admin", {
+				authMethod: "api-key",
+			}).domainOverview.exportCertificate(input),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(mocks.exportCertificate).not.toHaveBeenCalled();
+	});
+
+	it("returns the bundle to an admin and keeps the key out of the audit entry", async () => {
+		await expect(
+			createCaller("admin").domainOverview.exportCertificate(input),
+		).resolves.toEqual(bundle);
+		expect(mocks.exportCertificate).toHaveBeenCalledWith(
+			"org-1",
+			"server-1",
+			"app.example.test",
+		);
+		expect(JSON.stringify(mocks.createAuditLog.mock.calls)).not.toContain(
+			'KEY"',
+		);
 	});
 });

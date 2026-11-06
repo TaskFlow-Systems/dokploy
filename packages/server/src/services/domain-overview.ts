@@ -21,11 +21,14 @@ import {
 	ACME_FILE_NAME,
 	type AcmeCertificate,
 	AcmeFileFormatError,
+	buildAcmeExportCommand,
 	buildAcmeReadCommand,
+	type CertificateBundle,
 	type CertificateTone,
 	certificateCovers,
 	certificateTone,
 	daysUntil,
+	extractCertificateBundle,
 	findCertificateFor,
 	normalizeDomainName,
 	parseAcmeCertificates,
@@ -1302,6 +1305,72 @@ export const getTraefikLogs = async (
 			lines: [],
 		};
 	}
+};
+
+export type CertificateExport = Omit<CertificateBundle, "validTo"> & {
+	serverId: string | null;
+	serverName: string;
+	validTo: string;
+};
+
+export const exportCertificate = async (
+	orgId: string,
+	serverId: string | null,
+	requested: string,
+): Promise<CertificateExport> => {
+	const domain = normalizeDomainName(requested);
+	if (!isValidCertificateDomain(domain) || domain.startsWith("*.")) {
+		throw new TRPCError({ code: "BAD_REQUEST", message: "Invalid domain" });
+	}
+	const target = await resolveTarget(orgId, serverId);
+	if (runningTraefikOperation(target.serverId)) {
+		throw new TRPCError({
+			code: "CONFLICT",
+			message: DELETION_RUNNING_MESSAGE,
+		});
+	}
+	let raw: string;
+	try {
+		raw = (
+			await runOnServer(
+				target,
+				buildAcmeExportCommand(acmeFileFor(target), domain),
+			)
+		).stdout;
+	} catch (error) {
+		if (
+			error instanceof ExecError &&
+			error.exitCode === ACME_FILE_MISSING_EXIT_CODE
+		) {
+			raw = "{}";
+		} else {
+			throw new TRPCError({
+				code: "INTERNAL_SERVER_ERROR",
+				message: `${ACME_FILE_NAME}: ${describeFailure(error, target)}`,
+			});
+		}
+	}
+	let bundle: CertificateBundle | null;
+	try {
+		bundle = extractCertificateBundle(raw, domain);
+	} catch {
+		throw new TRPCError({
+			code: "INTERNAL_SERVER_ERROR",
+			message: `${ACME_FILE_NAME} on ${target.name} could not be parsed`,
+		});
+	}
+	if (!bundle) {
+		throw new TRPCError({
+			code: "NOT_FOUND",
+			message: `No Let's Encrypt certificate for ${domain} on ${target.name}`,
+		});
+	}
+	return {
+		...bundle,
+		validTo: bundle.validTo.toISOString(),
+		serverId: target.serverId,
+		serverName: target.name,
+	};
 };
 
 export type CertificateRefusalReason =

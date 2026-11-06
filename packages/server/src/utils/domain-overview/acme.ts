@@ -1,4 +1,4 @@
-import { X509Certificate } from "node:crypto";
+import { createPrivateKey, X509Certificate } from "node:crypto";
 
 export const ACME_FILE_NAME = "acme.json";
 export const ACME_FILE_MISSING_EXIT_CODE = 3;
@@ -170,3 +170,115 @@ export const findCertificateFor = (
 	certificates
 		.filter((certificate) => certificateCovers(certificate.names, domain))
 		.sort((a, b) => b.validTo.getTime() - a.validTo.getTime())[0];
+
+export type CertificateBundle = {
+	domain: string;
+	resolver: string;
+	names: string[];
+	validTo: Date;
+	issuer: string;
+	certificate: string;
+	chain: string;
+	fullchain: string;
+	privateKey: string;
+};
+
+// Only the entries whose names can cover the domain leave the server: the
+// exact name and the wildcard one level up. Without jq the whole file comes
+// over and extractCertificateBundle does the same selection.
+export const buildAcmeExportCommand = (
+	acmeFilePath: string,
+	domain: string,
+) => {
+	const file = shellQuote(acmeFilePath);
+	const dot = domain.indexOf(".");
+	const wildcard = dot > 0 ? `*${domain.slice(dot)}` : domain;
+	const filter =
+		'with_entries(select(.value | type == "object") | .value |= {Certificates: [(.Certificates | arrays | .[])? | select(([.domain?.main?] + (.domain?.sans? // [])) | map(strings | ascii_downcase | rtrimstr(".")) | any(. == $d or . == $w))]})';
+	return [
+		`[ -f ${file} ] || exit ${ACME_FILE_MISSING_EXIT_CODE}`,
+		"if command -v jq >/dev/null 2>&1; then",
+		`jq -c --arg d ${shellQuote(domain)} --arg w ${shellQuote(wildcard)} '${filter}' ${file}`,
+		"else",
+		`cat ${file}`,
+		"fi",
+	].join("\n");
+};
+
+const PEM_CERTIFICATE =
+	/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+
+// Traefik stores the key as PKCS#1 or SEC1, which some importers refuse;
+// PKCS#8 is the form every certificate store takes.
+const toPkcs8 = (encoded: string) => {
+	try {
+		const pem = Buffer.from(encoded, "base64").toString("utf8");
+		return createPrivateKey(pem)
+			.export({ type: "pkcs8", format: "pem" })
+			.toString();
+	} catch {
+		return null;
+	}
+};
+
+export const extractCertificateBundle = (
+	raw: string,
+	requested: string,
+): CertificateBundle | null => {
+	let document: unknown;
+	try {
+		document = JSON.parse(raw);
+	} catch {
+		throw new AcmeFileFormatError();
+	}
+	if (!isRecord(document)) {
+		return null;
+	}
+	const domain = normalizeDomainName(requested);
+	const candidates = Object.entries(document).flatMap(([resolver, section]) => {
+		const entries = isRecord(section) ? section.Certificates : undefined;
+		if (!Array.isArray(entries)) {
+			return [];
+		}
+		return entries.flatMap((entry) => {
+			const parsed = toAcmeCertificate(entry, resolver);
+			if (!parsed || !certificateCovers(parsed.names, domain)) {
+				return [];
+			}
+			const record = entry as Record<string, unknown>;
+			return typeof record.key === "string"
+				? [
+						{
+							...parsed,
+							encoded: record.certificate as string,
+							key: record.key,
+						},
+					]
+				: [];
+		});
+	});
+	candidates.sort((a, b) => b.validTo.getTime() - a.validTo.getTime());
+	for (const candidate of candidates) {
+		const pems =
+			Buffer.from(candidate.encoded, "base64")
+				.toString("utf8")
+				.match(PEM_CERTIFICATE) ?? [];
+		const privateKey = toPkcs8(candidate.key);
+		if (pems.length === 0 || !privateKey) {
+			continue;
+		}
+		const [leaf, ...intermediates] = pems.map((pem) => `${pem}\n`);
+		return {
+			domain,
+			resolver: candidate.resolver,
+			names: candidate.names,
+			validTo: candidate.validTo,
+			issuer: candidate.issuer,
+			certificate: leaf as string,
+			chain: intermediates.join(""),
+			fullchain: pems.map((pem) => `${pem}\n`).join(""),
+			privateKey,
+		};
+	}
+	return null;
+};

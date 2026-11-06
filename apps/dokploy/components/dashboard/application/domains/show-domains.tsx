@@ -37,6 +37,7 @@ import {
 import Link from "next/link";
 import { useState } from "react";
 import { toast } from "sonner";
+import { ExportCertificate } from "@/components/dashboard/domains/export-certificate";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -117,6 +118,10 @@ export const ShowDomains = ({ id, type }: Props) => {
 	const { data: permissions } = api.user.getPermissions.useQuery();
 	const canCreateDomain = permissions?.domain.create ?? false;
 	const canDeleteDomain = permissions?.domain.delete ?? false;
+	const { data: currentUser } = api.user.get.useQuery();
+	const canExportCertificate =
+		(permissions?.traefikFiles.read ?? false) &&
+		(currentUser?.role === "owner" || currentUser?.role === "admin");
 	const { data: application } =
 		type === "application"
 			? api.application.one.useQuery(
@@ -522,6 +527,14 @@ export const ShowDomains = ({ id, type }: Props) => {
 																applicationId={id}
 															/>
 														)}
+														{canExportCertificate &&
+															item.https &&
+															item.certificateType === "letsencrypt" && (
+																<ExportCertificate
+																	domain={item.host}
+																	serverId={application?.serverId ?? null}
+																/>
+															)}
 														{canDeleteDomain && (
 															<DialogAction
 																title="Delete Domain"

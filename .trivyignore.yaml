@@ -20,3 +20,8 @@ vulnerabilities:
       - usr/libexec/docker/cli-plugins/docker-buildx
     statement: buildx 0.38.1, the latest release, uses moby/go-archive 0.2.0.
     expired_at: 2026-11-27
+  - id: CVE-2026-105769
+    paths:
+      - usr/local/bin/pack
+    statement: pack 0.40.10, the latest release, uses chainguard-dev/kaniko 1.25.16; the fix is in 1.25.20.
+    expired_at: 2026-11-27
