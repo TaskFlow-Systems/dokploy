@@ -15,8 +15,13 @@ const mocks = vi.hoisted(() => {
 		mechanizeDockerContainer: vi.fn(),
 		waitForApplicationRollout: vi.fn(),
 		waitForStackRollout: vi.fn(),
+		waitForComposeContainers: vi.fn(),
 	};
 });
+
+vi.mock("@dokploy/server/utils/docker/compose-containers", () => ({
+	waitForComposeContainers: mocks.waitForComposeContainers,
+}));
 
 vi.mock("@dokploy/server/utils/docker/stack-rollout", () => ({
 	waitForStackRollout: mocks.waitForStackRollout,
@@ -333,7 +338,7 @@ describe("the rollout of a stack", () => {
 		["deployment", deployCompose],
 		["rebuild", rebuildCompose],
 	])(
-		"does not wait after a %s of the docker-compose type",
+		"does not wait for Swarm after a %s of the docker-compose type",
 		async (_, deploy) => {
 			vi.mocked(db.query.compose.findFirst).mockResolvedValue({
 				...compose,
@@ -349,6 +354,120 @@ describe("the rollout of a stack", () => {
 			);
 		},
 	);
+});
+
+describe("the containers of a docker-compose project", () => {
+	const EXITED = "Container stack-web-1 exited with code 1";
+	const logged = (text: string) =>
+		mocks.execAsyncRemote.mock.calls.find(([, command]) =>
+			String(command).includes(
+				Buffer.from(text).toString("base64").slice(0, 24),
+			),
+		);
+
+	beforeEach(() => {
+		mocks.execAsyncRemote.mockReset();
+		mocks.execAsyncRemote.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.waitForComposeContainers.mockReset();
+		mocks.waitForComposeContainers.mockResolvedValue(3);
+		vi.mocked(db.query.compose.findFirst).mockResolvedValue({
+			...compose,
+			composeType: "docker-compose",
+		} as never);
+	});
+
+	it.each([
+		["deployment", deployCompose],
+		["rebuild", rebuildCompose],
+	])(
+		"are checked on the project's server after a %s, from the start of `up`",
+		async (_, deploy) => {
+			const before = Date.now();
+
+			await deploy(composeRequest);
+
+			expect(mocks.waitForComposeContainers).toHaveBeenCalledTimes(1);
+			const [project, server, options] =
+				mocks.waitForComposeContainers.mock.calls[0] ?? [];
+			expect([project, server]).toEqual(["stack", "deploy-server"]);
+			expect(options.startedSince).toBeGreaterThanOrEqual(before);
+			expect(options.startedSince).toBeLessThanOrEqual(Date.now());
+			// The `up` command is the last one the build runner sends.
+			let lastBuildCommand = -1;
+			mocks.execAsyncRemote.mock.calls.forEach(([, command], index) => {
+				if (String(command).includes("dokploy-build:")) {
+					lastBuildCommand = index;
+				}
+			});
+			expect(lastBuildCommand).toBeGreaterThanOrEqual(0);
+			expect(
+				mocks.waitForComposeContainers.mock.invocationCallOrder[0],
+			).toBeGreaterThan(
+				mocks.execAsyncRemote.mock.invocationCallOrder[lastBuildCommand] ?? 0,
+			);
+			expect(mocks.waitForStackRollout).not.toHaveBeenCalled();
+			expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith(
+				"dep-1",
+				"done",
+			);
+			expect(logged("The containers run ✅ (3 containers)")).toBeDefined();
+		},
+	);
+
+	it.each([
+		["deployment", deployCompose],
+		["rebuild", rebuildCompose],
+	])(
+		"mark a %s as failed when a container did not stay up",
+		async (_, deploy) => {
+			mocks.waitForComposeContainers.mockRejectedValue(new Error(EXITED));
+
+			await expect(deploy(composeRequest)).rejects.toThrow(EXITED);
+
+			expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith(
+				"dep-1",
+				"error",
+			);
+			expect(mocks.updateDeploymentStatus).not.toHaveBeenCalledWith(
+				"dep-1",
+				"done",
+			);
+			expect(savedStatuses()).toContainEqual({ composeStatus: "error" });
+			expect(logged(EXITED)).toBeDefined();
+			expect(mocks.sendBuildSuccessNotifications).not.toHaveBeenCalled();
+		},
+	);
+
+	it("notify with the reason after a failed deployment", async () => {
+		mocks.waitForComposeContainers.mockRejectedValue(new Error(EXITED));
+
+		await expect(deployCompose(composeRequest)).rejects.toThrow(EXITED);
+
+		expect(mocks.sendBuildErrorNotifications).toHaveBeenCalledWith(
+			expect.objectContaining({ errorMessage: EXITED }),
+		);
+	});
+
+	it("say so when the project has no container", async () => {
+		mocks.waitForComposeContainers.mockResolvedValue(0);
+
+		await deployCompose(composeRequest);
+
+		expect(logged("This project has no container to check")).toBeDefined();
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+	});
+
+	it("are not checked for a stack", async () => {
+		vi.mocked(db.query.compose.findFirst).mockResolvedValue({
+			...compose,
+			composeType: "stack",
+		} as never);
+		mocks.waitForStackRollout.mockResolvedValue(1);
+
+		await deployCompose(composeRequest);
+
+		expect(mocks.waitForComposeContainers).not.toHaveBeenCalled();
+	});
 });
 
 describe("a rollout that Swarm does not finish", () => {
