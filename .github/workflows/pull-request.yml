@@ -41,12 +41,16 @@ jobs:
         if: ${{ !cancelled() }}
 
   pr-check:
+    name: pr-check (${{ matrix.part }})
     runs-on: ${{ (github.event.pull_request.user.login == github.repository_owner && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "dokploy-ci"]') || 'ubuntu-24.04' }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        job: [build, test]
+        # The real-Docker tests wait on Swarm's own timers for minutes. In one job they
+        # held most of vitest's workers from the start, and most unit tests ran only in
+        # the last minutes, so each group of tests gets a runner of its own.
+        part: [build, unit, docker-1, docker-2]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -59,25 +63,25 @@ jobs:
           node-version: 26.13.0
       
       - name: Install Nixpacks
-        if: matrix.job == 'test' && runner.environment == 'github-hosted'
+        if: matrix.part != 'build' && runner.environment == 'github-hosted'
         run:  |
           export NIXPACKS_VERSION=1.41.0
           curl -sSL https://nixpacks.com/install.sh | bash
           echo "Nixpacks installed $NIXPACKS_VERSION"
 
       - name: Install Railpack
-        if: matrix.job == 'test' && runner.environment == 'github-hosted'
+        if: matrix.part != 'build' && runner.environment == 'github-hosted'
         run:  |
           export RAILPACK_VERSION=0.42.0
           curl -sSL https://railpack.com/install.sh | bash
           echo "Railpack installed $RAILPACK_VERSION"
       
       - name: Add build tools to PATH
-        if: matrix.job == 'test'
-        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
+        if: matrix.part != 'build'
+        run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       
       - name: Initialize Docker Swarm
-        if: matrix.job == 'test'
+        if: matrix.part != 'build'
         run: |
           # The Mac mini keeps its swarm between runs.
           if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
@@ -88,16 +92,42 @@ jobs:
       
       - run: bun install --frozen-lockfile
       - run: bun run server:build
-      - run: bun run ${{ matrix.job }}
+      - run: bun run build
+        if: matrix.part == 'build'
         env:
           # The fork's db module throws without a password in production, and the Next build imports it.
-          POSTGRES_PASSWORD: ${{ matrix.job == 'build' && 'build-time-postgres-password' || '' }}
+          POSTGRES_PASSWORD: build-time-postgres-password
+      - name: Run the ${{ matrix.part }} tests
+        if: matrix.part != 'build'
+        working-directory: apps/dokploy
+        env:
+          PART: ${{ matrix.part }}
+          POSTGRES_PASSWORD: ""
+        run: |
+          set -euo pipefail
+          # docker-2 takes every real-Docker file not listed here, so a new one runs without an edit.
+          docker_1=(
+            __test__/docker/swarm-convergence.real.test.ts
+            __test__/docker/swarm-convergence-failures.real.test.ts
+            __test__/deploy/application.real.test.ts
+            __test__/database/libsql-replica.real.test.ts
+            __test__/docker/compose-containers.real.test.ts
+          )
+          for file in "${docker_1[@]}"; do
+            [ -f "$file" ] || { echo "::error::$file is listed for docker-1 but does not exist"; exit 1; }
+          done
+          case "$PART" in
+            unit) files=(--exclude '**/*.real.test.ts') ;;
+            docker-1) files=("${docker_1[@]}") ;;
+            docker-2) mapfile -t files < <(git ls-files '*.real.test.ts' | grep -vxF -f <(printf '%s\n' "${docker_1[@]}")) ;;
+          esac
+          ./node_modules/.bin/vitest run --config __test__/vitest.config.ts "${files[@]}"
 
       # Tests remove their swarm services and compose projects, but a cancelled or
       # timed-out run skips that. Docker is shared by all Mac mini runners, so only this checkout's
       # apps go (see CHECKOUT_ID in application.real.test.ts).
       - name: Remove leftover real-test services
-        if: always() && matrix.job == 'test'
+        if: always() && matrix.part != 'build'
         working-directory: apps/dokploy
         run: |
           id="$(printf %s "$PWD" | shasum -a 256 | cut -c1-8)"
