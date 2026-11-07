@@ -274,13 +274,21 @@ export const getAgentHitsUpdateData = async (
 	const currentDigest = await getServiceImageDigest();
 	const latestImageData = await getAgentHitsLatestImageData();
 	const currentVersionData = getDokployVersionData(currentVersion);
+	const digestKnown = Boolean(currentDigest);
+	const digestMatchesLatest =
+		currentDigest === latestImageData.latestDigest ||
+		currentDigest === latestImageData.latestPlatformDigest;
+	// The version env of the service is only a hint: `docker service update
+	// --image` keeps the env a previous update stored, and it overrides the
+	// env baked into the new image. A service pinned to a digest runs exactly
+	// that image, so the digest decides and the env cannot make the same image
+	// look outdated. Only a tag-only service has no digest to compare and
+	// falls back to the env.
 	const metadataUpdateAvailable =
-		currentVersionData.forkVersion !== latestImageData.forkVersion ||
-		currentVersionData.officialVersion !== latestImageData.officialVersion;
-	const digestUpdateAvailable =
-		Boolean(currentDigest) &&
-		currentDigest !== latestImageData.latestDigest &&
-		currentDigest !== latestImageData.latestPlatformDigest;
+		!digestKnown &&
+		(currentVersionData.forkVersion !== latestImageData.forkVersion ||
+			currentVersionData.officialVersion !== latestImageData.officialVersion);
+	const digestUpdateAvailable = digestKnown && !digestMatchesLatest;
 	// A panel on a build made after the newest release is not offered that older
 	// release: its database may already carry the build's migrations.
 	const latestIsOlder = isOlderAgentHitsVersion(
