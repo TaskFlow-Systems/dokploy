@@ -7,7 +7,9 @@ import {
 	deployments as deploymentsSchema,
 	rollbacks,
 } from "../db/schema";
+import { waitForApplicationRollout } from "../utils/builders";
 import { getRegistryTag } from "../utils/cluster/upload";
+import { createOrUpdateSwarmService } from "../utils/docker/swarm-service";
 import {
 	calculateResources,
 	generateBindMounts,
@@ -16,10 +18,13 @@ import {
 	prepareEnvironmentVariables,
 } from "../utils/docker/utils";
 import { execAsync, execAsyncRemote } from "../utils/process/execAsync";
-import { createOrUpdateSwarmService } from "../utils/docker/swarm-service";
 import { getRemoteDocker } from "../utils/servers/remote-docker";
 import { withResolvedVaultRefs } from "../utils/vault";
-import { type Application, findApplicationById } from "./application";
+import {
+	type Application,
+	findApplicationById,
+	updateApplicationStatus,
+} from "./application";
 import { findDeploymentById } from "./deployment";
 import type { Environment } from "./environment";
 import type { Mount } from "./mount";
@@ -175,12 +180,23 @@ export const rollback = async (rollbackId: string) => {
 	if (!result.fullContext) {
 		throw new Error("Rollback context not found");
 	}
-	await rollbackApplication(
-		application.appName,
-		result.image || "",
-		application.serverId,
-		result.fullContext,
-	);
+	await updateApplicationStatus(application.applicationId, "running");
+	try {
+		await rollbackApplication(
+			application.appName,
+			result.image || "",
+			application.serverId,
+			result.fullContext,
+		);
+		// A rollback replaces the task as a deployment does. Without this wait the
+		// application kept the `error` of the deployment it undid, with the old
+		// version running, and a rollback that could not start went unseen.
+		await waitForApplicationRollout(application.appName, application.serverId);
+	} catch (error) {
+		await updateApplicationStatus(application.applicationId, "error");
+		throw error;
+	}
+	await updateApplicationStatus(application.applicationId, "done");
 };
 
 const rollbackApplication = async (
