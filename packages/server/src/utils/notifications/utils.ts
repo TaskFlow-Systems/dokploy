@@ -14,6 +14,7 @@ import type {
 } from "@dokploy/server/db/schema";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
+import { Agent } from "undici";
 import { fetchWithPublicEgress } from "../url/network";
 import {
 	assertNotificationBaseUrlAllowed,
@@ -146,6 +147,45 @@ export const formatTelegramErrorMessage = (errorMessage: string) => {
 
 const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 
+// From some networks a new connection to api.telegram.org fails at random, 6 to 9
+// of 20 in one measurement, while one that gets through answers in about 40 ms. A
+// short connect timeout and several attempts deliver what one try with the default
+// 10 s timeout lost.
+export const TELEGRAM_SEND_ATTEMPTS = 6;
+const TELEGRAM_CONNECT_TIMEOUT_MS = 3_000;
+const TELEGRAM_RESPONSE_TIMEOUT_MS = 15_000;
+const TELEGRAM_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000];
+const TELEGRAM_MAX_RETRY_AFTER_MS = 30_000;
+// Only failures before the request left: a retry then cannot post the message twice.
+const TELEGRAM_CONNECT_ERROR_CODES = new Set([
+	"UND_ERR_CONNECT_TIMEOUT",
+	"ECONNREFUSED",
+	"EHOSTUNREACH",
+	"ENETUNREACH",
+	"EAI_AGAIN",
+	"ENOTFOUND",
+]);
+const TELEGRAM_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+
+type FetchInitWithDispatcher = RequestInit & { dispatcher?: Agent };
+
+const connectErrorCode = (error: unknown) => {
+	const cause = (error as { cause?: { code?: unknown } })?.cause;
+	const code = typeof cause?.code === "string" ? cause.code : undefined;
+	return code && TELEGRAM_CONNECT_ERROR_CODES.has(code) ? code : undefined;
+};
+
+const telegramRetryAfterMs = (body: string) => {
+	try {
+		const seconds = JSON.parse(body)?.parameters?.retry_after;
+		return typeof seconds === "number" && seconds >= 0
+			? seconds * 1000
+			: undefined;
+	} catch {
+		return undefined;
+	}
+};
+
 export const sendTelegramNotification = async (
 	connection: typeof telegram.$inferInsert,
 	messageText: string,
@@ -154,34 +194,64 @@ export const sendTelegramNotification = async (
 		url: string;
 	}[][],
 ) => {
+	const url = `https://api.telegram.org/bot${connection.botToken}/sendMessage`;
+	const body = JSON.stringify({
+		chat_id: connection.chatId,
+		message_thread_id: connection.messageThreadId,
+		text: messageText,
+		parse_mode: "HTML",
+		disable_web_page_preview: true,
+		reply_markup: {
+			inline_keyboard: inlineButton,
+		},
+	});
+	const dispatcher = new Agent({
+		connect: { timeout: TELEGRAM_CONNECT_TIMEOUT_MS },
+		headersTimeout: TELEGRAM_RESPONSE_TIMEOUT_MS,
+		bodyTimeout: TELEGRAM_RESPONSE_TIMEOUT_MS,
+	});
+	let lastError = "Unknown error";
 	try {
-		const url = `https://api.telegram.org/bot${connection.botToken}/sendMessage`;
-		const response = await fetch(url, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				chat_id: connection.chatId,
-				message_thread_id: connection.messageThreadId,
-				text: messageText,
-				parse_mode: "HTML",
-				disable_web_page_preview: true,
-				reply_markup: {
-					inline_keyboard: inlineButton,
-				},
-			}),
-		});
-		if (!response.ok) {
-			const body = await response.text();
-			throw new Error(
-				`Failed to send telegram notification: ${response.status} ${body}`,
-			);
+		for (let attempt = 1; attempt <= TELEGRAM_SEND_ATTEMPTS; attempt++) {
+			let waitMs = TELEGRAM_RETRY_DELAYS_MS[attempt - 1] ?? 0;
+			try {
+				const response = await fetch(url, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body,
+					dispatcher,
+				} as FetchInitWithDispatcher);
+				if (response.ok) {
+					return;
+				}
+				const responseBody = await response.text();
+				lastError = `${response.status} ${responseBody}`;
+				if (!TELEGRAM_RETRY_STATUSES.has(response.status)) {
+					break;
+				}
+				const retryAfterMs = telegramRetryAfterMs(responseBody);
+				if (retryAfterMs !== undefined) {
+					if (retryAfterMs > TELEGRAM_MAX_RETRY_AFTER_MS) {
+						break;
+					}
+					waitMs = Math.max(waitMs, retryAfterMs);
+				}
+			} catch (error) {
+				const code = connectErrorCode(error);
+				lastError = `${error instanceof Error ? error.message : "Unknown error"}${code ? ` (${code})` : ""}`;
+				if (!code) {
+					break;
+				}
+			}
+			if (attempt < TELEGRAM_SEND_ATTEMPTS) {
+				await new Promise((resolve) => setTimeout(resolve, waitMs));
+			}
 		}
-	} catch (err) {
-		console.log(err);
-		throw new Error(
-			`Failed to send telegram notification ${err instanceof Error ? err.message : "Unknown error"}`,
-		);
+	} finally {
+		await dispatcher.close().catch(() => undefined);
 	}
+	console.log(`Failed to send telegram notification: ${lastError}`);
+	throw new Error(`Failed to send telegram notification: ${lastError}`);
 };
 
 export const sendSlackNotification = async (
