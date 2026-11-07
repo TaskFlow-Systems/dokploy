@@ -1003,10 +1003,16 @@ export default function Page({ children }: Props) {
 		api.user.getPermissions.useQuery();
 	const { data: dokployVersionData, isPending: isVersionPending } =
 		api.settings.getDokployVersionData.useQuery();
-	const { data: whitelabeling } = api.whitelabeling.get.useQuery(undefined, {
-		staleTime: 5 * 60 * 1000,
-		refetchOnWindowFocus: false,
-	});
+	const { data: whitelabeling, isPending: isWhitelabelingPending } =
+		api.whitelabeling.get.useQuery(undefined, {
+			staleTime: 5 * 60 * 1000,
+			refetchOnWindowFocus: false,
+		});
+	// White-label needs a valid license, so only a licensed panel can have a footer text.
+	const { data: haveValidLicense } =
+		api.licenseKey.haveValidLicenseKey.useQuery();
+	const isFooterTextPending =
+		isWhitelabelingPending && haveValidLicense === true;
 
 	const includesProjects = pathname?.includes("/dashboard/project");
 	const { data: isCloud, isPending: isCloudPending } =
@@ -1293,9 +1299,10 @@ export default function Page({ children }: Props) {
 						<SidebarMenuItem>
 							<UserNav />
 						</SidebarMenuItem>
-						{whitelabeling?.footerText && (
-							<div className="px-3 text-xs text-muted-foreground text-center group-data-[collapsible=icon]:hidden">
-								{whitelabeling.footerText}
+						{/* One line is held for the footer text while it loads, so the user menu above does not jump. */}
+						{(isFooterTextPending || whitelabeling?.footerText) && (
+							<div className="min-h-4 px-3 text-xs text-muted-foreground text-center group-data-[collapsible=icon]:hidden">
+								{whitelabeling?.footerText}
 							</div>
 						)}
 						{/* The labels hold the block's height until the versions arrive, so the user menu above it does not jump. */}

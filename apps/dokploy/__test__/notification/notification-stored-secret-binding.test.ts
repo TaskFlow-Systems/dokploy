@@ -216,8 +216,8 @@ describe("notification update stored secret binding", () => {
 			endpoint: "https://hooks-new.example.com/notify",
 			headers: { Authorization: "Bearer new-token" },
 		});
+		// The first call changes nothing in the custom row, so it issues no update.
 		expect(providerSets()).toEqual([
-			{ endpoint: undefined, headers: undefined },
 			{
 				endpoint: "https://hooks-new.example.com/notify",
 				headers: { Authorization: "Bearer new-token" },

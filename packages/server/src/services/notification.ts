@@ -141,13 +141,42 @@ export const createSlackNotification = async (
 	});
 };
 
+type NotificationTx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+// An update that changes nothing in a table must not reach drizzle: an empty
+// `set` fails with "No values to set". Undefined keys are dropped by drizzle.
+const hasValues = (values: Record<string, unknown>) =>
+	Object.values(values).some((value) => value !== undefined);
+
+const updateNotificationRow = async (
+	tx: NotificationTx,
+	notificationId: string,
+	values: Record<string, unknown>,
+) => {
+	if (hasValues(values)) {
+		return tx
+			.update(notifications)
+			.set(values)
+			.where(eq(notifications.notificationId, notificationId))
+			.returning()
+			.then((value) => value[0]);
+	}
+	return tx
+		.select()
+		.from(notifications)
+		.where(eq(notifications.notificationId, notificationId))
+		.limit(1)
+		.then((value) => value[0]);
+};
+
 export const updateSlackNotification = async (
 	input: z.infer<typeof apiUpdateSlack>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -159,10 +188,8 @@ export const updateSlackNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -171,18 +198,19 @@ export const updateSlackNotification = async (
 			});
 		}
 
-		await tx
-			.update(slack)
-			.set({
-				channel: input.channel,
-				webhookUrl: normalizeWebhookUpdateValue(
-					input.webhookUrl,
-					"Slack webhook URL",
-				),
-			})
-			.where(eq(slack.slackId, input.slackId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			channel: input.channel,
+			webhookUrl: normalizeWebhookUpdateValue(
+				input.webhookUrl,
+				"Slack webhook URL",
+			),
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(slack)
+				.set(providerValues)
+				.where(eq(slack.slackId, input.slackId));
+		}
 
 		return newDestination;
 	});
@@ -245,9 +273,10 @@ export const updateTelegramNotification = async (
 	input: z.infer<typeof apiUpdateTelegram>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -259,10 +288,8 @@ export const updateTelegramNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -271,16 +298,17 @@ export const updateTelegramNotification = async (
 			});
 		}
 
-		await tx
-			.update(telegram)
-			.set({
-				botToken: notificationSecretUpdateValue(input.botToken),
-				chatId: input.chatId,
-				messageThreadId: input.messageThreadId,
-			})
-			.where(eq(telegram.telegramId, input.telegramId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			botToken: notificationSecretUpdateValue(input.botToken),
+			chatId: input.chatId,
+			messageThreadId: input.messageThreadId,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(telegram)
+				.set(providerValues)
+				.where(eq(telegram.telegramId, input.telegramId));
+		}
 
 		return newDestination;
 	});
@@ -344,9 +372,10 @@ export const updateDiscordNotification = async (
 	input: z.infer<typeof apiUpdateDiscord>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -358,10 +387,8 @@ export const updateDiscordNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -370,18 +397,19 @@ export const updateDiscordNotification = async (
 			});
 		}
 
-		await tx
-			.update(discord)
-			.set({
-				webhookUrl: normalizeWebhookUpdateValue(
-					input.webhookUrl,
-					"Discord webhook URL",
-				),
-				decoration: input.decoration,
-			})
-			.where(eq(discord.discordId, input.discordId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			webhookUrl: normalizeWebhookUpdateValue(
+				input.webhookUrl,
+				"Discord webhook URL",
+			),
+			decoration: input.decoration,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(discord)
+				.set(providerValues)
+				.where(eq(discord.discordId, input.discordId));
+		}
 
 		return newDestination;
 	});
@@ -467,9 +495,10 @@ export const updateEmailNotification = async (
 	}
 
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -481,10 +510,8 @@ export const updateEmailNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -493,19 +520,20 @@ export const updateEmailNotification = async (
 			});
 		}
 
-		await tx
-			.update(email)
-			.set({
-				smtpServer,
-				smtpPort: input.smtpPort,
-				username: input.username,
-				password,
-				fromAddress: input.fromAddress,
-				toAddresses: input.toAddresses,
-			})
-			.where(eq(email.emailId, input.emailId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			smtpServer,
+			smtpPort: input.smtpPort,
+			username: input.username,
+			password,
+			fromAddress: input.fromAddress,
+			toAddresses: input.toAddresses,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(email)
+				.set(providerValues)
+				.where(eq(email.emailId, input.emailId));
+		}
 
 		return newDestination;
 	});
@@ -568,9 +596,10 @@ export const updateResendNotification = async (
 	input: z.infer<typeof apiUpdateResend>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -582,10 +611,8 @@ export const updateResendNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -594,16 +621,17 @@ export const updateResendNotification = async (
 			});
 		}
 
-		await tx
-			.update(resend)
-			.set({
-				apiKey: notificationSecretUpdateValue(input.apiKey),
-				fromAddress: input.fromAddress,
-				toAddresses: input.toAddresses,
-			})
-			.where(eq(resend.resendId, input.resendId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			apiKey: notificationSecretUpdateValue(input.apiKey),
+			fromAddress: input.fromAddress,
+			toAddresses: input.toAddresses,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(resend)
+				.set(providerValues)
+				.where(eq(resend.resendId, input.resendId));
+		}
 
 		return newDestination;
 	});
@@ -688,9 +716,10 @@ export const updateGotifyNotification = async (
 	}
 
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -702,10 +731,8 @@ export const updateGotifyNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				serverThreshold: input.serverThreshold,
 				organizationId: input.organizationId,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -714,15 +741,18 @@ export const updateGotifyNotification = async (
 			});
 		}
 
-		await tx
-			.update(gotify)
-			.set({
-				serverUrl,
-				appToken,
-				priority: input.priority,
-				decoration: input.decoration,
-			})
-			.where(eq(gotify.gotifyId, input.gotifyId));
+		const providerValues = {
+			serverUrl,
+			appToken,
+			priority: input.priority,
+			decoration: input.decoration,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(gotify)
+				.set(providerValues)
+				.where(eq(gotify.gotifyId, input.gotifyId));
+		}
 
 		return newDestination;
 	});
@@ -807,9 +837,10 @@ export const updateNtfyNotification = async (
 	}
 
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -821,10 +852,8 @@ export const updateNtfyNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				serverThreshold: input.serverThreshold,
 				organizationId: input.organizationId,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -833,15 +862,18 @@ export const updateNtfyNotification = async (
 			});
 		}
 
-		await tx
-			.update(ntfy)
-			.set({
-				serverUrl,
-				topic: input.topic,
-				accessToken,
-				priority: input.priority,
-			})
-			.where(eq(ntfy.ntfyId, input.ntfyId));
+		const providerValues = {
+			serverUrl,
+			topic: input.topic,
+			accessToken,
+			priority: input.priority,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(ntfy)
+				.set(providerValues)
+				.where(eq(ntfy.ntfyId, input.ntfyId));
+		}
 
 		return newDestination;
 	});
@@ -926,9 +958,10 @@ export const updateCustomNotification = async (
 	}
 
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -940,10 +973,8 @@ export const updateCustomNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -952,13 +983,16 @@ export const updateCustomNotification = async (
 			});
 		}
 
-		await tx
-			.update(custom)
-			.set({
-				endpoint,
-				headers,
-			})
-			.where(eq(custom.customId, input.customId));
+		const providerValues = {
+			endpoint,
+			headers,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(custom)
+				.set(providerValues)
+				.where(eq(custom.customId, input.customId));
+		}
 
 		return newDestination;
 	});
@@ -1223,9 +1257,10 @@ export const updateLarkNotification = async (
 	input: z.infer<typeof apiUpdateLark>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -1237,10 +1272,8 @@ export const updateLarkNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -1249,17 +1282,18 @@ export const updateLarkNotification = async (
 			});
 		}
 
-		await tx
-			.update(lark)
-			.set({
-				webhookUrl: normalizeWebhookUpdateValue(
-					input.webhookUrl,
-					"Lark webhook URL",
-				),
-			})
-			.where(eq(lark.larkId, input.larkId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			webhookUrl: normalizeWebhookUpdateValue(
+				input.webhookUrl,
+				"Lark webhook URL",
+			),
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(lark)
+				.set(providerValues)
+				.where(eq(lark.larkId, input.larkId));
+		}
 
 		return newDestination;
 	});
@@ -1322,9 +1356,10 @@ export const updateTeamsNotification = async (
 	input: z.infer<typeof apiUpdateTeams>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -1336,10 +1371,8 @@ export const updateTeamsNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -1348,17 +1381,18 @@ export const updateTeamsNotification = async (
 			});
 		}
 
-		await tx
-			.update(teams)
-			.set({
-				webhookUrl: normalizeWebhookUpdateValue(
-					input.webhookUrl,
-					"Teams webhook URL",
-				),
-			})
-			.where(eq(teams.teamsId, input.teamsId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			webhookUrl: normalizeWebhookUpdateValue(
+				input.webhookUrl,
+				"Teams webhook URL",
+			),
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(teams)
+				.set(providerValues)
+				.where(eq(teams.teamsId, input.teamsId));
+		}
 
 		return newDestination;
 	});
@@ -1438,9 +1472,10 @@ export const updateMattermostNotification = async (
 	input: z.infer<typeof apiUpdateMattermost>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -1452,10 +1487,8 @@ export const updateMattermostNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -1464,19 +1497,20 @@ export const updateMattermostNotification = async (
 			});
 		}
 
-		await tx
-			.update(mattermost)
-			.set({
-				webhookUrl: normalizeWebhookUpdateValue(
-					input.webhookUrl,
-					"Mattermost webhook URL",
-				),
-				channel: input.channel,
-				username: input.username,
-			})
-			.where(eq(mattermost.mattermostId, input.mattermostId))
-			.returning()
-			.then((value) => value[0]);
+		const providerValues = {
+			webhookUrl: normalizeWebhookUpdateValue(
+				input.webhookUrl,
+				"Mattermost webhook URL",
+			),
+			channel: input.channel,
+			username: input.username,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(mattermost)
+				.set(providerValues)
+				.where(eq(mattermost.mattermostId, input.mattermostId));
+		}
 
 		return newDestination;
 	});
@@ -1541,9 +1575,10 @@ export const updatePushoverNotification = async (
 	input: z.infer<typeof apiUpdatePushover>,
 ) => {
 	await db.transaction(async (tx) => {
-		const newDestination = await tx
-			.update(notifications)
-			.set({
+		const newDestination = await updateNotificationRow(
+			tx,
+			input.notificationId,
+			{
 				name: input.name,
 				appDeploy: input.appDeploy,
 				appBuildError: input.appBuildError,
@@ -1555,10 +1590,8 @@ export const updatePushoverNotification = async (
 				dockerCleanup: input.dockerCleanup,
 				organizationId: input.organizationId,
 				serverThreshold: input.serverThreshold,
-			})
-			.where(eq(notifications.notificationId, input.notificationId))
-			.returning()
-			.then((value) => value[0]);
+			},
+		);
 
 		if (!newDestination) {
 			throw new TRPCError({
@@ -1567,16 +1600,19 @@ export const updatePushoverNotification = async (
 			});
 		}
 
-		await tx
-			.update(pushover)
-			.set({
-				userKey: notificationSecretUpdateValue(input.userKey),
-				apiToken: notificationSecretUpdateValue(input.apiToken),
-				priority: input.priority,
-				retry: input.retry,
-				expire: input.expire,
-			})
-			.where(eq(pushover.pushoverId, input.pushoverId));
+		const providerValues = {
+			userKey: notificationSecretUpdateValue(input.userKey),
+			apiToken: notificationSecretUpdateValue(input.apiToken),
+			priority: input.priority,
+			retry: input.retry,
+			expire: input.expire,
+		};
+		if (hasValues(providerValues)) {
+			await tx
+				.update(pushover)
+				.set(providerValues)
+				.where(eq(pushover.pushoverId, input.pushoverId));
+		}
 
 		return newDestination;
 	});
