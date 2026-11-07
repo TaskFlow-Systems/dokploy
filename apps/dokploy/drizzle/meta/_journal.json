@@ -1506,6 +1506,13 @@
       "when": 1793867213079,
       "tag": "0214_panel_backup_errors_only",
       "breakpoints": true
+    },
+    {
+      "idx": 215,
+      "version": "7",
+      "when": 1794060582161,
+      "tag": "0215_libsql_grpc_ca",
+      "breakpoints": true
     }
   ]
 }
