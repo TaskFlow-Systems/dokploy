@@ -33,6 +33,7 @@ vi.mock("@/utils/api", () => {
 			useQuery: () => ({ data: databaseRow.current, refetch: vi.fn() }),
 		},
 		changePassword: { useMutation: mutation },
+		revealCredentials: { useMutation: mutation },
 		saveExternalPort: { useMutation: mutation },
 		saveExternalPorts: { useMutation: mutation },
 	};

@@ -169,6 +169,26 @@ export const mysqlRouter = createTRPCRouter({
 				env: mysql.env ?? "",
 			};
 		}),
+	revealCredentials: protectedProcedure
+		.input(apiFindOneMySql)
+		.mutation(async ({ input, ctx }) => {
+			const mysql = await assertServiceEnvironmentReadAccess(
+				ctx,
+				input.mysqlId,
+				() => findMySqlById(input.mysqlId),
+				"MySQL",
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "service",
+				resourceId: input.mysqlId,
+				resourceName: mysql.appName,
+			});
+			return {
+				databasePassword: mysql.databasePassword,
+				databaseRootPassword: mysql.databaseRootPassword,
+			};
+		}),
 
 	start: protectedProcedure
 		.input(apiFindOneMySql)

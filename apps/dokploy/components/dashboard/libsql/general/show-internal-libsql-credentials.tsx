@@ -10,6 +10,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "@/components/ui/select";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildLibsqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -18,6 +19,11 @@ interface Props {
 }
 export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 	const { data } = api.libsql.one.useQuery({ libsqlId });
+	const { credentials, reveal } = useDatabaseCredentials(
+		"libsql",
+		libsqlId,
+		data,
+	);
 	return (
 		<>
 			<div className="flex w-full flex-col gap-5 ">
@@ -51,7 +57,11 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 								<div className="flex flex-row gap-4">
 									<ToggleVisibilityInput
 										disabled
-										value={data?.databasePassword}
+										value={credentials?.databasePassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databasePassword ?? "";
+										}}
 									/>
 								</div>
 							</div>
@@ -106,10 +116,20 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 								<ToggleVisibilityInput
 									disabled
 									value={
-										data
-											? buildLibsqlUrl(data, { host: data.appName, port: 8080 })
+										credentials
+											? buildLibsqlUrl(credentials, {
+													host: credentials.appName,
+													port: 8080,
+												})
 											: ""
 									}
+									resolveValue={async () => {
+										const record = await reveal();
+										return buildLibsqlUrl(record, {
+											host: record.appName,
+											port: 8080,
+										});
+									}}
 								/>
 							</div>
 							{data?.sqldNode !== "replica" && (
@@ -118,13 +138,20 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 									<ToggleVisibilityInput
 										disabled
 										value={
-											data
-												? buildLibsqlUrl(data, {
-														host: data.appName,
+											credentials
+												? buildLibsqlUrl(credentials, {
+														host: credentials.appName,
 														port: 5001,
 													})
 												: ""
 										}
+										resolveValue={async () => {
+											const record = await reveal();
+											return buildLibsqlUrl(record, {
+												host: record.appName,
+												port: 5001,
+											});
+										}}
 									/>
 								</div>
 							)}

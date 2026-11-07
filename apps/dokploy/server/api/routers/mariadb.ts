@@ -165,6 +165,26 @@ export const mariadbRouter = createTRPCRouter({
 				env: mariadb.env ?? "",
 			};
 		}),
+	revealCredentials: protectedProcedure
+		.input(apiFindOneMariaDB)
+		.mutation(async ({ input, ctx }) => {
+			const mariadb = await assertServiceEnvironmentReadAccess(
+				ctx,
+				input.mariadbId,
+				() => findMariadbById(input.mariadbId),
+				"Mariadb",
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "service",
+				resourceId: input.mariadbId,
+				resourceName: mariadb.appName,
+			});
+			return {
+				databasePassword: mariadb.databasePassword,
+				databaseRootPassword: mariadb.databaseRootPassword,
+			};
+		}),
 
 	start: protectedProcedure
 		.input(apiFindOneMariaDB)

@@ -156,6 +156,25 @@ export const redisRouter = createTRPCRouter({
 				env: redis.env ?? "",
 			};
 		}),
+	revealCredentials: protectedProcedure
+		.input(apiFindOneRedis)
+		.mutation(async ({ input, ctx }) => {
+			const redis = await assertServiceEnvironmentReadAccess(
+				ctx,
+				input.redisId,
+				() => findRedisById(input.redisId),
+				"Redis",
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "service",
+				resourceId: input.redisId,
+				resourceName: redis.appName,
+			});
+			return {
+				databasePassword: redis.databasePassword,
+			};
+		}),
 
 	start: protectedProcedure
 		.input(apiFindOneRedis)

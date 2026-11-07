@@ -168,6 +168,25 @@ export const mongoRouter = createTRPCRouter({
 				env: mongo.env ?? "",
 			};
 		}),
+	revealCredentials: protectedProcedure
+		.input(apiFindOneMongo)
+		.mutation(async ({ input, ctx }) => {
+			const mongo = await assertServiceEnvironmentReadAccess(
+				ctx,
+				input.mongoId,
+				() => findMongoById(input.mongoId),
+				"mongo",
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "service",
+				resourceId: input.mongoId,
+				resourceName: mongo.appName,
+			});
+			return {
+				databasePassword: mongo.databasePassword,
+			};
+		}),
 
 	start: protectedProcedure
 		.input(apiFindOneMongo)

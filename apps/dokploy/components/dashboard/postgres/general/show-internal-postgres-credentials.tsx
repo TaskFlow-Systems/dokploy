@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildPostgresUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -12,6 +13,11 @@ interface Props {
 }
 export const ShowInternalPostgresCredentials = ({ postgresId }: Props) => {
 	const { data } = api.postgres.one.useQuery({ postgresId });
+	const { credentials, reveal, forget } = useDatabaseCredentials(
+		"postgres",
+		postgresId,
+		data,
+	);
 	const utils = api.useUtils();
 	const { mutateAsync: changePassword } =
 		api.postgres.changePassword.useMutation();
@@ -36,7 +42,11 @@ export const ShowInternalPostgresCredentials = ({ postgresId }: Props) => {
 								<Label>Password</Label>
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
-										value={data?.databasePassword}
+										value={credentials?.databasePassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databasePassword ?? "";
+										}}
 										disabled
 									/>
 									<UpdateDatabasePassword
@@ -46,6 +56,7 @@ export const ShowInternalPostgresCredentials = ({ postgresId }: Props) => {
 												password: newPassword,
 											});
 											toast.success("Password updated successfully");
+											forget();
 											utils.postgres.one.invalidate({ postgresId });
 										}}
 									/>
@@ -66,13 +77,20 @@ export const ShowInternalPostgresCredentials = ({ postgresId }: Props) => {
 								<ToggleVisibilityInput
 									disabled
 									value={
-										data
-											? buildPostgresUrl(data, {
-													host: data.appName,
+										credentials
+											? buildPostgresUrl(credentials, {
+													host: credentials.appName,
 													port: 5432,
 												})
 											: ""
 									}
+									resolveValue={async () => {
+										const record = await reveal();
+										return buildPostgresUrl(record, {
+											host: record.appName,
+											port: 5432,
+										});
+									}}
 								/>
 							</div>
 						</div>

@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildMysqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -12,6 +13,11 @@ interface Props {
 }
 export const ShowInternalMysqlCredentials = ({ mysqlId }: Props) => {
 	const { data } = api.mysql.one.useQuery({ mysqlId });
+	const { credentials, reveal, forget } = useDatabaseCredentials(
+		"mysql",
+		mysqlId,
+		data,
+	);
 	const utils = api.useUtils();
 	const { mutateAsync: changePassword } =
 		api.mysql.changePassword.useMutation();
@@ -37,7 +43,11 @@ export const ShowInternalMysqlCredentials = ({ mysqlId }: Props) => {
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
 										disabled
-										value={data?.databasePassword}
+										value={credentials?.databasePassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databasePassword ?? "";
+										}}
 									/>
 									<UpdateDatabasePassword
 										onUpdatePassword={async (newPassword) => {
@@ -47,6 +57,7 @@ export const ShowInternalMysqlCredentials = ({ mysqlId }: Props) => {
 												type: "user",
 											});
 											toast.success("Password updated successfully");
+											forget();
 											utils.mysql.one.invalidate({ mysqlId });
 										}}
 									/>
@@ -57,7 +68,11 @@ export const ShowInternalMysqlCredentials = ({ mysqlId }: Props) => {
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
 										disabled
-										value={data?.databaseRootPassword}
+										value={credentials?.databaseRootPassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databaseRootPassword ?? "";
+										}}
 									/>
 									<UpdateDatabasePassword
 										label="Root Password"
@@ -88,10 +103,20 @@ export const ShowInternalMysqlCredentials = ({ mysqlId }: Props) => {
 								<ToggleVisibilityInput
 									disabled
 									value={
-										data
-											? buildMysqlUrl(data, { host: data.appName, port: 3306 })
+										credentials
+											? buildMysqlUrl(credentials, {
+													host: credentials.appName,
+													port: 3306,
+												})
 											: ""
 									}
+									resolveValue={async () => {
+										const record = await reveal();
+										return buildMysqlUrl(record, {
+											host: record.appName,
+											port: 3306,
+										});
+									}}
 								/>
 							</div>
 						</div>

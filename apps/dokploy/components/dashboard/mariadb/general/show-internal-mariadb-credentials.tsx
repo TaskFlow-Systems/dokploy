@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildMariadbUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -12,6 +13,11 @@ interface Props {
 }
 export const ShowInternalMariadbCredentials = ({ mariadbId }: Props) => {
 	const { data } = api.mariadb.one.useQuery({ mariadbId });
+	const { credentials, reveal, forget } = useDatabaseCredentials(
+		"mariadb",
+		mariadbId,
+		data,
+	);
 	const utils = api.useUtils();
 	const { mutateAsync: changePassword } =
 		api.mariadb.changePassword.useMutation();
@@ -37,7 +43,11 @@ export const ShowInternalMariadbCredentials = ({ mariadbId }: Props) => {
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
 										disabled
-										value={data?.databasePassword}
+										value={credentials?.databasePassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databasePassword ?? "";
+										}}
 									/>
 									<UpdateDatabasePassword
 										onUpdatePassword={async (newPassword) => {
@@ -47,6 +57,7 @@ export const ShowInternalMariadbCredentials = ({ mariadbId }: Props) => {
 												type: "user",
 											});
 											toast.success("Password updated successfully");
+											forget();
 											utils.mariadb.one.invalidate({ mariadbId });
 										}}
 									/>
@@ -57,7 +68,11 @@ export const ShowInternalMariadbCredentials = ({ mariadbId }: Props) => {
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
 										disabled
-										value={data?.databaseRootPassword}
+										value={credentials?.databaseRootPassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databaseRootPassword ?? "";
+										}}
 									/>
 									<UpdateDatabasePassword
 										label="Root Password"
@@ -88,13 +103,20 @@ export const ShowInternalMariadbCredentials = ({ mariadbId }: Props) => {
 								<ToggleVisibilityInput
 									disabled
 									value={
-										data
-											? buildMariadbUrl(data, {
-													host: data.appName,
+										credentials
+											? buildMariadbUrl(credentials, {
+													host: credentials.appName,
 													port: 3306,
 												})
 											: ""
 									}
+									resolveValue={async () => {
+										const record = await reveal();
+										return buildMariadbUrl(record, {
+											host: record.appName,
+											port: 3306,
+										});
+									}}
 								/>
 							</div>
 						</div>

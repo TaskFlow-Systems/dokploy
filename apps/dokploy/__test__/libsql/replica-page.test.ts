@@ -18,6 +18,9 @@ vi.mock("@/utils/api", () => ({
 			update: {
 				useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
 			},
+			revealCredentials: {
+				useMutation: () => ({ mutateAsync: vi.fn(), isPending: false }),
+			},
 		},
 		user: {
 			getPermissions: {
