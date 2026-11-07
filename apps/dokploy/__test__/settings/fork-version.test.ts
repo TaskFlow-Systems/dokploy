@@ -211,13 +211,13 @@ describe("AgentHits fork version metadata", () => {
 		});
 	});
 
-	it("routes generic update checks to GHCR and detects stale fork metadata", async () => {
+	it("routes generic update checks to GHCR and offers a different digest", async () => {
 		process.env.RELEASE_TAG = "agenthits-dev";
 		const { execAsync } = await import(
 			"@dokploy/server/utils/process/execAsync"
 		);
 		vi.mocked(execAsync).mockResolvedValue({
-			stdout: "ghcr.io/agenthits/dokploy:agenthits-dev@sha256:latest\n",
+			stdout: "ghcr.io/agenthits/dokploy:agenthits-dev@sha256:old\n",
 			stderr: "",
 		});
 		vi.stubGlobal(
@@ -610,6 +610,127 @@ describe("AgentHits release channel", () => {
 		expect(await getAgentHitsUpdateData("v0.30.6")).toMatchObject({
 			latestVersion: "agenthits-v1.1.0",
 			updateAvailable: true,
+		});
+	});
+});
+
+const mockChannel = async (
+	forkVersion: string,
+	officialVersion: string,
+	serviceImage: string,
+) => {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: RequestInfo | URL) => {
+			const url = input.toString();
+			if (url.includes("/token")) {
+				return createJsonResponse({ token: "token" });
+			}
+			if (url.endsWith("/manifests/agenthits-stable")) {
+				return createJsonResponse(
+					{
+						manifests: [
+							{
+								digest: "sha256:image",
+								platform: { architecture: "amd64", os: "linux" },
+							},
+						],
+					},
+					{ "docker-content-digest": "sha256:latest" },
+				);
+			}
+			if (url.endsWith("/manifests/sha256:image")) {
+				return createJsonResponse({ config: { digest: "sha256:config" } });
+			}
+			if (url.endsWith("/blobs/sha256:config")) {
+				return createJsonResponse({
+					config: {
+						Env: [
+							`DOKPLOY_OFFICIAL_VERSION=${officialVersion}`,
+							`DOKPLOY_FORK_VERSION=${forkVersion}`,
+						],
+					},
+				});
+			}
+			throw new Error(`Unexpected URL: ${url}`);
+		}),
+	);
+	const { execAsync } = await import("@dokploy/server/utils/process/execAsync");
+	vi.mocked(execAsync).mockResolvedValue({
+		stdout: `${serviceImage}\n`,
+		stderr: "",
+	});
+};
+
+describe("AgentHits update check with a stale service env", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		delete process.env.DOKPLOY_UPDATE_SOURCE;
+		delete process.env.DOKPLOY_AGENTHITS_UPDATE_IMAGE;
+		delete process.env.DOKPLOY_AGENTHITS_UPDATE_TAG;
+		process.env.RELEASE_TAG = "agenthits-stable";
+	});
+
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		resetVersionEnv();
+	});
+
+	it("offers no update for the same digest when the service keeps an older official version", async () => {
+		process.env.DOKPLOY_OFFICIAL_VERSION = "v0.29.7";
+		process.env.DOKPLOY_FORK_VERSION = "off_v0.29.8/Fork_164+0944dc204f55";
+		await mockChannel(
+			"off_v0.29.8/Fork_164+0944dc204f55",
+			"v0.29.8",
+			"ghcr.io/agenthits/dokploy:agenthits-stable@sha256:latest",
+		);
+
+		expect(await getAgentHitsUpdateData("v0.29.7")).toMatchObject({
+			updateAvailable: false,
+			currentDigest: "sha256:latest",
+		});
+	});
+
+	it("offers no update for the platform digest when both version envs are stale", async () => {
+		process.env.DOKPLOY_OFFICIAL_VERSION = "v0.29.7";
+		process.env.DOKPLOY_FORK_VERSION = "off_v0.29.7/Fork_150+aaaaaaaaaaaa";
+		await mockChannel(
+			"off_v0.29.8/Fork_164+0944dc204f55",
+			"v0.29.8",
+			"ghcr.io/agenthits/dokploy:agenthits-stable@sha256:image",
+		);
+
+		expect(await getAgentHitsUpdateData("v0.29.7")).toMatchObject({
+			updateAvailable: false,
+		});
+	});
+
+	it("still offers a newer release on the channel when the digest differs", async () => {
+		process.env.DOKPLOY_OFFICIAL_VERSION = "v0.29.7";
+		process.env.DOKPLOY_FORK_VERSION = "off_v0.29.7/Fork_150+aaaaaaaaaaaa";
+		await mockChannel(
+			"off_v0.29.8/Fork_164+0944dc204f55",
+			"v0.29.8",
+			"ghcr.io/agenthits/dokploy:agenthits-stable@sha256:old",
+		);
+
+		expect(await getAgentHitsUpdateData("v0.29.7")).toMatchObject({
+			updateAvailable: true,
+			latestVersion: "off_v0.29.8/Fork_164+0944dc204f55",
+		});
+	});
+
+	it("never offers an older release than the running build", async () => {
+		process.env.DOKPLOY_OFFICIAL_VERSION = "v0.29.8";
+		process.env.DOKPLOY_FORK_VERSION = "agenthits-v1.3.2-4-gbbbbbbbbbbbb";
+		await mockChannel(
+			"agenthits-v1.3.1",
+			"v0.29.8",
+			"ghcr.io/agenthits/dokploy:agenthits-stable@sha256:old",
+		);
+
+		expect(await getAgentHitsUpdateData("v0.29.8")).toMatchObject({
+			updateAvailable: false,
 		});
 	});
 });
