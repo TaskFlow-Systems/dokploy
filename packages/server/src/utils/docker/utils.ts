@@ -1437,6 +1437,37 @@ export const getCreateFileCommand = (
 		`;
 };
 
+// The panel reaches the engine of one node, so a database whose task runs on
+// another node of the cluster has no container there; saying which node tells
+// that apart from a database that is not running.
+export const describeMissingServiceContainer = async (
+	appName: string,
+	serverId?: string | null,
+) => {
+	try {
+		const remoteDocker = await getRemoteDocker(serverId);
+		const tasks = await remoteDocker.listTasks({
+			abortSignal: AbortSignal.timeout(SWARM_READ_TIMEOUT_MS),
+			filters: JSON.stringify({
+				service: [appName],
+				"desired-state": ["running"],
+			}),
+		});
+		const nodeId = tasks.find(
+			(task) => task.Status?.State === "running",
+		)?.NodeID;
+		if (nodeId) {
+			const node = await remoteDocker
+				.getNode(nodeId)
+				.inspect({ abortSignal: AbortSignal.timeout(SWARM_READ_TIMEOUT_MS) });
+			return `${appName} runs on node ${node?.Description?.Hostname || nodeId}, and the panel reaches only the containers of the node it connects to`;
+		}
+	} catch {
+		// Without an answer the plain message below is all that can be said.
+	}
+	return `No running container found for ${appName}`;
+};
+
 export const getServiceContainer = async (
 	appName: string,
 	serverId?: string | null,

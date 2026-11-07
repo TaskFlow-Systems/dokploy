@@ -3,6 +3,7 @@ import {
 	createMount,
 	createMysql,
 	deployMySql,
+	describeMissingServiceContainer,
 	execAsync,
 	execAsyncRemote,
 	findBackupsByDbId,
@@ -28,7 +29,10 @@ import {
 	checkServicePermissionAndAccess,
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
-import { getServiceContainerCommand } from "@dokploy/server/utils/backups/utils";
+import {
+	getMissingServiceContainerCommand,
+	getServiceContainerCommand,
+} from "@dokploy/server/utils/backups/utils";
 import {
 	preserveSecretPlaceholderFields,
 	redactDatabaseServiceSecrets,
@@ -498,7 +502,7 @@ export const mysqlRouter = createTRPCRouter({
 			if (!container) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: `No running container found for ${appName}`,
+					message: await describeMissingServiceContainer(appName, serverId),
 				});
 			}
 
@@ -514,7 +518,7 @@ export const mysqlRouter = createTRPCRouter({
 			const command = `
 					CONTAINER_ID=$(${containerCmd})
 					if [ -z "$CONTAINER_ID" ]; then
-						echo "No running container found for ${appName}" >&2
+						${getMissingServiceContainerCommand(appName)}
 						exit 1
 					fi
 					${passwordChangeCommand}

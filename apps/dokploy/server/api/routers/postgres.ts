@@ -28,7 +28,10 @@ import {
 	checkServicePermissionAndAccess,
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
-import { getServiceContainerCommand } from "@dokploy/server/utils/backups/utils";
+import {
+	getMissingServiceContainerCommand,
+	getServiceContainerCommand,
+} from "@dokploy/server/utils/backups/utils";
 import {
 	preserveSecretPlaceholderFields,
 	redactDatabaseServiceSecrets,
@@ -508,7 +511,7 @@ export const postgresRouter = createTRPCRouter({
 			const command = `
 					CONTAINER_ID=$(${containerCmd})
 					if [ -z "$CONTAINER_ID" ]; then
-						echo "No running container found for ${appName}" >&2
+						${getMissingServiceContainerCommand(appName)}
 						exit 1
 					fi
 					${passwordChangeCommand}

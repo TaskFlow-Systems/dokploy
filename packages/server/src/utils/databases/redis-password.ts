@@ -1,7 +1,10 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { TRPCError } from "@trpc/server";
 import type { ContainerSpec, Service } from "dockerode";
-import { getServiceContainerCommand } from "../backups/utils";
+import {
+	getMissingServiceContainerCommand,
+	getServiceContainerCommand,
+} from "../backups/utils";
 import { quoteShellArg } from "../filesystem/safe-path";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
 import { getRemoteDocker } from "../servers/remote-docker";
@@ -28,7 +31,7 @@ const redisCliReply = async (
 	const command = `
 		CONTAINER_ID=$(${getServiceContainerCommand(appName)})
 		if [ -z "$CONTAINER_ID" ]; then
-			echo "No running container found for ${appName}" >&2
+			${getMissingServiceContainerCommand(appName)}
 			exit 1
 		fi
 		docker exec "$CONTAINER_ID" redis-cli --no-auth-warning -a ${quoteShellArg(password)} ${args}
