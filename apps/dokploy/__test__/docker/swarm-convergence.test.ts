@@ -4,15 +4,21 @@ import {
 } from "@dokploy/server/utils/docker/utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { inspect, listTasks } = vi.hoisted(() => ({
+const { inspect, listTasks, info, inspectContainer } = vi.hoisted(() => ({
 	inspect: vi.fn(),
 	listTasks: vi.fn(),
+	info: vi.fn(),
+	inspectContainer: vi.fn(),
 }));
 
 vi.mock("@dokploy/server/utils/servers/remote-docker", () => ({
 	getRemoteDocker: async () => ({
 		getService: () => ({ inspect }),
 		listTasks,
+		info,
+		getContainer: (id: string) => ({
+			inspect: (options: unknown) => inspectContainer(id, options),
+		}),
 	}),
 }));
 
@@ -784,5 +790,121 @@ describe("getSwarmConvergenceTimeoutMs", () => {
 		expect(
 			getSwarmConvergenceTimeoutMs(spec({ healthcheck: { Test: ["NONE"] } })),
 		).toBe(45_000);
+	});
+});
+
+// What a task of the node the panel connects to looks like once it runs.
+const localTask = (id: string, nodeId = "node-1") => {
+	const base = task({ id, state: "running" });
+	return {
+		...base,
+		NodeID: nodeId,
+		Status: {
+			...base.Status,
+			ContainerStatus: { ContainerID: `container-${id}` },
+		},
+	};
+};
+
+describe("waitForSwarmServiceConvergence and the engine of its node", () => {
+	beforeEach(() => {
+		inspect.mockReset();
+		listTasks.mockReset();
+		info.mockReset();
+		inspectContainer.mockReset();
+		info.mockResolvedValue({ Swarm: { NodeID: "node-1" } });
+	});
+
+	it("settles when the engine runs the task's container too", async () => {
+		inspect.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([localTask("task-1")]);
+		inspectContainer.mockResolvedValue({ State: { Running: true } });
+
+		await waitForSwarmServiceConvergence("app", null, { intervalMs: 1 });
+
+		expect(inspectContainer).toHaveBeenCalledWith(
+			"container-task-1",
+			expect.objectContaining({ abortSignal: expect.any(AbortSignal) }),
+		);
+	});
+
+	it("does not take a task whose container stopped for a settled one, while Swarm still says running", async () => {
+		inspect.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([localTask("task-1")]);
+		inspectContainer.mockResolvedValue({
+			State: { Running: false, ExitCode: 3 },
+		});
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 20,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(message).toContain("did not converge");
+		expect(message).toContain(
+			"a task's container had stopped while Swarm still reported it running",
+		);
+		expect(inspectContainer).toHaveBeenCalledTimes(1);
+	});
+
+	it("takes a container the engine no longer has for a stopped one", async () => {
+		inspect.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([localTask("task-1")]);
+		inspectContainer.mockRejectedValue(
+			Object.assign(new Error("no such container"), { statusCode: 404 }),
+		);
+
+		const message = await failureOf(
+			waitForSwarmServiceConvergence("app", null, {
+				timeoutMs: 20,
+				intervalMs: 1,
+			}),
+		);
+
+		expect(message).toContain("had stopped while Swarm still reported it");
+	});
+
+	it("settles on the task Swarm starts in place of the stopped one", async () => {
+		inspect.mockResolvedValue(service("completed"));
+		listTasks
+			.mockResolvedValueOnce([localTask("task-1")])
+			.mockResolvedValueOnce([localTask("task-1")])
+			.mockResolvedValue([localTask("task-2")]);
+		inspectContainer.mockImplementation(async (id: string) => ({
+			State: { Running: id !== "container-task-1" },
+		}));
+
+		await waitForSwarmServiceConvergence("app", null, { intervalMs: 1 });
+
+		expect(inspectContainer.mock.calls.map(([id]) => id)).toEqual([
+			"container-task-1",
+			"container-task-2",
+		]);
+	});
+
+	it("goes by Swarm for a task on another node, which the panel cannot reach", async () => {
+		inspect.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([localTask("task-1", "node-2")]);
+
+		await waitForSwarmServiceConvergence("app", null, { intervalMs: 1 });
+
+		expect(inspectContainer).not.toHaveBeenCalled();
+	});
+
+	it("goes by Swarm when the engine cannot say", async () => {
+		inspect.mockResolvedValue(service("completed"));
+		listTasks.mockResolvedValue([localTask("task-1")]);
+		inspectContainer.mockRejectedValue(new Error("socket hang up"));
+
+		await expect(
+			waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+		).resolves.toBeUndefined();
+
+		info.mockRejectedValue(new Error("no answer"));
+		inspectContainer.mockClear();
+		await waitForSwarmServiceConvergence("app", null, { intervalMs: 1 });
+		expect(inspectContainer).not.toHaveBeenCalled();
 	});
 });
