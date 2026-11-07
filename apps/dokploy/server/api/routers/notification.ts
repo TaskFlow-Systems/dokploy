@@ -12,6 +12,7 @@ import {
 	createTeamsNotification,
 	createTelegramNotification,
 	findNotificationById,
+	findNotificationSecret,
 	getWebServerSettings,
 	removeNotificationById,
 	sendCustomNotification,
@@ -39,9 +40,15 @@ import {
 	updateSlackNotification,
 	updateTeamsNotification,
 	updateTelegramNotification,
+	withStoredNotificationSecrets,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
 import {
+	checkPermission,
+	type PermissionCtx,
+} from "@dokploy/server/services/permission";
+import {
+	type NotificationSecretProvider,
 	redactNotificationSecrets,
 	redactNotificationSecretsList,
 } from "@dokploy/server/utils/notifications/security";
@@ -50,9 +57,11 @@ import { desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import {
 	createTRPCRouter,
+	protectedProcedure,
 	publicProcedure,
 	withPermission,
 } from "@/server/api/trpc";
+import { assertBrowserSession } from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
 import {
 	apiCreateCustom,
@@ -108,6 +117,24 @@ const assertNotificationProviderId = (
 	}
 };
 
+const testConnectionInput = async <T extends { notificationId?: string }>(
+	ctx: PermissionCtx,
+	provider: NotificationSecretProvider,
+	input: T,
+) => {
+	const { notificationId, ...rest } = input;
+	if (notificationId) {
+		// The stored secret is used as an update would keep it.
+		await checkPermission(ctx, { notification: ["update"] });
+	}
+	return withStoredNotificationSecrets(
+		provider,
+		rest,
+		notificationId,
+		ctx.session.activeOrganizationId,
+	);
+};
+
 export const notificationRouter = createTRPCRouter({
 	createSlack: withPermission("notification", "create")
 		.input(apiCreateSlack)
@@ -157,7 +184,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testSlackConnection: withPermission("notification", "create")
 		.input(apiTestSlackConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "slack", rawInput);
 			try {
 				await sendSlackNotification(input, {
 					channel: input.channel,
@@ -227,7 +255,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testTelegramConnection: withPermission("notification", "create")
 		.input(apiTestTelegramConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "telegram", rawInput);
 			try {
 				await sendTelegramNotification(input, "Hi, From Dokploy 👋");
 				return true;
@@ -295,7 +324,8 @@ export const notificationRouter = createTRPCRouter({
 
 	testDiscordConnection: withPermission("notification", "create")
 		.input(apiTestDiscordConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "discord", rawInput);
 			try {
 				const decorate = (decoration: string, text: string) =>
 					`${input.decoration ? decoration : ""} ${text}`.trim();
@@ -369,7 +399,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testEmailConnection: withPermission("notification", "create")
 		.input(apiTestEmailConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "email", rawInput);
 			try {
 				await sendEmailNotification(
 					input,
@@ -436,7 +467,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testResendConnection: withPermission("notification", "create")
 		.input(apiTestResendConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "resend", rawInput);
 			try {
 				await sendResendNotification(
 					input,
@@ -479,6 +511,34 @@ export const notificationRouter = createTRPCRouter({
 					message,
 				});
 			}
+		}),
+	revealSecret: protectedProcedure
+		.input(
+			z.object({
+				notificationId: z.string().min(1),
+				field: z.string().min(1),
+			}),
+		)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			if (ctx.user.role !== "owner" && ctx.user.role !== "admin") {
+				throw new TRPCError({
+					code: "UNAUTHORIZED",
+					message: "Only the owner or an admin can reveal a saved secret",
+				});
+			}
+			const { notification, value } = await findNotificationSecret(
+				input.notificationId,
+				ctx.session.activeOrganizationId,
+				input.field,
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "notification",
+				resourceId: notification.notificationId,
+				resourceName: `${notification.name} (${input.field})`,
+			});
+			return { value };
 		}),
 	one: withPermission("notification", "read")
 		.input(apiFindOneNotification)
@@ -629,7 +689,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testGotifyConnection: withPermission("notification", "create")
 		.input(apiTestGotifyConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "gotify", rawInput);
 			try {
 				await sendGotifyNotification(
 					input,
@@ -692,7 +753,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testNtfyConnection: withPermission("notification", "create")
 		.input(apiTestNtfyConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "ntfy", rawInput);
 			try {
 				await sendNtfyNotification(
 					input,
@@ -766,7 +828,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testMattermostConnection: withPermission("notification", "create")
 		.input(apiTestMattermostConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "mattermost", rawInput);
 			try {
 				await sendMattermostNotification(input, {
 					text: "Hi, From Dokploy 👋",
@@ -829,7 +892,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testCustomConnection: withPermission("notification", "create")
 		.input(apiTestCustomConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "custom", rawInput);
 			try {
 				await sendCustomNotification(input, {
 					title: "Test Notification",
@@ -892,7 +956,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testLarkConnection: withPermission("notification", "create")
 		.input(apiTestLarkConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "lark", rawInput);
 			try {
 				await sendLarkNotification(input, {
 					msg_type: "text",
@@ -956,7 +1021,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testTeamsConnection: withPermission("notification", "create")
 		.input(apiTestTeamsConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "teams", rawInput);
 			try {
 				await sendTeamsNotification(input, {
 					title: "🤚 Test Notification",
@@ -1021,7 +1087,8 @@ export const notificationRouter = createTRPCRouter({
 		}),
 	testPushoverConnection: withPermission("notification", "create")
 		.input(apiTestPushoverConnection)
-		.mutation(async ({ input }) => {
+		.mutation(async ({ input: rawInput, ctx }) => {
+			const input = await testConnectionInput(ctx, "pushover", rawInput);
 			try {
 				await sendPushoverNotification(
 					input,

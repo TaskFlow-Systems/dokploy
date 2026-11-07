@@ -12,6 +12,8 @@ export interface InputProps extends React.ComponentProps<"input"> {
 	enablePasswordGenerator?: boolean;
 	passwordGeneratorLength?: number;
 	enableCopyButton?: boolean;
+	// Runs before a hidden value is shown; returning false keeps it hidden.
+	onBeforeShowPassword?: () => boolean | Promise<boolean>;
 }
 
 function Input({
@@ -21,6 +23,7 @@ function Input({
 	enablePasswordGenerator = false,
 	passwordGeneratorLength,
 	enableCopyButton = false,
+	onBeforeShowPassword,
 	ref,
 	...props
 }: InputProps) {
@@ -105,7 +108,18 @@ function Input({
 					<button
 						type="button"
 						className="hover:text-foreground focus:outline-none"
-						onClick={() => setShowPassword(!showPassword)}
+						onClick={async () => {
+							if (
+								!showPassword &&
+								onBeforeShowPassword &&
+								!(await onBeforeShowPassword())
+							) {
+								return;
+							}
+							setShowPassword(!showPassword);
+						}}
+						aria-label={showPassword ? "Hide value" : "Show value"}
+						title={showPassword ? "Hide value" : "Show value"}
 						tabIndex={-1}
 					>
 						{showPassword ? (

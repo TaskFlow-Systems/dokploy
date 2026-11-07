@@ -17,7 +17,7 @@ type AssertNotificationUrlOptions = NormalizeNotificationUrlOptions & {
 
 type NotificationRecord = Record<string, unknown>;
 
-const secretFieldsByRelation: Record<string, string[]> = {
+export const notificationSecretFields = {
 	slack: ["webhookUrl"],
 	telegram: ["botToken"],
 	discord: ["webhookUrl"],
@@ -30,7 +30,11 @@ const secretFieldsByRelation: Record<string, string[]> = {
 	lark: ["webhookUrl"],
 	pushover: ["userKey", "apiToken"],
 	teams: ["webhookUrl"],
-};
+} as const satisfies Record<string, readonly string[]>;
+
+export type NotificationSecretProvider = keyof typeof notificationSecretFields;
+export type NotificationSecretField =
+	(typeof notificationSecretFields)[NotificationSecretProvider][number];
 
 const resolveAllowPrivateNetwork = (allowPrivateNetwork: boolean | undefined) =>
 	allowPrivateNetwork ?? process.env.IS_CLOUD !== "true";
@@ -109,7 +113,7 @@ export const redactNotificationSecrets = <T extends NotificationRecord>(
 ): T => {
 	const redactedNotification: NotificationRecord = { ...notification };
 
-	for (const [relation, fields] of Object.entries(secretFieldsByRelation)) {
+	for (const [relation, fields] of Object.entries(notificationSecretFields)) {
 		const relationValue = notification[relation];
 		if (
 			!relationValue ||

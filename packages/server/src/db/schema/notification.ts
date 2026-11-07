@@ -11,6 +11,7 @@ import { createInsertSchema } from "drizzle-zod";
 import { nanoid } from "nanoid";
 import { z } from "zod";
 import { organization } from "./account";
+import { encryptedText } from "./utils";
 
 export const notificationType = pgEnum("notificationType", [
 	"slack",
@@ -94,7 +95,7 @@ export const slack = pgTable("slack", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	webhookUrl: text("webhookUrl").notNull(),
+	webhookUrl: encryptedText("webhookUrl").notNull(),
 	channel: text("channel"),
 });
 
@@ -103,7 +104,7 @@ export const telegram = pgTable("telegram", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	botToken: text("botToken").notNull(),
+	botToken: encryptedText("botToken").notNull(),
 	chatId: text("chatId").notNull(),
 	messageThreadId: text("messageThreadId"),
 });
@@ -113,7 +114,7 @@ export const discord = pgTable("discord", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	webhookUrl: text("webhookUrl").notNull(),
+	webhookUrl: encryptedText("webhookUrl").notNull(),
 	decoration: boolean("decoration"),
 });
 
@@ -125,7 +126,7 @@ export const email = pgTable("email", {
 	smtpServer: text("smtpServer").notNull(),
 	smtpPort: integer("smtpPort").notNull(),
 	username: text("username").notNull(),
-	password: text("password").notNull(),
+	password: encryptedText("password").notNull(),
 	fromAddress: text("fromAddress").notNull(),
 	toAddresses: text("toAddress").array().notNull(),
 });
@@ -135,7 +136,7 @@ export const resend = pgTable("resend", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	apiKey: text("apiKey").notNull(),
+	apiKey: encryptedText("apiKey").notNull(),
 	fromAddress: text("fromAddress").notNull(),
 	toAddresses: text("toAddress").array().notNull(),
 });
@@ -146,7 +147,7 @@ export const gotify = pgTable("gotify", {
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
 	serverUrl: text("serverUrl").notNull(),
-	appToken: text("appToken").notNull(),
+	appToken: encryptedText("appToken").notNull(),
 	priority: integer("priority").notNull().default(5),
 	decoration: boolean("decoration"),
 });
@@ -158,7 +159,7 @@ export const ntfy = pgTable("ntfy", {
 		.$defaultFn(() => nanoid()),
 	serverUrl: text("serverUrl").notNull(),
 	topic: text("topic").notNull(),
-	accessToken: text("accessToken"),
+	accessToken: encryptedText("accessToken"),
 	priority: integer("priority").notNull().default(3),
 });
 
@@ -167,7 +168,7 @@ export const mattermost = pgTable("mattermost", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	webhookUrl: text("webhookUrl").notNull(),
+	webhookUrl: encryptedText("webhookUrl").notNull(),
 	channel: text("channel"),
 	username: text("username"),
 });
@@ -177,7 +178,7 @@ export const custom = pgTable("custom", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	endpoint: text("endpoint").notNull(),
+	endpoint: encryptedText("endpoint").notNull(),
 	headers: jsonb("headers").$type<Record<string, string>>(),
 });
 
@@ -186,7 +187,7 @@ export const lark = pgTable("lark", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	webhookUrl: text("webhookUrl").notNull(),
+	webhookUrl: encryptedText("webhookUrl").notNull(),
 });
 
 export const pushover = pgTable("pushover", {
@@ -194,8 +195,8 @@ export const pushover = pgTable("pushover", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	userKey: text("userKey").notNull(),
-	apiToken: text("apiToken").notNull(),
+	userKey: encryptedText("userKey").notNull(),
+	apiToken: encryptedText("apiToken").notNull(),
 	priority: integer("priority").notNull().default(0),
 	retry: integer("retry"),
 	expire: integer("expire"),
@@ -206,7 +207,7 @@ export const teams = pgTable("teams", {
 		.notNull()
 		.primaryKey()
 		.$defaultFn(() => nanoid()),
-	webhookUrl: text("webhookUrl").notNull(),
+	webhookUrl: encryptedText("webhookUrl").notNull(),
 });
 
 export const notificationsRelations = relations(notifications, ({ one }) => ({
@@ -272,6 +273,12 @@ const notificationUpdateSecret = z.string().optional();
 // keep working, and leaving it out of an update keeps the stored value.
 const dokployBackupErrorsOnly = z.boolean().optional();
 
+// Lets Test on a saved channel use its stored secrets, which the form only
+// has as a placeholder.
+const testNotificationIdShape = {
+	notificationId: z.string().min(1).optional(),
+};
+
 export const apiCreateSlack = notificationsSchema
 	.pick({
 		appBuildError: true,
@@ -298,10 +305,12 @@ export const apiUpdateSlack = apiCreateSlack.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestSlackConnection = apiCreateSlack.pick({
-	webhookUrl: true,
-	channel: true,
-});
+export const apiTestSlackConnection = apiCreateSlack
+	.pick({
+		webhookUrl: true,
+		channel: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateTelegram = notificationsSchema
 	.pick({
@@ -330,11 +339,13 @@ export const apiUpdateTelegram = apiCreateTelegram.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestTelegramConnection = apiCreateTelegram.pick({
-	botToken: true,
-	chatId: true,
-	messageThreadId: true,
-});
+export const apiTestTelegramConnection = apiCreateTelegram
+	.pick({
+		botToken: true,
+		chatId: true,
+		messageThreadId: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateDiscord = notificationsSchema
 	.pick({
@@ -368,7 +379,8 @@ export const apiTestDiscordConnection = apiCreateDiscord
 	})
 	.extend({
 		decoration: z.boolean().optional(),
-	});
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateEmail = notificationsSchema
 	.pick({
@@ -400,14 +412,16 @@ export const apiUpdateEmail = apiCreateEmail.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestEmailConnection = apiCreateEmail.pick({
-	smtpServer: true,
-	smtpPort: true,
-	username: true,
-	password: true,
-	toAddresses: true,
-	fromAddress: true,
-});
+export const apiTestEmailConnection = apiCreateEmail
+	.pick({
+		smtpServer: true,
+		smtpPort: true,
+		username: true,
+		password: true,
+		toAddresses: true,
+		fromAddress: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateResend = notificationsSchema
 	.pick({
@@ -436,11 +450,13 @@ export const apiUpdateResend = apiCreateResend.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestResendConnection = apiCreateResend.pick({
-	apiKey: true,
-	fromAddress: true,
-	toAddresses: true,
-});
+export const apiTestResendConnection = apiCreateResend
+	.pick({
+		apiKey: true,
+		fromAddress: true,
+		toAddresses: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateGotify = notificationsSchema
 	.pick({
@@ -478,7 +494,8 @@ export const apiTestGotifyConnection = apiCreateGotify
 	})
 	.extend({
 		decoration: z.boolean().optional(),
-	});
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateNtfy = notificationsSchema
 	.pick({
@@ -507,12 +524,14 @@ export const apiUpdateNtfy = apiCreateNtfy.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestNtfyConnection = apiCreateNtfy.pick({
-	serverUrl: true,
-	topic: true,
-	accessToken: true,
-	priority: true,
-});
+export const apiTestNtfyConnection = apiCreateNtfy
+	.pick({
+		serverUrl: true,
+		topic: true,
+		accessToken: true,
+		priority: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateMattermost = notificationsSchema
 	.pick({
@@ -561,7 +580,8 @@ export const apiTestMattermostConnection = apiCreateMattermost
 	.extend({
 		channel: z.string().optional(),
 		username: z.string().optional(),
-	});
+	})
+	.extend(testNotificationIdShape);
 
 export const apiFindOneNotification = z.object({
 	notificationId: z.string().min(1),
@@ -592,10 +612,12 @@ export const apiUpdateCustom = apiCreateCustom.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestCustomConnection = z.object({
-	endpoint: z.string().min(1),
-	headers: z.record(z.string(), z.string()).optional(),
-});
+export const apiTestCustomConnection = z
+	.object({
+		endpoint: z.string().min(1),
+		headers: z.record(z.string(), z.string()).optional(),
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateLark = notificationsSchema
 	.pick({
@@ -622,9 +644,11 @@ export const apiUpdateLark = apiCreateLark.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestLarkConnection = apiCreateLark.pick({
-	webhookUrl: true,
-});
+export const apiTestLarkConnection = apiCreateLark
+	.pick({
+		webhookUrl: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreateTeams = notificationsSchema
 	.pick({
@@ -651,9 +675,11 @@ export const apiUpdateTeams = apiCreateTeams.partial().extend({
 	organizationId: z.string().optional(),
 });
 
-export const apiTestTeamsConnection = apiCreateTeams.pick({
-	webhookUrl: true,
-});
+export const apiTestTeamsConnection = apiCreateTeams
+	.pick({
+		webhookUrl: true,
+	})
+	.extend(testNotificationIdShape);
 
 export const apiCreatePushover = notificationsSchema
 	.pick({
@@ -707,6 +733,7 @@ export const apiUpdatePushover = z.object({
 
 export const apiTestPushoverConnection = z
 	.object({
+		...testNotificationIdShape,
 		userKey: z.string().min(1),
 		apiToken: z.string().min(1),
 		priority: z.number().min(-2).max(2),
