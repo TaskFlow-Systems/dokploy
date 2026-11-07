@@ -551,7 +551,10 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 
 			const failed = await rebuild({ ...application, ...CRASHES });
 
-			expectReportedFailed(failed, /did not converge.*non-zero exit \(3\)/);
+			expectReportedFailed(
+				failed,
+				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
+			);
 		},
 		REAL_TEST_TIMEOUT,
 	);
@@ -567,7 +570,10 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 
 			const failed = await rebuild(application);
 
-			expectReportedFailed(failed, /did not converge.*non-zero exit \(3\)/);
+			expectReportedFailed(
+				failed,
+				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
+			);
 			expect(failed.elapsedMs).toBeLessThan(
 				LIMIT_WITHOUT_STOP_GRACE_MS + 30_000,
 			);
@@ -596,11 +602,9 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 
 			expectReportedFailed(
 				failed,
-				/did not converge.*still updating.*host-mode port already in use/,
+				/cannot bind the published host-mode port.*stop-first/,
 			);
-			expect(failed.elapsedMs).toBeLessThan(
-				LIMIT_WITHOUT_STOP_GRACE_MS + 30_000,
-			);
+			expect(failed.elapsedMs).toBeLessThan(LIMIT_WITHOUT_STOP_GRACE_MS);
 			const running = await runningTasks(application.appName);
 			expect(running.map((task) => task.ID)).toEqual([before?.ID]);
 		},

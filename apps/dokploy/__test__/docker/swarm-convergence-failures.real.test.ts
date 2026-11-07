@@ -161,7 +161,9 @@ describe("waitForSwarmServiceConvergence on real Docker: failed updates and buil
 
 			await expect(
 				waitForSwarmServiceConvergence(redis.appName, null, { intervalMs: 50 }),
-			).rejects.toThrow(/0\/1 tasks stayed running.*non-zero exit \(3\)/);
+			).rejects.toThrow(
+				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
+			);
 			expect((await inspect(redis.appName)).UpdateStatus?.State).toBe(
 				"completed",
 			);
@@ -252,7 +254,7 @@ describe("waitForSwarmServiceConvergence on real Docker: failed updates and buil
 			} as never);
 
 			await expect(rebuildDatabase(redis.redisId, "redis", 0)).rejects.toThrow(
-				/did not converge within 45000ms: 0\/1 tasks stayed running for 5 s.*non-zero exit \(3\)/,
+				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
 			);
 
 			expect(statuses).toEqual(["running", "error"]);

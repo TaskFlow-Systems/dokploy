@@ -1578,8 +1578,13 @@ const DOCKER_DEFAULT_HEALTH_STEP_NS = 30e9;
 const DOCKER_DEFAULT_HEALTH_RETRIES = 3;
 
 type SwarmServiceSpec = {
-	Mode?: { Replicated?: { Replicas?: number } };
-	UpdateConfig?: { Parallelism?: number; Monitor?: number; Delay?: number };
+	Mode?: { Replicated?: { Replicas?: number }; Global?: object };
+	UpdateConfig?: {
+		Parallelism?: number;
+		Monitor?: number;
+		Delay?: number;
+		Order?: string;
+	};
 	TaskTemplate?: {
 		RestartPolicy?: { Condition?: string };
 		ContainerSpec?: {
@@ -1678,6 +1683,33 @@ const firstTaskError = (tasks: SwarmTask[], updateStartedAt?: string) => {
 				Date.parse(b.Status?.Timestamp ?? ""),
 		)[0]?.Status?.Err;
 };
+
+const failedRuns = (tasks: SwarmTask[], updateStartedAt?: string) => {
+	const since = updateStartedAt ? Date.parse(updateStartedAt) : 0;
+	return tasks
+		.filter(
+			(task) =>
+				(task.Status?.State === "failed" ||
+					task.Status?.State === "rejected") &&
+				!task.Status.Err?.includes("context canceled") &&
+				Date.parse(task.CreatedAt ?? "") >= since,
+		)
+		.sort(
+			(a, b) =>
+				Date.parse(a.Status?.Timestamp ?? "") -
+				Date.parse(b.Status?.Timestamp ?? ""),
+		);
+};
+
+// Three tasks that ended in failure are a loop, not the single transient crash that
+// a service may recover from, and waiting out the limit would only repeat them.
+const RESTART_LOOP_FAILURES = 3;
+
+const HOST_PORT_ERROR = "host-mode port already in use";
+
+// Swarm names the image only in this error, and only a build on that node has it.
+const NO_REGISTRY_HINT =
+	"The image exists only on the node where it was built, so the service needs a registry that every node can pull it from.";
 
 // How long a task had been running when its service last changed, by the cluster's
 // own clocks, so the panel's clock plays no part. This is what spares a redeploy that
@@ -1850,7 +1882,6 @@ export const waitForSwarmServiceConvergence = async (
 		quietLimitMs ??=
 			timeoutMs +
 			swarmUpdateBatches(info.Spec) * (options?.quietStartAllowanceMs ?? 0);
-		const desiredTasksCount = info.Spec?.Mode?.Replicated?.Replicas ?? 1;
 		const monitorMs =
 			(info.Spec?.UpdateConfig?.Monitor ?? DOCKER_DEFAULT_MONITOR_NS) / 1e6;
 
@@ -1858,6 +1889,11 @@ export const waitForSwarmServiceConvergence = async (
 		const currentTasks = tasks.filter(
 			(task) => task.DesiredState === "running",
 		);
+		// A global service has no replica count: Swarm runs one task on each node that
+		// fits, so the nodes that hold a current task are the ones to wait for.
+		const desiredTasksCount = info.Spec?.Mode?.Global
+			? Math.max(1, new Set(currentTasks.map((task) => task.NodeID)).size)
+			: (info.Spec?.Mode?.Replicated?.Replicas ?? 1);
 		// Swarm watches a task for `Monitor` only during an update, so nothing watches
 		// a new service or a new replica, and a restart loop can show a running task on
 		// any poll. A restart always makes a new task, so the same ID staying up that
@@ -1948,6 +1984,31 @@ export const waitForSwarmServiceConvergence = async (
 			}
 		}
 
+		const updateStartedAt = info.UpdateStatus?.StartedAt ?? info.UpdatedAt;
+		// Swarm cannot start the new task while the old one holds the port, and keeps
+		// the update in `updating` until its limit, which is minutes away.
+		if (
+			updateState === "updating" &&
+			info.Spec?.UpdateConfig?.Order === "start-first" &&
+			tasks.some(
+				(task) =>
+					task.Status?.Err?.includes(HOST_PORT_ERROR) &&
+					Date.parse(task.CreatedAt ?? "") >=
+						(updateStartedAt ? Date.parse(updateStartedAt) : 0),
+			)
+		) {
+			throw new ServiceConvergenceError(
+				`Service ${appName} cannot update: the new task cannot bind the published host-mode port while the old task still holds it. Set the update order to stop-first so the old task stops before the new one starts.`,
+			);
+		}
+		const failedLoop = failedRuns(tasks, updateStartedAt);
+		if (failedLoop.length >= RESTART_LOOP_FAILURES) {
+			const last = failedLoop[failedLoop.length - 1];
+			throw new ServiceConvergenceError(
+				`Service ${appName} keeps failing: ${failedLoop.length} tasks of this update have failed (last task error: ${last?.Status?.Err ?? `last state: ${last?.Status?.State}`})`,
+			);
+		}
+
 		const containerError =
 			downTasks.size > 0
 				? "a task's container had stopped while Swarm still reported it running"
@@ -1961,7 +2022,7 @@ export const waitForSwarmServiceConvergence = async (
 		) {
 			const lastState = currentTasks[0]?.Status?.State ?? "unknown";
 			throw new ServiceConvergenceError(
-				`Service ${appName} did not converge within ${Math.min(elapsedMs, quietLimitMs)}ms: ${settledTasksCount}/${desiredTasksCount} tasks stayed running for ${monitorMs / 1000} s${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""}${containerError ? `, ${containerError}` : ""})`,
+				`Service ${appName} did not converge within ${Math.min(elapsedMs, quietLimitMs)}ms: ${settledTasksCount}/${desiredTasksCount} tasks stayed running for ${monitorMs / 1000} s${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""}${containerError ? `, ${containerError}` : ""})${taskError?.includes("No such image") ? `. ${NO_REGISTRY_HINT}` : ""}`,
 			);
 		}
 

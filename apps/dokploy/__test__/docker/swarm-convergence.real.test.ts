@@ -67,12 +67,14 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 		async (_, kind, script, limit) => {
 			const redis = redisFixture(`crash-${kind}`, shellScript(script));
 			await buildRedis(redis);
+			const startedAt = Date.now();
 
 			await expect(
 				waitForSwarmServiceConvergence(redis.appName, null, limit),
 			).rejects.toThrow(
-				/did not converge within 25000ms: 0\/1 tasks stayed running for 5 s.*non-zero exit \(3\)/,
+				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
 			);
+			expect(Date.now() - startedAt).toBeLessThan(limit.timeoutMs);
 			await removeCrashing(redis.appName);
 		},
 		REAL_TEST_TIMEOUT,
