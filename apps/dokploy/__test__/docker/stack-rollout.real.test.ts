@@ -223,17 +223,22 @@ describe("waitForStackRollout on real Docker", () => {
 	);
 
 	it(
-		"fails a new service in a restart loop at the limit",
+		"fails a new service in a restart loop before the limit",
 		async () => {
 			const stack = newStack("loop");
 			await deploy(stack, exiting("loop", 1) + longRunning("web"));
+
+			const startedAt = Date.now();
 
 			const failure = await failureOf(
 				waitForStackRollout(stack, null, FAST_LIMITS),
 			);
 
 			expect(failure).toContain(`${stack}_loop`);
-			expect(failure).toContain("did not converge");
+			expect(failure).toContain(
+				"3 tasks of one slot in this update have failed",
+			);
+			expect(Date.now() - startedAt).toBeLessThan(FAST_LIMITS.timeoutMs);
 			expect(failure).not.toContain(`${stack}_web`);
 		},
 		REAL_TEST_TIMEOUT,

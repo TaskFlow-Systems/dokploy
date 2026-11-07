@@ -1701,7 +1701,7 @@ const failedRuns = (tasks: SwarmTask[], updateStartedAt?: string) => {
 		);
 };
 
-// Three tasks that ended in failure are a loop, not the single transient crash that
+// Three tasks of one slot that ended in failure are a loop, not the single transient crash that
 // a service may recover from, and waiting out the limit would only repeat them.
 const RESTART_LOOP_FAILURES = 3;
 
@@ -2001,11 +2001,20 @@ export const waitForSwarmServiceConvergence = async (
 				`Service ${appName} cannot update: the new task cannot bind the published host-mode port while the old task still holds it. Set the update order to stop-first so the old task stops before the new one starts.`,
 			);
 		}
-		const failedLoop = failedRuns(tasks, updateStartedAt);
-		if (failedLoop.length >= RESTART_LOOP_FAILURES) {
+		// Replicas that each crash once and recover are not a loop: only one slot (one
+		// node for a global service) failing again and again is.
+		const failedBySlot = new Map<string, SwarmTask[]>();
+		for (const task of failedRuns(tasks, updateStartedAt)) {
+			const slot = String(info.Spec?.Mode?.Global ? task.NodeID : task.Slot);
+			failedBySlot.set(slot, [...(failedBySlot.get(slot) ?? []), task]);
+		}
+		const failedLoop = [...failedBySlot.values()].find(
+			(slotTasks) => slotTasks.length >= RESTART_LOOP_FAILURES,
+		);
+		if (failedLoop) {
 			const last = failedLoop[failedLoop.length - 1];
 			throw new ServiceConvergenceError(
-				`Service ${appName} keeps failing: ${failedLoop.length} tasks of this update have failed (last task error: ${last?.Status?.Err ?? `last state: ${last?.Status?.State}`})`,
+				`Service ${appName} keeps failing: ${failedLoop.length} tasks of one ${info.Spec?.Mode?.Global ? "node" : "slot"} in this update have failed (last task error: ${last?.Status?.Err ?? `last state: ${last?.Status?.State}`})`,
 			);
 		}
 

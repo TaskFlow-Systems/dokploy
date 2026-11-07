@@ -1093,9 +1093,32 @@ describe("waitForSwarmServiceConvergence, tasks across nodes and failures", () =
 
 			const message = await failureOf(waitForSwarmServiceConvergence("app"));
 
-			expect(message).toContain("3 tasks of this update have failed");
+			expect(message).toContain(
+				"3 tasks of one slot in this update have failed",
+			);
 			expect(message).toContain("last task error: task: non-zero exit (5)");
 			expect(inspect).toHaveBeenCalledTimes(1);
+		});
+
+		it("passes three replicas that each fail once and then settle", async () => {
+			const replicas = (n: number) => ({
+				...service("completed"),
+				Spec: {
+					...service("completed").Spec,
+					Mode: { Replicated: { Replicas: n } },
+				},
+			});
+			inspect.mockResolvedValue(replicas(3));
+			listTasks.mockResolvedValue(
+				[1, 2, 3].flatMap((slot) => [
+					{ ...task({ id: `up-${slot}`, state: "running" }), Slot: slot },
+					{ ...crash(`down-${slot}`, 2 + slot), Slot: slot },
+				]),
+			);
+
+			await expect(
+				waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+			).resolves.toBeUndefined();
 		});
 
 		it("does not count tasks of an earlier deployment or cancelled ones", async () => {

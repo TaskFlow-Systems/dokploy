@@ -72,7 +72,7 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 			await expect(
 				waitForSwarmServiceConvergence(redis.appName, null, limit),
 			).rejects.toThrow(
-				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
+				/keeps failing: 3 tasks of one slot in this update have failed \(last task error: .*non-zero exit \(3\)/,
 			);
 			expect(Date.now() - startedAt).toBeLessThan(limit.timeoutMs);
 			await removeCrashing(redis.appName);

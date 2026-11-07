@@ -553,7 +553,7 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 
 			expectReportedFailed(
 				failed,
-				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
+				/keeps failing: 3 tasks of one slot in this update have failed \(last task error: .*non-zero exit \(3\)/,
 			);
 		},
 		REAL_TEST_TIMEOUT,
@@ -572,7 +572,7 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 
 			expectReportedFailed(
 				failed,
-				/keeps failing: 3 tasks of this update have failed \(last task error: .*non-zero exit \(3\)/,
+				/keeps failing: 3 tasks of one slot in this update have failed \(last task error: .*non-zero exit \(3\)/,
 			);
 			expect(failed.elapsedMs).toBeLessThan(
 				LIMIT_WITHOUT_STOP_GRACE_MS + 30_000,
