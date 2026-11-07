@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
 	createTelegramNotification: vi.fn(),
 	findManyNotifications: vi.fn(),
 	findNotificationById: vi.fn(),
+	findNotificationSecret: vi.fn(),
 	getWebServerSettings: vi.fn(),
 	removeNotificationById: vi.fn(),
 	select: vi.fn(),
@@ -47,6 +48,7 @@ const mocks = vi.hoisted(() => ({
 	updateSlackNotification: vi.fn(),
 	updateTeamsNotification: vi.fn(),
 	updateTelegramNotification: vi.fn(),
+	withStoredNotificationSecrets: vi.fn(),
 }));
 
 vi.mock("@dokploy/server", () => ({
@@ -64,6 +66,7 @@ vi.mock("@dokploy/server", () => ({
 	createTeamsNotification: mocks.createTeamsNotification,
 	createTelegramNotification: mocks.createTelegramNotification,
 	findNotificationById: mocks.findNotificationById,
+	findNotificationSecret: mocks.findNotificationSecret,
 	getWebServerSettings: mocks.getWebServerSettings,
 	removeNotificationById: mocks.removeNotificationById,
 	sendCustomNotification: mocks.sendCustomNotification,
@@ -91,6 +94,7 @@ vi.mock("@dokploy/server", () => ({
 	updateSlackNotification: mocks.updateSlackNotification,
 	updateTeamsNotification: mocks.updateTeamsNotification,
 	updateTelegramNotification: mocks.updateTelegramNotification,
+	withStoredNotificationSecrets: mocks.withStoredNotificationSecrets,
 }));
 
 vi.mock("@dokploy/server/db", () => ({
@@ -163,7 +167,10 @@ const notificationWithSecrets = {
 	},
 };
 
-const createCaller = () =>
+const createCaller = (
+	role = "owner",
+	session: Record<string, unknown> = { id: "session-1" },
+) =>
 	notificationRouter.createCaller({
 		db: {},
 		req: {},
@@ -171,11 +178,12 @@ const createCaller = () =>
 		session: {
 			userId: "actor-1",
 			activeOrganizationId: "org-1",
+			...session,
 		},
 		user: {
 			id: "actor-1",
 			email: "owner@example.com",
-			role: "owner",
+			role,
 			ownerId: "actor-1",
 			enableEnterpriseFeatures: false,
 			isValidEnterpriseLicense: false,
@@ -190,6 +198,117 @@ describe("notification router secret and organization boundaries", () => {
 		mocks.findManyNotifications.mockResolvedValue([notificationWithSecrets]);
 		mocks.updateSlackNotification.mockResolvedValue({ notificationId: "n-1" });
 		mocks.updateGotifyNotification.mockResolvedValue({ notificationId: "n-1" });
+		mocks.withStoredNotificationSecrets.mockImplementation(
+			async (_provider, input) => input,
+		);
+	});
+
+	it("tests a saved channel with its stored secret after the update check", async () => {
+		mocks.withStoredNotificationSecrets.mockResolvedValue({
+			botToken: "123:saved-token",
+			chatId: "42",
+			messageThreadId: "",
+		});
+
+		await expect(
+			createCaller().testTelegramConnection({
+				notificationId: "notification-1",
+				botToken: REDACTED_NOTIFICATION_SECRET,
+				chatId: "42",
+				messageThreadId: "",
+			}),
+		).resolves.toBe(true);
+
+		expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
+			notification: ["update"],
+		});
+		expect(mocks.withStoredNotificationSecrets).toHaveBeenCalledWith(
+			"telegram",
+			{
+				botToken: REDACTED_NOTIFICATION_SECRET,
+				chatId: "42",
+				messageThreadId: "",
+			},
+			"notification-1",
+			"org-1",
+		);
+		expect(mocks.sendTelegramNotification).toHaveBeenCalledWith(
+			{ botToken: "123:saved-token", chatId: "42", messageThreadId: "" },
+			"Hi, From Dokploy 👋",
+		);
+	});
+
+	it("tests a new channel without the update check", async () => {
+		await createCaller().testSlackConnection({
+			webhookUrl: "https://hooks.slack.com/services/T/B/new",
+			channel: "ops",
+		});
+
+		expect(mocks.checkPermission).not.toHaveBeenCalledWith(expect.anything(), {
+			notification: ["update"],
+		});
+		expect(mocks.withStoredNotificationSecrets).toHaveBeenCalledWith(
+			"slack",
+			{
+				webhookUrl: "https://hooks.slack.com/services/T/B/new",
+				channel: "ops",
+			},
+			undefined,
+			"org-1",
+		);
+	});
+
+	it.each(["owner", "admin"])(
+		"reveals a saved secret to the %s and audits it",
+		async (role) => {
+			mocks.findNotificationSecret.mockResolvedValue({
+				notification: notificationWithSecrets,
+				value: "https://hooks.slack.com/services/T/B/secret",
+			});
+
+			await expect(
+				createCaller(role).revealSecret({
+					notificationId: "notification-1",
+					field: "webhookUrl",
+				}),
+			).resolves.toEqual({
+				value: "https://hooks.slack.com/services/T/B/secret",
+			});
+			expect(mocks.findNotificationSecret).toHaveBeenCalledWith(
+				"notification-1",
+				"org-1",
+				"webhookUrl",
+			);
+			expect(mocks.audit).toHaveBeenCalledWith(
+				expect.anything(),
+				expect.objectContaining({
+					action: "reveal",
+					resourceType: "notification",
+					resourceId: "notification-1",
+				}),
+			);
+		},
+	);
+
+	it("does not reveal a saved secret to a member", async () => {
+		await expect(
+			createCaller("member").revealSecret({
+				notificationId: "notification-1",
+				field: "webhookUrl",
+			}),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+		expect(mocks.findNotificationSecret).not.toHaveBeenCalled();
+		expect(mocks.audit).not.toHaveBeenCalled();
+	});
+
+	it("does not reveal a saved secret to an API key", async () => {
+		await expect(
+			createCaller("owner", { authMethod: "api-key" }).revealSecret({
+				notificationId: "notification-1",
+				field: "webhookUrl",
+			}),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		expect(mocks.findNotificationSecret).not.toHaveBeenCalled();
 	});
 
 	it("redacts notification secrets from one", async () => {

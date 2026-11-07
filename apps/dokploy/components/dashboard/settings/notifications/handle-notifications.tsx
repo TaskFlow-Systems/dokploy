@@ -46,6 +46,7 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/utils/api";
+import { NotificationSecretInput } from "./notification-secret-input";
 
 const notificationBaseSchema = z.object({
 	name: z.string().min(1, {
@@ -973,9 +974,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Webhook URL</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
-															{...field}
+															notificationId={notificationId}
+															secretField="webhookUrl"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 
@@ -1010,9 +1016,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Bot Token</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="6660491268:AAFMGmajZOVewpMNZCgJr5H7cpXpoZPgvXw"
-															{...field}
+															notificationId={notificationId}
+															secretField="botToken"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 
@@ -1065,9 +1076,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Webhook URL</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="https://discord.com/api/webhooks/123456789/ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-															{...field}
+															notificationId={notificationId}
+															secretField="webhookUrl"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 
@@ -1172,10 +1188,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 													<FormItem className="w-full">
 														<FormLabel>Password</FormLabel>
 														<FormControl>
-															<Input
-																type="password"
+															<NotificationSecretInput
 																placeholder="******************"
-																{...field}
+																notificationId={notificationId}
+																secretField="password"
+																name={field.name}
+																value={field.value}
+																onChange={field.onChange}
+																onBlur={field.onBlur}
 															/>
 														</FormControl>
 
@@ -1263,10 +1283,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>API Key</FormLabel>
 													<FormControl>
-														<Input
-															type="password"
+														<NotificationSecretInput
 															placeholder="re_********"
-															{...field}
+															notificationId={notificationId}
+															secretField="apiKey"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormMessage />
@@ -1369,9 +1393,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>App Token</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="AzxcvbnmKjhgfdsa..."
-															{...field}
+															notificationId={notificationId}
+															secretField="appToken"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormMessage />
@@ -1467,10 +1496,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Access Token</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="AzxcvbnmKjhgfdsa..."
-															{...field}
-															value={field.value ?? ""}
+															notificationId={notificationId}
+															secretField="accessToken"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormDescription>
@@ -1522,9 +1555,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Webhook URL</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="https://your-mattermost.com/hooks/xxx-generatedkey-xxx"
-															{...field}
+															notificationId={notificationId}
+															secretField="webhookUrl"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormMessage />
@@ -1577,9 +1615,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Webhook URL</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="https://api.example.com/webhook"
-															{...field}
+															notificationId={notificationId}
+															secretField="endpoint"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormDescription>
@@ -1664,9 +1707,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Webhook URL</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="https://open.larksuite.com/open-apis/bot/v2/hook/xxxxxxxxxxxxxxxxxxxxxxxx"
-															{...field}
+															notificationId={notificationId}
+															secretField="webhookUrl"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormMessage />
@@ -1685,9 +1733,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>Webhook URL</FormLabel>
 													<FormControl>
-														<Input
+														<NotificationSecretInput
 															placeholder="https://xxx.webhook.office.com/webhookb2/..."
-															{...field}
+															notificationId={notificationId}
+															secretField="webhookUrl"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
 														/>
 													</FormControl>
 													<FormDescription>
@@ -1710,7 +1763,15 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>User Key</FormLabel>
 													<FormControl>
-														<Input placeholder="ub3de9kl2q..." {...field} />
+														<NotificationSecretInput
+															placeholder="ub3de9kl2q..."
+															notificationId={notificationId}
+															secretField="userKey"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
+														/>
 													</FormControl>
 													<FormMessage />
 												</FormItem>
@@ -1723,7 +1784,15 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 												<FormItem>
 													<FormLabel>API Token</FormLabel>
 													<FormControl>
-														<Input placeholder="a3d9k2q7m4..." {...field} />
+														<NotificationSecretInput
+															placeholder="a3d9k2q7m4..."
+															notificationId={notificationId}
+															secretField="apiToken"
+															name={field.name}
+															value={field.value}
+															onChange={field.onChange}
+															onBlur={field.onBlur}
+														/>
 													</FormControl>
 													<FormMessage />
 												</FormItem>
@@ -2075,22 +2144,26 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 								try {
 									if (data.type === "slack") {
 										await testSlackConnection({
+											notificationId: notificationId || undefined,
 											webhookUrl: data.webhookUrl,
 											channel: data.channel,
 										});
 									} else if (data.type === "telegram") {
 										await testTelegramConnection({
+											notificationId: notificationId || undefined,
 											botToken: data.botToken,
 											chatId: data.chatId,
 											messageThreadId: data.messageThreadId || "",
 										});
 									} else if (data.type === "discord") {
 										await testDiscordConnection({
+											notificationId: notificationId || undefined,
 											webhookUrl: data.webhookUrl,
 											decoration: data.decoration,
 										});
 									} else if (data.type === "email") {
 										await testEmailConnection({
+											notificationId: notificationId || undefined,
 											smtpServer: data.smtpServer,
 											smtpPort: data.smtpPort,
 											username: data.username,
@@ -2100,12 +2173,14 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 										});
 									} else if (data.type === "resend") {
 										await testResendConnection({
+											notificationId: notificationId || undefined,
 											apiKey: data.apiKey,
 											fromAddress: data.fromAddress,
 											toAddresses: data.toAddresses,
 										});
 									} else if (data.type === "gotify") {
 										await testGotifyConnection({
+											notificationId: notificationId || undefined,
 											serverUrl: data.serverUrl,
 											appToken: data.appToken,
 											priority: data.priority ?? 0,
@@ -2113,6 +2188,7 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 										});
 									} else if (data.type === "ntfy") {
 										await testNtfyConnection({
+											notificationId: notificationId || undefined,
 											serverUrl: data.serverUrl,
 											topic: data.topic,
 											accessToken: data.accessToken || "",
@@ -2120,16 +2196,19 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 										});
 									} else if (data.type === "mattermost") {
 										await testMattermostConnection({
+											notificationId: notificationId || undefined,
 											webhookUrl: data.webhookUrl,
 											channel: data.channel || undefined,
 											username: data.username || undefined,
 										});
 									} else if (data.type === "lark") {
 										await testLarkConnection({
+											notificationId: notificationId || undefined,
 											webhookUrl: data.webhookUrl,
 										});
 									} else if (data.type === "teams") {
 										await testTeamsConnection({
+											notificationId: notificationId || undefined,
 											webhookUrl: data.webhookUrl,
 										});
 									} else if (data.type === "custom") {
@@ -2144,6 +2223,7 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 													)
 												: undefined;
 										await testCustomConnection({
+											notificationId: notificationId || undefined,
 											endpoint: data.endpoint,
 											headers: headersRecord,
 										});
@@ -2157,6 +2237,7 @@ export const HandleNotifications = ({ notificationId }: Props) => {
 											);
 										}
 										await testPushoverConnection({
+											notificationId: notificationId || undefined,
 											userKey: data.userKey,
 											apiToken: data.apiToken,
 											priority: data.priority ?? 0,

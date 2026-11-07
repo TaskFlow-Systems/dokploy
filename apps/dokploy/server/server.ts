@@ -6,6 +6,7 @@ import {
 	createDefaultProbeShield,
 	createDefaultServerTraefikConfig,
 	createDefaultTraefikConfig,
+	encryptStoredNotificationSecrets,
 	IS_CLOUD,
 	initCancelDeployments,
 	initCronJobs,
@@ -143,6 +144,9 @@ void app.prepare().then(async () => {
 			await initSchedules();
 			await initCancelDeployments();
 			await initVolumeBackupsCronJobs();
+			await encryptStoredNotificationSecrets().catch((error) => {
+				console.error("Failed to encrypt notification secrets:", error);
+			});
 			await sendDokployRestartNotifications();
 			void cleanupOldDokployImages();
 			startDiskHistorySampler();

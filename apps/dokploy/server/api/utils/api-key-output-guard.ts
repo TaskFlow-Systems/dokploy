@@ -28,6 +28,7 @@ const API_KEY_DENIED_PROCEDURES = new Set([
 	"docker.getConfig",
 	"docker.readContainerFile",
 	"dockerVolume.readVolumeFile",
+	"notification.revealSecret",
 	"settings.readTraefikEnv",
 	"user.revealApiKey",
 ]);

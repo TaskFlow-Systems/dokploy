@@ -38,16 +38,21 @@ import {
 	teams,
 	telegram,
 } from "@dokploy/server/db/schema";
+import { isEncrypted } from "@dokploy/server/lib/encryption";
 import { assertStoredSecretTargetUnchanged } from "@dokploy/server/utils/security/redaction";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { eq, isNotNull, sql } from "drizzle-orm";
+import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import type { z } from "zod";
 import {
+	isRedactedNotificationSecret,
+	type NotificationSecretProvider,
 	normalizeNotificationBaseUrl,
 	normalizeNotificationHttpUrl,
 	normalizeNotificationSmtpHost,
 	notificationHeadersUpdateValue,
 	notificationOptionalSecretUpdateValue,
+	notificationSecretFields,
 	notificationSecretUpdateValue,
 } from "../utils/notifications/security";
 
@@ -986,6 +991,172 @@ export const findNotificationById = async (notificationId: string) => {
 	return notification;
 };
 
+const sameTarget = <T>(
+	raw: T | undefined,
+	normalize: (value: T) => T,
+	stored: T,
+) => {
+	if (raw === undefined || raw === stored) {
+		return stored;
+	}
+	return normalize(raw);
+};
+
+// The form gets a placeholder in place of every saved secret, so Test on a
+// saved channel sends that placeholder. Here it becomes the stored secret,
+// which may only reach the endpoint it was saved with, as on an update.
+export const withStoredNotificationSecrets = async <
+	T extends Record<string, unknown>,
+>(
+	provider: NotificationSecretProvider,
+	input: T,
+	notificationId: string | undefined,
+	organizationId: string,
+): Promise<T> => {
+	const fields = notificationSecretFields[provider] as readonly string[];
+	const redactedFields = fields.filter((field) =>
+		isRedactedNotificationSecret(input[field]),
+	);
+	const headers =
+		provider === "custom"
+			? (input.headers as Record<string, string> | undefined)
+			: undefined;
+	const redactedHeaders = Object.entries(headers ?? {})
+		.filter(([, value]) => isRedactedNotificationSecret(value))
+		.map(([key]) => key);
+	if (redactedFields.length === 0 && redactedHeaders.length === 0) {
+		return input;
+	}
+
+	if (!notificationId) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `Enter the ${[...redactedFields, ...redactedHeaders].join(", ")} to test this channel`,
+		});
+	}
+	const notification = await findNotificationById(notificationId);
+	if (notification.organizationId !== organizationId) {
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: "You are not authorized to access this notification",
+		});
+	}
+	const stored = notification[provider] as Record<string, unknown> | null;
+	if (!stored) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `This notification has no saved ${provider} settings`,
+		});
+	}
+
+	const next: Record<string, unknown> = { ...input };
+	for (const field of redactedFields) {
+		if (!stored[field]) {
+			throw new TRPCError({
+				code: "BAD_REQUEST",
+				message: `Enter the ${field} to test this channel`,
+			});
+		}
+		next[field] = stored[field];
+	}
+	if (redactedHeaders.length > 0) {
+		const storedHeaders = (stored.headers ?? {}) as Record<string, string>;
+		const nextHeaders = { ...headers };
+		for (const key of redactedHeaders) {
+			if (!(key in storedHeaders)) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: `Enter the value of the ${key} header to test this channel`,
+				});
+			}
+			nextHeaders[key] = storedHeaders[key] as string;
+		}
+		next.headers = nextHeaders;
+	}
+
+	if (provider === "email" && redactedFields.includes("password")) {
+		const current = stored as typeof email.$inferSelect;
+		assertStoredSecretTargetUnchanged("SMTP password", {
+			smtpServer: [
+				sameTarget(
+					input.smtpServer as string | undefined,
+					(value) => normalizeNotificationSmtpHost(value),
+					current.smtpServer,
+				),
+				current.smtpServer,
+			],
+			smtpPort: [input.smtpPort ?? current.smtpPort, current.smtpPort],
+			username: [input.username ?? current.username, current.username],
+		});
+	}
+	if (
+		(provider === "gotify" && redactedFields.includes("appToken")) ||
+		(provider === "ntfy" && redactedFields.includes("accessToken"))
+	) {
+		const serverUrl = stored.serverUrl as string;
+		assertStoredSecretTargetUnchanged(`${provider} token`, {
+			serverUrl: [
+				sameTarget(
+					input.serverUrl as string | undefined,
+					(value) => normalizeNotificationBaseUrl(value),
+					serverUrl,
+				),
+				serverUrl,
+			],
+		});
+	}
+	if (
+		provider === "custom" &&
+		redactedHeaders.length > 0 &&
+		!redactedFields.includes("endpoint")
+	) {
+		const endpoint = stored.endpoint as string;
+		assertStoredSecretTargetUnchanged("custom notification headers", {
+			endpoint: [
+				sameTarget(
+					input.endpoint as string | undefined,
+					(value) =>
+						normalizeNotificationHttpUrl(value, { allowPrivateNetwork: false }),
+					endpoint,
+				),
+				endpoint,
+			],
+		});
+	}
+
+	return next as T;
+};
+
+export const findNotificationSecret = async (
+	notificationId: string,
+	organizationId: string,
+	field: string,
+) => {
+	const notification = await findNotificationById(notificationId);
+	if (notification.organizationId !== organizationId) {
+		throw new TRPCError({
+			code: "UNAUTHORIZED",
+			message: "You are not authorized to access this notification",
+		});
+	}
+	const provider = notification.notificationType as NotificationSecretProvider;
+	const fields = notificationSecretFields[provider] as
+		| readonly string[]
+		| undefined;
+	const stored = notification[provider] as Record<string, unknown> | null;
+	if (!fields?.includes(field) || !stored) {
+		throw new TRPCError({
+			code: "BAD_REQUEST",
+			message: `This notification has no ${field}`,
+		});
+	}
+	const value = stored[field];
+	return {
+		notification,
+		value: typeof value === "string" ? value : "",
+	};
+};
+
 export const removeNotificationById = async (notificationId: string) => {
 	const result = await db
 		.delete(notifications)
@@ -1409,4 +1580,44 @@ export const updatePushoverNotification = async (
 
 		return newDestination;
 	});
+};
+
+const encryptedSecretColumns: [PgTable, PgColumn, PgColumn[]][] = [
+	[slack, slack.slackId, [slack.webhookUrl]],
+	[telegram, telegram.telegramId, [telegram.botToken]],
+	[discord, discord.discordId, [discord.webhookUrl]],
+	[email, email.emailId, [email.password]],
+	[resend, resend.resendId, [resend.apiKey]],
+	[gotify, gotify.gotifyId, [gotify.appToken]],
+	[ntfy, ntfy.ntfyId, [ntfy.accessToken]],
+	[mattermost, mattermost.mattermostId, [mattermost.webhookUrl]],
+	[custom, custom.customId, [custom.endpoint]],
+	[lark, lark.larkId, [lark.webhookUrl]],
+	[pushover, pushover.pushoverId, [pushover.userKey, pushover.apiToken]],
+	[teams, teams.teamsId, [teams.webhookUrl]],
+];
+
+// The columns read plain text through, so rows saved before they were
+// encrypted stay readable; this writes each of them once more, encrypted.
+export const encryptStoredNotificationSecrets = async () => {
+	let encrypted = 0;
+	for (const [table, id, columns] of encryptedSecretColumns) {
+		for (const column of columns) {
+			const rows = await db
+				.select({ id: sql<string>`${id}`, value: sql<string>`${column}` })
+				.from(table)
+				.where(isNotNull(column));
+			for (const row of rows) {
+				if (!row.value || isEncrypted(row.value)) {
+					continue;
+				}
+				await db
+					.update(table)
+					.set({ [column.name]: row.value } as never)
+					.where(eq(id, row.id));
+				encrypted += 1;
+			}
+		}
+	}
+	return encrypted;
 };
