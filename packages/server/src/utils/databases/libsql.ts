@@ -1,7 +1,9 @@
 import type { InferResultType } from "@dokploy/server/types/with";
 import type { CreateServiceOptions, PortConfig } from "dockerode";
+import { getLibsqlGrpcCa } from "../../services/libsql-grpc-ca";
 import { resolveServiceNetworks } from "../../services/network";
 import { buildDokployLabels } from "../docker/dokploy-labels";
+import { createOrUpdateSwarmService } from "../docker/swarm-service";
 import {
 	calculateResources,
 	generateBindMounts,
@@ -10,9 +12,15 @@ import {
 	generateVolumeMounts,
 	prepareEnvironmentVariables,
 } from "../docker/utils";
-import { createOrUpdateSwarmService } from "../docker/swarm-service";
 import { getRemoteDocker } from "../servers/remote-docker";
 import { withResolvedVaultRefs } from "../vault";
+import {
+	LIBSQL_GRPC_PRIMARY_FLAGS,
+	LIBSQL_GRPC_REPLICA_FLAGS,
+	LIBSQL_GRPC_TLS_SETUP,
+	toLibsqlGrpcTlsUrl,
+} from "./libsql-grpc-flags";
+import { libsqlGrpcTlsEnv } from "./libsql-grpc-tls";
 import {
 	getCustomLibsqlCommand,
 	getLibsqlPrimaryUrlProblem,
@@ -26,8 +34,10 @@ export type LibsqlNested = InferResultType<
 	}
 >;
 
-const PRIMARY_COMMAND =
-	"sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000";
+// Port 5001 serves the whole database to any node that connects, so it takes
+// only nodes with a certificate of the organization's authority.
+const PRIMARY_COMMAND = `${LIBSQL_GRPC_TLS_SETUP}
+exec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000 ${LIBSQL_GRPC_PRIMARY_FLAGS}`;
 
 // No --grpc-listen-addr: sqld refuses it together with a primary URL.
 // A replica deployed while its primary URL never reached sqld ran as a primary of
@@ -38,7 +48,8 @@ const REPLICA_COMMAND = `if ls iku.db/dbs/*/data >/dev/null 2>&1 && ! ls iku.db/
 	mv iku.db "$kept" || exit 1
 	echo "This node's own data is kept in $kept: sqld would overwrite it with the primary's."
 fi
-exec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --admin-listen-addr 0.0.0.0:5000`;
+${LIBSQL_GRPC_TLS_SETUP}
+exec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --admin-listen-addr 0.0.0.0:5000 ${LIBSQL_GRPC_REPLICA_FLAGS}`;
 
 // These fail here, with the running service left as it is.
 const assertReplicaCanConnect = ({
@@ -82,6 +93,30 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 	if (isReplica) {
 		assertReplicaCanConnect(libsql);
 	}
+	const customCommand = getCustomLibsqlCommand(command);
+	if (
+		!isReplica &&
+		customCommand?.includes("--grpc-listen-addr") &&
+		!customCommand.includes("--grpc-tls")
+	) {
+		throw new Error(
+			`A custom libSQL command that listens for gRPC has to require the panel's certificate: add ${LIBSQL_GRPC_PRIMARY_FLAGS}`,
+		);
+	}
+	const docker = await getRemoteDocker(libsql.serverId);
+	const currentEnv = await docker
+		.getService(appName)
+		.inspect({ abortSignal: AbortSignal.timeout(30_000) })
+		.then(
+			(service) =>
+				service.Spec?.TaskTemplate?.ContainerSpec?.Env as string[] | undefined,
+			() => undefined,
+		);
+	const grpcTlsEnv = await libsqlGrpcTlsEnv(
+		await getLibsqlGrpcCa(libsql.environment.project.organizationId),
+		appName,
+		currentEnv,
+	);
 
 	const basicAuth = Buffer.from(
 		`${databaseUser}:${databasePassword}`,
@@ -91,13 +126,14 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 	// sqld reads SQLD_PRIMARY_GRPC_URL by itself, so this free text stays out of the
 	// shell and a custom command gets it too. Only the image's entrypoint reads
 	// SQLD_PRIMARY_URL, and a custom command may refer to it.
+	const primaryUrl = toLibsqlGrpcTlsUrl(sqldPrimaryUrl ?? "");
 	const defaultLibsqlEnv = `SQLD_NODE="${sqldNode}"\nSQLD_HTTP_AUTH="basic:${basicAuth}"${
 		env ? `\n${env}` : ""
 	}${
 		isReplica
-			? `\nSQLD_PRIMARY_URL="${sqldPrimaryUrl}"\nSQLD_PRIMARY_GRPC_URL="${sqldPrimaryUrl}"`
+			? `\nSQLD_PRIMARY_URL="${primaryUrl}"\nSQLD_PRIMARY_GRPC_URL="${primaryUrl}"`
 			: ""
-	}`;
+	}\n${grpcTlsEnv}`;
 
 	const resolvedNetworks = await resolveServiceNetworks(libsql);
 
@@ -129,11 +165,11 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 	});
 	const filesMount = generateFileMounts(appName, libsql);
 
-	const docker = await getRemoteDocker(libsql.serverId);
-
-	let finalCommand =
-		getCustomLibsqlCommand(command) ??
-		(isReplica ? REPLICA_COMMAND : PRIMARY_COMMAND);
+	let finalCommand = customCommand
+		? `${LIBSQL_GRPC_TLS_SETUP}\n${customCommand}`
+		: isReplica
+			? REPLICA_COMMAND
+			: PRIMARY_COMMAND;
 	if (enableNamespaces) {
 		finalCommand += " --enable-namespaces";
 	}

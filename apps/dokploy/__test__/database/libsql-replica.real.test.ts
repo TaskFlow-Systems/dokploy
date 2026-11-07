@@ -6,8 +6,30 @@ import {
 	buildLibsql,
 	type LibsqlNested,
 } from "@dokploy/server/utils/databases/libsql";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+	LIBSQL_GRPC_REPLICA_FLAGS,
+	LIBSQL_GRPC_TLS_SETUP,
+} from "@dokploy/server/utils/databases/libsql-grpc-flags";
+import {
+	createLibsqlGrpcCa,
+	issueLibsqlGrpcCertificate,
+} from "@dokploy/server/utils/databases/libsql-grpc-tls";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { buildLibsqlUrl } from "@/lib/database-connection-url";
+
+const authority = vi.hoisted(() => ({
+	ca: undefined as Awaited<ReturnType<typeof createLibsqlGrpcCa>> | undefined,
+}));
+
+vi.mock("@dokploy/server/services/libsql-grpc-ca", () => ({
+	getLibsqlGrpcCa: async () => {
+		const { createLibsqlGrpcCa } = await import(
+			"@dokploy/server/utils/databases/libsql-grpc-tls"
+		);
+		authority.ca ??= await createLibsqlGrpcCa("org");
+		return authority.ca;
+	},
+}));
 
 const execFileAsync = promisify(execFile);
 
@@ -26,6 +48,10 @@ const RUN_ID = `${CHECKOUT_ID}-${Date.now()}`;
 const NETWORK = `real-libsql-net-${RUN_ID}`;
 const CLIENT = `real-libsql-client-${RUN_ID}`;
 const RECOVERY = `real-libsql-recovery-${RUN_ID}`;
+const INTRUDERS = [
+	`real-libsql-intruder-plain-${RUN_ID}`,
+	`real-libsql-intruder-foreign-${RUN_ID}`,
+];
 const SPECIAL_PASSWORD = "p@ss:w?rd#1%41";
 
 const appNames: string[] = [];
@@ -355,6 +381,9 @@ describe("libsql replica", () => {
 
 		await ignoreErrors(["rm", "-f", "-v", CLIENT]);
 		await ignoreErrors(["rm", "-f", "-v", RECOVERY]);
+		for (const intruder of INTRUDERS) {
+			await ignoreErrors(["rm", "-f", "-v", intruder]);
+		}
 		for (const appName of appNames) {
 			await ignoreErrors(["service", "rm", appName]);
 		}
@@ -549,11 +578,25 @@ describe("libsql replica", () => {
 	);
 
 	it(
-		"keeps a replica that ran the image's entrypoint replicating, with nothing set aside",
+		"keeps a pair that ran without TLS replicating once both are deployed with certificates",
 		async () => {
-			const primary = await deployPrimary("entrypoint-source");
-			await sql(primary, "create table t(v text)");
-			await sql(primary, "insert into t values ('before-move')");
+			// What the previous build left: a primary whose port 5001 took any node,
+			// and a replica that ran the image's entrypoint against it.
+			const primary = fixture("plain-primary", { command: "" });
+			await deployThroughEntrypoint(
+				primary,
+				"--env",
+				"SQLD_GRPC_LISTEN_ADDR=0.0.0.0:5001",
+			);
+			await waitUntil(
+				`${primary.appName} to answer`,
+				async () => {
+					await runSql(primary.appName, "create table if not exists t(v text)");
+					return true;
+				},
+				() => describeService(primary.appName),
+			);
+			await runSql(primary.appName, "insert into t values ('before-move')");
 
 			const moved = replicaOf(primary, "entrypoint-replica", { command: "" });
 			await deployThroughEntrypoint(
@@ -571,6 +614,7 @@ describe("libsql replica", () => {
 				() => describeService(moved.appName),
 			);
 
+			await redeploy(primary);
 			await redeploy(moved);
 
 			await waitForRows(moved, "select count(*) from t", [1]);
@@ -582,14 +626,86 @@ describe("libsql replica", () => {
 	);
 
 	it(
-		"makes a replica of a custom command that has no replication flags",
+		"refuses a node without a certificate of the organization's authority",
+		async () => {
+			const primary = await deployPrimary("guarded");
+			await sql(primary, "create table t(v text)");
+			await sql(primary, "insert into t values ('private-row')");
+
+			const foreign = await issueLibsqlGrpcCertificate(
+				await createLibsqlGrpcCa("other"),
+				"intruder",
+			);
+			const encode = (pem: string) => Buffer.from(pem).toString("base64");
+			const [plain, stranger] = INTRUDERS as [string, string];
+			const startIntruder = (name: string, script: string, ...env: string[]) =>
+				dockerCli(
+					"run",
+					"-d",
+					"--name",
+					name,
+					"--network",
+					NETWORK,
+					"--network-alias",
+					name,
+					"-e",
+					"SQLD_NODE=replica",
+					...env.flatMap((value) => ["-e", value]),
+					"--entrypoint",
+					"/bin/sh",
+					IMAGE,
+					"-c",
+					script,
+				);
+			await startIntruder(
+				plain,
+				`exec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --primary-grpc-url http://${primary.appName}:5001`,
+			);
+			await startIntruder(
+				stranger,
+				`${LIBSQL_GRPC_TLS_SETUP}\nexec sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --primary-grpc-url https://${primary.appName}:5001 ${LIBSQL_GRPC_REPLICA_FLAGS}`,
+				`DOKPLOY_GRPC_CA=${encode(authority.ca?.certificate ?? "")}`,
+				`DOKPLOY_GRPC_CERT=${encode(foreign.certificate)}`,
+				`DOKPLOY_GRPC_KEY=${encode(foreign.privateKey)}`,
+			);
+
+			// A replica that cannot reach its primary keeps its requests waiting,
+			// so the refusal shows in its log, and no request may return the row.
+			for (const intruder of INTRUDERS) {
+				const deadline = Date.now() + WAIT_TIMEOUT_MS;
+				let refused = false;
+				while (!refused && Date.now() < deadline) {
+					const rows = await runSql(intruder, "select v from t").catch(
+						(error: Error) => [error.message],
+					);
+					expect(rows).not.toContain("private-row");
+					const { stdout, stderr } = await execFileAsync("docker", [
+						"logs",
+						intruder,
+					]);
+					refused = `${stdout}${stderr}`.includes(
+						"error connecting to primary",
+					);
+				}
+				expect(refused, `${intruder} was refused`).toBe(true);
+			}
+			await expect(
+				runSql(plain, "insert into t values ('written-by-intruder')"),
+			).rejects.toThrow();
+			expect(await sql(primary, "select v from t")).toEqual(["private-row"]);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"makes a replica of a custom command that passes the certificate flags",
 		async () => {
 			const primary = await deployPrimary("custom-primary");
 			await sql(primary, "create table t(v text)");
 			await sql(primary, "insert into t values ('from-primary')");
 
 			const replica = replicaOf(primary, "custom-replica", {
-				command: "sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080",
+				command: `sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 ${LIBSQL_GRPC_REPLICA_FLAGS}`,
 			});
 			await buildLibsql(replica);
 			await waitForRows(replica, "select v from t", ["from-primary"]);

@@ -90,7 +90,7 @@ export const ShowLibsqlPrimaryUrl = ({ libsqlId }: Props) => {
 										<FormLabel>Sqld Primary URL</FormLabel>
 										<FormControl>
 											<Input
-												placeholder="http://<primary-app-name>:5001"
+												placeholder="https://<primary-app-name>:5001"
 												autoComplete="off"
 												disabled={!canEdit}
 												{...field}

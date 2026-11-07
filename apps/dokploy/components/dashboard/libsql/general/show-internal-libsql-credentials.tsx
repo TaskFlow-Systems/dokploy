@@ -11,7 +11,10 @@ import {
 	SelectValue,
 } from "@/components/ui/select";
 import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
-import { buildLibsqlUrl } from "@/lib/database-connection-url";
+import {
+	buildLibsqlGrpcUrl,
+	buildLibsqlUrl,
+} from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 interface Props {
@@ -135,24 +138,19 @@ export const ShowInternalLibsqlCredentials = ({ libsqlId }: Props) => {
 							{data?.sqldNode !== "replica" && (
 								<div className="flex flex-col gap-2 md:col-span-2">
 									<Label>Internal Replication Connection URL </Label>
-									<ToggleVisibilityInput
+									<Input
+										enableCopyButton
 										disabled
 										value={
-											credentials
-												? buildLibsqlUrl(credentials, {
-														host: credentials.appName,
-														port: 5001,
-													})
+											data
+												? buildLibsqlGrpcUrl({ host: data.appName, port: 5001 })
 												: ""
 										}
-										resolveValue={async () => {
-											const record = await reveal();
-											return buildLibsqlUrl(record, {
-												host: record.appName,
-												port: 5001,
-											});
-										}}
 									/>
+									<p className="text-xs text-muted-foreground">
+										Only replicas deployed by this panel connect here: the port
+										asks for a certificate of the panel.
+									</p>
 								</div>
 							)}
 						</div>

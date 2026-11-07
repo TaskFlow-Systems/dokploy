@@ -23,6 +23,15 @@ import {
 	waitForRollbackEnd,
 } from "./swarm-convergence-real";
 
+// The authority lives in the panel's database, which these tests leave out.
+vi.mock("@dokploy/server/services/libsql-grpc-ca", async () => {
+	const { createLibsqlGrpcCa } = await import(
+		"@dokploy/server/utils/databases/libsql-grpc-tls"
+	);
+	const ca = await createLibsqlGrpcCa("org");
+	return { getLibsqlGrpcCa: async () => ca };
+});
+
 describe("waitForSwarmServiceConvergence on real Docker: failed updates and builders", () => {
 	beforeAll(setUpRealSwarm, REAL_TEST_TIMEOUT);
 	afterAll(cleanUpRealSwarm, REAL_TEST_TIMEOUT);

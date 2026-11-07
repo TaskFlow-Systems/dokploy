@@ -25,7 +25,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
-import { buildLibsqlUrl } from "@/lib/database-connection-url";
+import {
+	buildLibsqlGrpcUrl,
+	buildLibsqlUrl,
+} from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
 const DockerProviderSchema = z.object({
@@ -110,14 +113,9 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 			? buildLibsqlUrl(record, { host: getIp ?? "", port: record.externalPort })
 			: "";
 	const connectionUrl = connectionUrlFor(credentials);
-	const connectionGRPCUrlFor = (record: typeof data) =>
-		record?.externalGRPCPort
-			? buildLibsqlUrl(record, {
-					host: getIp ?? "",
-					port: record.externalGRPCPort,
-				})
-			: "";
-	const connectionGRPCUrl = connectionGRPCUrlFor(credentials);
+	const connectionGRPCUrl = data?.externalGRPCPort
+		? buildLibsqlGrpcUrl({ host: getIp ?? "", port: data.externalGRPCPort })
+		: "";
 
 	return (
 		<div className="flex w-full flex-col gap-5">
@@ -232,13 +230,15 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 										<div className="grid w-full gap-8">
 											<div className="flex flex-col gap-3">
 												<Label>External GRPC Host</Label>
-												<ToggleVisibilityInput
+												<Input
+													enableCopyButton
 													value={connectionGRPCUrl}
-													resolveValue={async () =>
-														connectionGRPCUrlFor(await reveal())
-													}
 													disabled
 												/>
+												<p className="text-xs text-muted-foreground">
+													Only replicas deployed by this panel connect here: the
+													port asks for a certificate of the panel.
+												</p>
 											</div>
 										</div>
 									)}

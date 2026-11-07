@@ -1,4 +1,8 @@
 import {
+	LIBSQL_GRPC_REPLICA_FLAGS,
+	toLibsqlGrpcTlsUrl,
+} from "@dokploy/server/utils/databases/libsql-grpc-flags";
+import {
 	getCustomLibsqlCommand,
 	getLibsqlPrimaryUrlProblem,
 } from "@dokploy/server/utils/databases/libsql-primary-url";
@@ -31,6 +35,7 @@ describe("getLibsqlPrimaryUrlProblem", () => {
 		["http://panel:p%40ss%3Aw%3Frd%231%2541@primary:5001"],
 		[`http://panel:${REDACTED_SECRET_VALUE}@primary:5001`],
 		["HTTP://primary:5001"],
+		["https://primary:5001"],
 	])("accepts %s", (url) => {
 		expect(getLibsqlPrimaryUrlProblem(url, null)).toBeNull();
 	});
@@ -50,25 +55,43 @@ describe("getLibsqlPrimaryUrlProblem", () => {
 		["http://primary:5001 "],
 		["http://u:p/ss@primary:5001"],
 	])("refuses %j", (url) => {
-		expect(getLibsqlPrimaryUrlProblem(url, null)).toContain("full http:// URL");
+		expect(getLibsqlPrimaryUrlProblem(url, null)).toContain(
+			"full http:// or https:// URL",
+		);
 	});
 
 	it.each([[null], [""], ["  "]])(
-		"refuses https with the default command, here %j",
+		"accepts https with the default command, which connects with TLS, here %j",
 		(command) => {
 			expect(
 				getLibsqlPrimaryUrlProblem("https://primary:5001", command),
-			).toContain("without TLS");
+			).toBeNull();
 		},
 	);
 
-	it("leaves https to a custom command, which can pass the TLS flags", () => {
+	it("asks a custom command for the certificate flags", () => {
 		expect(
 			getLibsqlPrimaryUrlProblem(
 				"https://primary:5001",
-				"sqld --primary-grpc-tls",
+				"sqld --db-path iku.db",
+			),
+		).toContain(LIBSQL_GRPC_REPLICA_FLAGS);
+		expect(
+			getLibsqlPrimaryUrlProblem(
+				"https://primary:5001",
+				`sqld --db-path iku.db ${LIBSQL_GRPC_REPLICA_FLAGS}`,
 			),
 		).toBeNull();
+	});
+});
+
+describe("toLibsqlGrpcTlsUrl", () => {
+	it.each([
+		["http://primary:5001", "https://primary:5001"],
+		["HTTP://u:p@primary:5001", "https://u:p@primary:5001"],
+		["https://primary:5001", "https://primary:5001"],
+	])("dials %s as %s", (url, expected) => {
+		expect(toLibsqlGrpcTlsUrl(url)).toBe(expected);
 	});
 });
 

@@ -1,12 +1,20 @@
+import { X509Certificate } from "node:crypto";
 import {
 	buildLibsql,
 	type LibsqlNested,
 } from "@dokploy/server/utils/databases/libsql";
+import {
+	LIBSQL_GRPC_PRIMARY_FLAGS,
+	LIBSQL_GRPC_REPLICA_FLAGS,
+	LIBSQL_GRPC_TLS_SETUP,
+} from "@dokploy/server/utils/databases/libsql-grpc-flags";
+import { createLibsqlGrpcCa } from "@dokploy/server/utils/databases/libsql-grpc-tls";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	createService: vi.fn(),
 	inspect: vi.fn(),
+	getLibsqlGrpcCa: vi.fn(),
 }));
 
 vi.mock("@dokploy/server/utils/servers/remote-docker", () => ({
@@ -24,9 +32,18 @@ vi.mock("@dokploy/server/services/network", () => ({
 	resolveServiceNetworks: vi.fn(async () => []),
 }));
 
+vi.mock("@dokploy/server/services/libsql-grpc-ca", () => ({
+	getLibsqlGrpcCa: mocks.getLibsqlGrpcCa,
+}));
+
+const ca = await createLibsqlGrpcCa("org");
+
 const PRIMARY_URL = "http://panel:p%40ss%3Aw%3Frd%231%2541@primary-app:5001";
-const PRIMARY_COMMAND =
+const TLS_PRIMARY_URL =
+	"https://panel:p%40ss%3Aw%3Frd%231%2541@primary-app:5001";
+const PRIMARY_SQLD =
 	"sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 --admin-listen-addr 0.0.0.0:5000";
+const PRIMARY_COMMAND = `${LIBSQL_GRPC_TLS_SETUP}\nexec ${PRIMARY_SQLD} ${LIBSQL_GRPC_PRIMARY_FLAGS}`;
 
 const fixture = (overrides: Partial<LibsqlNested> = {}) =>
 	({
@@ -71,13 +88,40 @@ describe("buildLibsql replica spec", () => {
 		mocks.inspect.mockRejectedValue(
 			Object.assign(new Error("no such service"), { statusCode: 404 }),
 		);
+		mocks.getLibsqlGrpcCa.mockResolvedValue(ca);
 	});
+
+	it.each([
+		["primary", { sqldNode: "primary", sqldPrimaryUrl: null }],
+		["replica", {}],
+	] as const)(
+		"gives a %s a certificate of its organization's authority",
+		async (_, overrides) => {
+			const { Env } = await containerSpec(fixture(overrides));
+			const value = (name: string) =>
+				Buffer.from(
+					(Env as string[])
+						.find((line) => line.startsWith(`${name}=`))
+						?.slice(name.length + 1) ?? "",
+					"base64",
+				).toString("utf8");
+
+			expect(mocks.getLibsqlGrpcCa).toHaveBeenCalledWith("org");
+			expect(value("DOKPLOY_GRPC_CA")).toBe(ca.certificate);
+			const certificate = new X509Certificate(value("DOKPLOY_GRPC_CERT"));
+			expect(
+				certificate.verify(new X509Certificate(ca.certificate).publicKey),
+			).toBe(true);
+			expect(certificate.subjectAltName).toContain("DNS:sqld");
+			expect(value("DOKPLOY_GRPC_KEY")).toContain("BEGIN PRIVATE KEY");
+		},
+	);
 
 	it("hands the primary URL to sqld in Env", async () => {
 		const { Env } = await containerSpec(fixture());
 
-		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${PRIMARY_URL}`);
-		expect(Env).toContain(`SQLD_PRIMARY_URL=${PRIMARY_URL}`);
+		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${TLS_PRIMARY_URL}`);
+		expect(Env).toContain(`SQLD_PRIMARY_URL=${TLS_PRIMARY_URL}`);
 	});
 
 	it("keeps shell syntax in the primary URL out of the command and unchanged in Env", async () => {
@@ -85,7 +129,9 @@ describe("buildLibsql replica spec", () => {
 		const { Args, Env } = await containerSpec(fixture({ sqldPrimaryUrl: url }));
 
 		expect(Args[1]).not.toContain("/tmp/pwn");
-		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${url}`);
+		expect(Env).toContain(
+			`SQLD_PRIMARY_GRPC_URL=${url.replace("http://", "https://")}`,
+		);
 	});
 
 	it("lets the stored URL win over the same name in the service env", async () => {
@@ -93,7 +139,7 @@ describe("buildLibsql replica spec", () => {
 			fixture({ env: "SQLD_PRIMARY_GRPC_URL=http://from-env:5001" }),
 		);
 
-		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${PRIMARY_URL}`);
+		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${TLS_PRIMARY_URL}`);
 		expect(Env.join("\n")).not.toContain("from-env");
 	});
 
@@ -120,12 +166,24 @@ describe("buildLibsql replica spec", () => {
 		);
 	});
 
-	it("runs a custom command as written and still hands it the URL", async () => {
-		const command = "sqld --db-path custom.db --http-listen-addr 0.0.0.0:8080";
+	it("runs a custom command after the certificate files and still hands it the URL", async () => {
+		const command = `sqld --db-path custom.db --http-listen-addr 0.0.0.0:8080 ${LIBSQL_GRPC_REPLICA_FLAGS}`;
 		const { Args, Env } = await containerSpec(fixture({ command }));
 
-		expect(Args[1]).toBe(command);
-		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${PRIMARY_URL}`);
+		expect(Args[1]).toBe(`${LIBSQL_GRPC_TLS_SETUP}\n${command}`);
+		expect(Env).toContain(`SQLD_PRIMARY_GRPC_URL=${TLS_PRIMARY_URL}`);
+	});
+
+	it("refuses a custom replica command without the certificate flags", async () => {
+		await expect(
+			buildLibsql(
+				fixture({
+					command: "sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080",
+				}),
+			),
+		).rejects.toThrow(LIBSQL_GRPC_REPLICA_FLAGS);
+
+		expect(mocks.createService).not.toHaveBeenCalled();
 	});
 
 	it.each([
@@ -147,8 +205,7 @@ describe("buildLibsql replica spec", () => {
 		await expect(
 			buildLibsql(
 				fixture({
-					command:
-						"sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001",
+					command: `sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --grpc-listen-addr 0.0.0.0:5001 ${LIBSQL_GRPC_REPLICA_FLAGS}`,
 				}),
 			),
 		).rejects.toThrow("cannot listen for gRPC");
@@ -162,23 +219,21 @@ describe("buildLibsql replica spec", () => {
 		["cleared", ""],
 		["blank", "  "],
 	])(
-		"refuses https with a %s command, which is the default and has no TLS flags",
+		"takes https with a %s command, the default one, which connects with TLS",
 		async (_, command) => {
-			await expect(
-				buildLibsql(
-					fixture({ command, sqldPrimaryUrl: "https://primary-app:5001" }),
-				),
-			).rejects.toThrow("without TLS");
+			const { Args, Env } = await containerSpec(
+				fixture({ command, sqldPrimaryUrl: "https://primary-app:5001" }),
+			);
 
-			expect(mocks.inspect).not.toHaveBeenCalled();
-			expect(mocks.createService).not.toHaveBeenCalled();
+			expect(Args[1].split("\n").at(-1)).toContain(LIBSQL_GRPC_REPLICA_FLAGS);
+			expect(Env).toContain("SQLD_PRIMARY_GRPC_URL=https://primary-app:5001");
 		},
 	);
 
 	it("refuses a primary URL without a scheme, on which sqld panics at every request", async () => {
 		await expect(
 			buildLibsql(fixture({ sqldPrimaryUrl: "primary-app:5001" })),
-		).rejects.toThrow("full http:// URL");
+		).rejects.toThrow("full http:// or https:// URL");
 
 		expect(mocks.inspect).not.toHaveBeenCalled();
 		expect(mocks.createService).not.toHaveBeenCalled();
@@ -229,24 +284,27 @@ describe("buildLibsql replica spec", () => {
 		expect(Args[1]).toBe(PRIMARY_COMMAND);
 	});
 
-	it("lets a custom command use https, since it can pass the TLS flags", async () => {
-		const command =
-			"sqld --db-path iku.db --http-listen-addr 0.0.0.0:8080 --primary-grpc-tls";
-		const { Args, Env } = await containerSpec(
-			fixture({ command, sqldPrimaryUrl: "https://primary-app:5001" }),
-		);
-
-		expect(Args[1]).toBe(command);
-		expect(Env).toContain("SQLD_PRIMARY_GRPC_URL=https://primary-app:5001");
-	});
-
-	it("leaves a primary's custom command alone", async () => {
-		const command = `${PRIMARY_COMMAND} --max-log-size 100`;
+	it("runs a primary's custom command with the certificate flags after the files", async () => {
+		const command = `${PRIMARY_SQLD} ${LIBSQL_GRPC_PRIMARY_FLAGS} --max-log-size 100`;
 		const { Args } = await containerSpec(
 			fixture({ sqldNode: "primary", sqldPrimaryUrl: null, command }),
 		);
 
-		expect(Args[1]).toBe(command);
+		expect(Args[1]).toBe(`${LIBSQL_GRPC_TLS_SETUP}\n${command}`);
+	});
+
+	it("refuses a primary's custom command that listens for gRPC without TLS", async () => {
+		await expect(
+			buildLibsql(
+				fixture({
+					sqldNode: "primary",
+					sqldPrimaryUrl: null,
+					command: `${PRIMARY_SQLD} --max-log-size 100`,
+				}),
+			),
+		).rejects.toThrow(LIBSQL_GRPC_PRIMARY_FLAGS);
+
+		expect(mocks.createService).not.toHaveBeenCalled();
 	});
 
 	it("leaves a primary's command as it was and gives it no primary URL", async () => {
