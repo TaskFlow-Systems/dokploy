@@ -48,7 +48,10 @@ export const UserNav = () => {
 					</Avatar>
 					<div className="grid flex-1 text-left text-sm leading-tight">
 						<span className="truncate font-semibold">Account</span>
-						<span className="truncate text-xs">{data?.user?.email}</span>
+						{/* The line keeps its height before the email arrives, so "Account" does not move. */}
+						<span className="block h-4 truncate text-xs">
+							{data?.user?.email}
+						</span>
 					</div>
 					<ChevronsUpDown className="ml-auto size-4" />
 				</SidebarMenuButton>

@@ -72,3 +72,31 @@ describe("sidebar links before the user's permissions are known", () => {
 		expect(source).not.toContain("{filteredSettings.map(");
 	});
 });
+
+describe("user menu and footer text while their data loads", () => {
+	const read = (file: string) =>
+		readFileSync(
+			path.resolve(__dirname, "../../components/layouts", file),
+			"utf8",
+		);
+
+	it("keeps the email line's height before user.get answers", () => {
+		const source = read("user-nav.tsx");
+		expect(source).toContain('<span className="block h-4 truncate text-xs">');
+		expect(source).not.toContain(
+			'<span className="truncate text-xs">{data?.user?.email}</span>',
+		);
+	});
+
+	it("holds one line for the white-label footer text while it loads", () => {
+		const source = read("side.tsx");
+		expect(source).toContain("isWhitelabelingPending");
+		expect(source).toContain(
+			"isWhitelabelingPending && haveValidLicense === true",
+		);
+		expect(source).toContain(
+			"(isFooterTextPending || whitelabeling?.footerText) && (",
+		);
+		expect(source).toContain('className="min-h-4 px-3 text-xs');
+	});
+});
