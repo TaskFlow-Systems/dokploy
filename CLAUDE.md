@@ -1,4 +1,5 @@
 ## Code style
+
 - Don't write comments that restate what the code already says.
 - Comment only the "why" when something isn't obvious: workarounds,
   counterintuitive decisions, constraints from an external API.
@@ -80,6 +81,8 @@ The connection strings the panel shows come from `apps/dokploy/lib/mongo-connect
 ## Database connection strings
 
 The strings the panel shows for Postgres, MySQL, MariaDB, Redis and libSQL come from `apps/dokploy/lib/database-connection-url.ts`, and Mongo's builders use its `encodeCredentials` and `formatUrlHost`. The user, the password and the database name are percent-encoded, because `DATABASE_PASSWORD_REGEX` allows `@ : ? # %` and no validator limits the name. A host with a colon gets brackets, because `getPublicIpWithFallback` falls back to IPv6 and `server.ipAddress` accepts any text. Two clients fail on such a string for reasons of their own: `@libsql/client` refuses any URL with credentials, and `node-redis` looks up the address with its brackets.
+
+`*.one` returns the passwords as `__DOKPLOY_REDACTED_SECRET__`, so these strings used to carry the placeholder, and the copy button gave a string that could not connect. The credentials cards build them through `useDatabaseCredentials` (`hooks/use-database-credentials.ts`): the first eye or copy click on a value that holds the placeholder calls `<type>.revealCredentials`, and every string of the card is built again from the answer. That procedure has the check of `revealEnvironment`, the service's `envVars` read permission, because a database's env shows as much, and `api-key-output-guard.ts` refuses it to API keys. A password change forgets the answer. `__test__/components/database-credentials-reveal.test.ts` fails if a card shows a string built from `data` again.
 
 ## Gravatar
 

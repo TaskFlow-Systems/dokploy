@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildExternalMongoUrl } from "@/lib/mongo-connection-url";
 import { api } from "@/utils/api";
 
@@ -49,6 +50,11 @@ interface Props {
 export const ShowExternalMongoCredentials = ({ mongoId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.mongo.one.useQuery({ mongoId });
+	const { credentials, reveal } = useDatabaseCredentials(
+		"mongo",
+		mongoId,
+		data,
+	);
 	const { mutateAsync, isPending } = api.mongo.saveExternalPort.useMutation();
 	const getIp = data?.server?.ipAddress || ip;
 	const form = useForm({
@@ -78,14 +84,16 @@ export const ShowExternalMongoCredentials = ({ mongoId }: Props) => {
 			});
 	};
 
-	const connectionUrl = data?.externalPort
-		? buildExternalMongoUrl({
-				databaseUser: data.databaseUser,
-				databasePassword: data.databasePassword,
-				host: getIp ?? "",
-				port: data.externalPort,
-			})
-		: "";
+	const connectionUrlFor = (record: typeof data) =>
+		record?.externalPort
+			? buildExternalMongoUrl({
+					databaseUser: record.databaseUser,
+					databasePassword: record.databasePassword,
+					host: getIp ?? "",
+					port: record.externalPort,
+				})
+			: "";
+	const connectionUrl = connectionUrlFor(credentials);
 
 	return (
 		<>
@@ -146,7 +154,13 @@ export const ShowExternalMongoCredentials = ({ mongoId }: Props) => {
 									<div className="grid w-full gap-8">
 										<div className="flex flex-col gap-3">
 											<Label>External Host</Label>
-											<ToggleVisibilityInput value={connectionUrl} disabled />
+											<ToggleVisibilityInput
+												value={connectionUrl}
+												resolveValue={async () =>
+													connectionUrlFor(await reveal())
+												}
+												disabled
+											/>
 										</div>
 									</div>
 								)}

@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildLibsqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -65,6 +66,11 @@ interface Props {
 export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.libsql.one.useQuery({ libsqlId });
+	const { credentials, reveal } = useDatabaseCredentials(
+		"libsql",
+		libsqlId,
+		data,
+	);
 	const { mutateAsync, isPending } = api.libsql.saveExternalPorts.useMutation();
 	const getIp = data?.server?.ipAddress || ip;
 
@@ -99,12 +105,19 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 			});
 	};
 
-	const connectionUrl = data?.externalPort
-		? buildLibsqlUrl(data, { host: getIp ?? "", port: data.externalPort })
-		: "";
-	const connectionGRPCUrl = data?.externalGRPCPort
-		? buildLibsqlUrl(data, { host: getIp ?? "", port: data.externalGRPCPort })
-		: "";
+	const connectionUrlFor = (record: typeof data) =>
+		record?.externalPort
+			? buildLibsqlUrl(record, { host: getIp ?? "", port: record.externalPort })
+			: "";
+	const connectionUrl = connectionUrlFor(credentials);
+	const connectionGRPCUrlFor = (record: typeof data) =>
+		record?.externalGRPCPort
+			? buildLibsqlUrl(record, {
+					host: getIp ?? "",
+					port: record.externalGRPCPort,
+				})
+			: "";
+	const connectionGRPCUrl = connectionGRPCUrlFor(credentials);
 
 	return (
 		<div className="flex w-full flex-col gap-5">
@@ -159,7 +172,13 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 								<div className="grid w-full gap-8">
 									<div className="flex flex-col gap-3">
 										<Label>External Host</Label>
-										<ToggleVisibilityInput value={connectionUrl} disabled />
+										<ToggleVisibilityInput
+											value={connectionUrl}
+											resolveValue={async () =>
+												connectionUrlFor(await reveal())
+											}
+											disabled
+										/>
 									</div>
 								</div>
 							)}
@@ -215,6 +234,9 @@ export const ShowExternalLibsqlCredentials = ({ libsqlId }: Props) => {
 												<Label>External GRPC Host</Label>
 												<ToggleVisibilityInput
 													value={connectionGRPCUrl}
+													resolveValue={async () =>
+														connectionGRPCUrlFor(await reveal())
+													}
 													disabled
 												/>
 											</div>

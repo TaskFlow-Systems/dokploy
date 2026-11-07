@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildInternalMongoUrl } from "@/lib/mongo-connection-url";
 import { api } from "@/utils/api";
 
@@ -12,6 +13,11 @@ interface Props {
 }
 export const ShowInternalMongoCredentials = ({ mongoId }: Props) => {
 	const { data } = api.mongo.one.useQuery({ mongoId });
+	const { credentials, reveal, forget } = useDatabaseCredentials(
+		"mongo",
+		mongoId,
+		data,
+	);
 	const utils = api.useUtils();
 	const { mutateAsync: changePassword } =
 		api.mongo.changePassword.useMutation();
@@ -34,7 +40,11 @@ export const ShowInternalMongoCredentials = ({ mongoId }: Props) => {
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
 										disabled
-										value={data?.databasePassword}
+										value={credentials?.databasePassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databasePassword ?? "";
+										}}
 									/>
 									<UpdateDatabasePassword
 										onUpdatePassword={async (newPassword) => {
@@ -43,6 +53,7 @@ export const ShowInternalMongoCredentials = ({ mongoId }: Props) => {
 												password: newPassword,
 											});
 											toast.success("Password updated successfully");
+											forget();
 											utils.mongo.one.invalidate({ mongoId });
 										}}
 									/>
@@ -63,7 +74,11 @@ export const ShowInternalMongoCredentials = ({ mongoId }: Props) => {
 								<Label>Internal Connection URL </Label>
 								<ToggleVisibilityInput
 									disabled
-									value={data ? buildInternalMongoUrl(data) : ""}
+									value={credentials ? buildInternalMongoUrl(credentials) : ""}
+									resolveValue={async () => {
+										const record = await reveal();
+										return buildInternalMongoUrl(record);
+									}}
 								/>
 							</div>
 						</div>

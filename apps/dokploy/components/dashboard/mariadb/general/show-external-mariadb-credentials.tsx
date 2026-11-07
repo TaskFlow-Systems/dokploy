@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildMariadbUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -49,6 +50,11 @@ interface Props {
 export const ShowExternalMariadbCredentials = ({ mariadbId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.mariadb.one.useQuery({ mariadbId });
+	const { credentials, reveal } = useDatabaseCredentials(
+		"mariadb",
+		mariadbId,
+		data,
+	);
 	const { mutateAsync, isPending } = api.mariadb.saveExternalPort.useMutation();
 	const getIp = data?.server?.ipAddress || ip;
 	const form = useForm({
@@ -78,9 +84,14 @@ export const ShowExternalMariadbCredentials = ({ mariadbId }: Props) => {
 			});
 	};
 
-	const connectionUrl = data?.externalPort
-		? buildMariadbUrl(data, { host: getIp ?? "", port: data.externalPort })
-		: "";
+	const connectionUrlFor = (record: typeof data) =>
+		record?.externalPort
+			? buildMariadbUrl(record, {
+					host: getIp ?? "",
+					port: record.externalPort,
+				})
+			: "";
+	const connectionUrl = connectionUrlFor(credentials);
 	return (
 		<>
 			<div className="flex w-full flex-col gap-5 ">
@@ -141,7 +152,13 @@ export const ShowExternalMariadbCredentials = ({ mariadbId }: Props) => {
 										<div className="flex flex-col gap-3">
 											{/* jdbc:mariadb://5.161.59.207:3306/pixel-calculate?user=mariadb&password=HdVXfq6hM7W7F1 */}
 											<Label>External Host</Label>
-											<ToggleVisibilityInput value={connectionUrl} disabled />
+											<ToggleVisibilityInput
+												value={connectionUrl}
+												resolveValue={async () =>
+													connectionUrlFor(await reveal())
+												}
+												disabled
+											/>
 										</div>
 									</div>
 								)}

@@ -26,6 +26,7 @@ vi.mock("@/utils/api", () => {
 					useQuery: () => ({ data: mongoRow.current, refetch: vi.fn() }),
 				},
 				changePassword: { useMutation: mutation },
+				revealCredentials: { useMutation: mutation },
 				saveExternalPort: { useMutation: mutation },
 			},
 		},

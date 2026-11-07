@@ -150,6 +150,25 @@ export const libsqlRouter = createTRPCRouter({
 				env: libsql.env ?? "",
 			};
 		}),
+	revealCredentials: protectedProcedure
+		.input(apiFindOneLibsql)
+		.mutation(async ({ input, ctx }) => {
+			const libsql = await assertServiceEnvironmentReadAccess(
+				ctx,
+				input.libsqlId,
+				() => findLibsqlById(input.libsqlId),
+				"Libsql",
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "service",
+				resourceId: input.libsqlId,
+				resourceName: libsql.appName,
+			});
+			return {
+				databasePassword: libsql.databasePassword,
+			};
+		}),
 
 	start: protectedProcedure
 		.input(apiFindOneLibsql)

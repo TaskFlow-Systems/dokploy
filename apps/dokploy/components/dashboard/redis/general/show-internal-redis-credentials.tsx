@@ -4,6 +4,7 @@ import { UpdateDatabasePassword } from "@/components/shared/update-database-pass
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildRedisUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -12,6 +13,11 @@ interface Props {
 }
 export const ShowInternalRedisCredentials = ({ redisId }: Props) => {
 	const { data } = api.redis.one.useQuery({ redisId });
+	const { credentials, reveal, forget } = useDatabaseCredentials(
+		"redis",
+		redisId,
+		data,
+	);
 	const utils = api.useUtils();
 	const { mutateAsync: changePassword } =
 		api.redis.changePassword.useMutation();
@@ -32,7 +38,11 @@ export const ShowInternalRedisCredentials = ({ redisId }: Props) => {
 								<Label>Password</Label>
 								<div className="flex flex-row gap-2 items-center">
 									<ToggleVisibilityInput
-										value={data?.databasePassword}
+										value={credentials?.databasePassword}
+										resolveValue={async () => {
+											const record = await reveal();
+											return record.databasePassword ?? "";
+										}}
 										disabled
 									/>
 									<UpdateDatabasePassword
@@ -43,6 +53,7 @@ export const ShowInternalRedisCredentials = ({ redisId }: Props) => {
 												password: newPassword,
 											});
 											toast.success("Password updated successfully");
+											forget();
 											utils.redis.one.invalidate({ redisId });
 										}}
 									/>
@@ -63,10 +74,20 @@ export const ShowInternalRedisCredentials = ({ redisId }: Props) => {
 								<ToggleVisibilityInput
 									disabled
 									value={
-										data
-											? buildRedisUrl(data, { host: data.appName, port: 6379 })
+										credentials
+											? buildRedisUrl(credentials, {
+													host: credentials.appName,
+													port: 6379,
+												})
 											: ""
 									}
+									resolveValue={async () => {
+										const record = await reveal();
+										return buildRedisUrl(record, {
+											host: record.appName,
+											port: 6379,
+										});
+									}}
 								/>
 							</div>
 						</div>

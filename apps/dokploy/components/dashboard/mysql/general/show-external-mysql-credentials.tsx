@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildMysqlUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -49,6 +50,11 @@ interface Props {
 export const ShowExternalMysqlCredentials = ({ mysqlId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.mysql.one.useQuery({ mysqlId });
+	const { credentials, reveal } = useDatabaseCredentials(
+		"mysql",
+		mysqlId,
+		data,
+	);
 	const { mutateAsync, isPending } = api.mysql.saveExternalPort.useMutation();
 	const getIp = data?.server?.ipAddress || ip;
 	const form = useForm({
@@ -78,9 +84,11 @@ export const ShowExternalMysqlCredentials = ({ mysqlId }: Props) => {
 			});
 	};
 
-	const connectionUrl = data?.externalPort
-		? buildMysqlUrl(data, { host: getIp ?? "", port: data.externalPort })
-		: "";
+	const connectionUrlFor = (record: typeof data) =>
+		record?.externalPort
+			? buildMysqlUrl(record, { host: getIp ?? "", port: record.externalPort })
+			: "";
+	const connectionUrl = connectionUrlFor(credentials);
 	return (
 		<>
 			<div className="flex w-full flex-col gap-5 ">
@@ -140,7 +148,13 @@ export const ShowExternalMysqlCredentials = ({ mysqlId }: Props) => {
 									<div className="grid w-full gap-8">
 										<div className="flex flex-col gap-3">
 											<Label>External Host</Label>
-											<ToggleVisibilityInput disabled value={connectionUrl} />
+											<ToggleVisibilityInput
+												disabled
+												value={connectionUrl}
+												resolveValue={async () =>
+													connectionUrlFor(await reveal())
+												}
+											/>
 										</div>
 									</div>
 								)}

@@ -261,4 +261,70 @@ describe("database environment reveal boundary", () => {
 			});
 		},
 	);
+
+	it.each(cases)(
+		"reveals the $id passwords only after the env read check",
+		async (testCase) => {
+			const caller = testCase.router.createCaller(createContext());
+			const input = { [testCase.idField]: testCase.id };
+
+			const normalRead = await caller.one(input as never);
+			expect(normalRead.databasePassword).toBe(REDACTED_SECRET_VALUE);
+			mocks.checkServicePermissionAndAccess.mockClear();
+
+			const revealed = await caller.revealCredentials(input as never);
+
+			const hasRoot =
+				testCase.idField === "mysqlId" || testCase.idField === "mariadbId";
+			expect(revealed).toEqual({
+				databasePassword: `${testCase.id}-password`,
+				...(hasRoot
+					? { databaseRootPassword: `${testCase.id}-root-password` }
+					: {}),
+			});
+			expect(mocks.checkServicePermissionAndAccess).toHaveBeenCalledWith(
+				expect.anything(),
+				testCase.id,
+				{ envVars: ["read"] },
+			);
+			expect(mocks.audit).toHaveBeenCalledWith(
+				expect.anything(),
+				expect.objectContaining({
+					action: "reveal",
+					resourceId: testCase.id,
+				}),
+			);
+		},
+	);
+
+	it.each(cases)(
+		"does not reveal the $id passwords without env read access",
+		async (testCase) => {
+			mocks.checkServicePermissionAndAccess.mockRejectedValue(
+				new Error("forbidden"),
+			);
+
+			await expect(
+				testCase.router
+					.createCaller(createContext())
+					.revealCredentials({ [testCase.idField]: testCase.id } as never),
+			).rejects.toThrow("forbidden");
+			expect(mocks.audit).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each(cases)(
+		"does not reveal the $id passwords of another organization",
+		async (testCase) => {
+			testCase.find.mockResolvedValue(
+				databaseService(testCase.idField, testCase.id, "org-2"),
+			);
+
+			await expect(
+				testCase.router
+					.createCaller(createContext())
+					.revealCredentials({ [testCase.idField]: testCase.id } as never),
+			).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+		},
+	);
 });

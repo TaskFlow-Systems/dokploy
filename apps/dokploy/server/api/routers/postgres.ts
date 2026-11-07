@@ -172,6 +172,25 @@ export const postgresRouter = createTRPCRouter({
 				env: postgres.env ?? "",
 			};
 		}),
+	revealCredentials: protectedProcedure
+		.input(apiFindOnePostgres)
+		.mutation(async ({ input, ctx }) => {
+			const postgres = await assertServiceEnvironmentReadAccess(
+				ctx,
+				input.postgresId,
+				() => findPostgresById(input.postgresId),
+				"Postgres",
+			);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "service",
+				resourceId: input.postgresId,
+				resourceName: postgres.appName,
+			});
+			return {
+				databasePassword: postgres.databasePassword,
+			};
+		}),
 
 	start: protectedProcedure
 		.input(apiFindOnePostgres)

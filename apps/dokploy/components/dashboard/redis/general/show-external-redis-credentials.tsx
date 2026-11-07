@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { useDatabaseCredentials } from "@/hooks/use-database-credentials";
 import { buildRedisUrl } from "@/lib/database-connection-url";
 import { api } from "@/utils/api";
 
@@ -49,6 +50,11 @@ interface Props {
 export const ShowExternalRedisCredentials = ({ redisId }: Props) => {
 	const { data: ip } = api.settings.getIp.useQuery();
 	const { data, refetch } = api.redis.one.useQuery({ redisId });
+	const { credentials, reveal } = useDatabaseCredentials(
+		"redis",
+		redisId,
+		data,
+	);
 	const { mutateAsync, isPending } = api.redis.saveExternalPort.useMutation();
 	const getIp = data?.server?.ipAddress || ip;
 
@@ -79,9 +85,11 @@ export const ShowExternalRedisCredentials = ({ redisId }: Props) => {
 			});
 	};
 
-	const connectionUrl = data?.externalPort
-		? buildRedisUrl(data, { host: getIp ?? "", port: data.externalPort })
-		: "";
+	const connectionUrlFor = (record: typeof data) =>
+		record?.externalPort
+			? buildRedisUrl(record, { host: getIp ?? "", port: record.externalPort })
+			: "";
+	const connectionUrl = connectionUrlFor(credentials);
 	return (
 		<>
 			<div className="flex w-full flex-col gap-5 ">
@@ -141,7 +149,13 @@ export const ShowExternalRedisCredentials = ({ redisId }: Props) => {
 									<div className="grid w-full gap-8">
 										<div className="flex flex-col gap-3">
 											<Label>External Host</Label>
-											<ToggleVisibilityInput value={connectionUrl} disabled />
+											<ToggleVisibilityInput
+												value={connectionUrl}
+												resolveValue={async () =>
+													connectionUrlFor(await reveal())
+												}
+												disabled
+											/>
 										</div>
 									</div>
 								)}
