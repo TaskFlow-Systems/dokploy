@@ -117,6 +117,10 @@ import {
 	deployCompose,
 	rebuildCompose,
 } from "@dokploy/server/services/compose";
+import {
+	issueCommentExists,
+	updateIssueComment,
+} from "@dokploy/server/services/github";
 import { ExecError } from "@dokploy/server/utils/process/ExecError";
 
 const LOST_CONNECTION = "SSH connection error: Keepalive timeout";
@@ -588,5 +592,61 @@ describe("a build that succeeds", () => {
 			expect(command).toContain("timeout -k 30 ");
 		}
 		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+	});
+});
+
+describe("a preview while GitHub does not answer", () => {
+	const previewRequest = {
+		...applicationRequest,
+		previewDeploymentId: "preview-1",
+	};
+	const GITHUB_DOWN = "getaddrinfo EAI_AGAIN api.github.com";
+
+	beforeEach(() => {
+		mocks.execAsyncRemote.mockReset();
+		mocks.execAsyncRemote.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.waitForApplicationRollout.mockReset();
+		mocks.waitForApplicationRollout.mockResolvedValue(undefined);
+		vi.mocked(updateIssueComment).mockRejectedValue(new Error(GITHUB_DOWN));
+	});
+
+	it.each([
+		["deployment", deployPreviewApplication],
+		["rebuild", rebuildPreviewApplication],
+	])("finishes a preview %s and marks it done", async (_, deploy) => {
+		await expect(deploy(previewRequest)).resolves.toBe(true);
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+		expect(savedStatuses()).toContainEqual({ previewStatus: "done" });
+		expect(savedStatuses()).not.toContainEqual({ previewStatus: "error" });
+	});
+
+	it.each([
+		["deployment", deployPreviewApplication],
+		["rebuild", rebuildPreviewApplication],
+	])(
+		"marks a failed preview %s as failed, with the build's own error",
+		async (_, deploy) => {
+			mocks.waitForApplicationRollout.mockRejectedValue(
+				new Error("rolled back"),
+			);
+
+			await expect(deploy(previewRequest)).rejects.toThrow("rolled back");
+
+			expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith(
+				"dep-1",
+				"error",
+			);
+			expect(savedStatuses()).toContainEqual({ previewStatus: "error" });
+		},
+	);
+
+	it("deploys a preview whose comment GitHub cannot create", async () => {
+		vi.mocked(issueCommentExists).mockRejectedValueOnce(new Error(GITHUB_DOWN));
+
+		await expect(deployPreviewApplication(previewRequest)).resolves.toBe(true);
+
+		expect(savedStatuses()).toContainEqual({ previewStatus: "done" });
+		expect(updateIssueComment).not.toHaveBeenCalled();
 	});
 });
