@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs, { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { paths } from "@dokploy/server/constants";
@@ -252,6 +253,54 @@ const applyDokployLabelsToCompose = (
 	}
 };
 
+export const COMPOSE_CONFIG_HASH_LABEL = "com.dokploy.config-hash";
+
+// Compose can keep a running container when only the `content` of an inline
+// config it mounts changed: removing two lines of a ClickHouse XML left the old
+// container and file in place on 5.6.1 and 5.7.0, while a one-line edit did
+// not. The deployment then reported success with the old file. A label is part
+// of the service's own config, which Compose always compares, so its value
+// follows the contents. Interpolated variables count as written.
+export const applyInlineConfigHashLabels = (result: ComposeSpecification) => {
+	const configs = result.configs ?? {};
+	for (const service of Object.values(result.services ?? {})) {
+		if (!service) continue;
+		const contents = (service.configs ?? [])
+			.map((ref) => (typeof ref === "string" ? ref : ref.source))
+			.filter((name): name is string => !!name)
+			.map((name) => [name, configs[name]?.content] as const)
+			.filter(
+				(entry): entry is readonly [string, string] =>
+					typeof entry[1] === "string",
+			)
+			.sort(([a], [b]) => a.localeCompare(b));
+		const labels = withoutLabel(service.labels, COMPOSE_CONFIG_HASH_LABEL);
+		if (contents.length === 0) {
+			if (service.labels) service.labels = labels;
+			continue;
+		}
+		const hash = createHash("sha256")
+			.update(JSON.stringify(contents))
+			.digest("hex")
+			.slice(0, 32);
+		service.labels = mergeDokployLabels(labels, {
+			[COMPOSE_CONFIG_HASH_LABEL]: hash,
+		});
+	}
+};
+
+const withoutLabel = (
+	labels: DefinitionsService["labels"],
+	key: string,
+): DefinitionsService["labels"] => {
+	if (!labels) return labels;
+	if (Array.isArray(labels)) {
+		return labels.filter((label) => label.slice(0, label.indexOf("=")) !== key);
+	}
+	const { [key]: _removed, ...rest } = labels;
+	return rest;
+};
+
 const mergeDokployLabels = (
 	current: DefinitionsService["labels"],
 	dokployLabels: Record<string, string>,
@@ -407,6 +456,9 @@ export const addDomainToCompose = async (
 	}
 
 	applyDokployLabelsToCompose(result, compose);
+	if (compose.composeType === "docker-compose") {
+		applyInlineConfigHashLabels(result);
+	}
 
 	const injectedNetworkNames = await applyServiceNetworks(result, compose);
 
