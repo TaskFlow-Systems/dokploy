@@ -43,6 +43,9 @@ import {
 	generateAppName,
 } from "./utils";
 
+export const LIBSQL_DEFAULT_IMAGE =
+	"ghcr.io/tursodatabase/libsql-server:v0.24.32";
+
 export const libsql = pgTable("libsql", {
 	libsqlId: text("libsqlId")
 		.notNull()
@@ -131,9 +134,7 @@ const createSchema = createInsertSchema(libsql, {
 	sqldNode: z.enum(sqldNode.enumValues).optional(),
 	sqldPrimaryUrl: z.string().nullable().optional(),
 	enableNamespaces: z.boolean().default(false).optional(),
-	dockerImage: z
-		.string()
-		.default("ghcr.io/tursodatabase/libsql-server:v0.24.32"),
+	dockerImage: z.string().default(LIBSQL_DEFAULT_IMAGE),
 	command: z.string().nullable().optional(),
 	env: z.string().nullable().optional(),
 	memoryReservation: z.string().nullable().optional(),

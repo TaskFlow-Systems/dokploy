@@ -1,5 +1,6 @@
 import type { InferResultType } from "@dokploy/server/types/with";
 import type { CreateServiceOptions, PortConfig } from "dockerode";
+import { LIBSQL_DEFAULT_IMAGE } from "../../db/schema/libsql";
 import { getLibsqlGrpcCa } from "../../services/libsql-grpc-ca";
 import { resolveServiceNetworks } from "../../services/network";
 import { buildDokployLabels } from "../docker/dokploy-labels";
@@ -179,7 +180,7 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 		TaskTemplate: {
 			ContainerSpec: {
 				HealthCheck,
-				Image: "ghcr.io/tursodatabase/libsql-server:v0.24.32",
+				Image: libsql.dockerImage || LIBSQL_DEFAULT_IMAGE,
 				Env: envVariables,
 				Mounts: [...volumesMount, ...bindsMount, ...filesMount],
 				Command: ["/bin/sh"],

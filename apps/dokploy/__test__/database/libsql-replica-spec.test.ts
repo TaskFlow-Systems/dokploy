@@ -1,4 +1,5 @@
 import { X509Certificate } from "node:crypto";
+import { LIBSQL_DEFAULT_IMAGE } from "@dokploy/server/db/schema/libsql";
 import {
 	buildLibsql,
 	type LibsqlNested,
@@ -89,6 +90,20 @@ describe("buildLibsql replica spec", () => {
 			Object.assign(new Error("no such service"), { statusCode: 404 }),
 		);
 		mocks.getLibsqlGrpcCa.mockResolvedValue(ca);
+	});
+
+	it("takes the image from the field, as the deploy pulls it", async () => {
+		const { Image } = await containerSpec(
+			fixture({ dockerImage: "registry.example/libsql-server:v9" }),
+		);
+
+		expect(Image).toBe("registry.example/libsql-server:v9");
+	});
+
+	it("falls back to the pinned image when the field is empty", async () => {
+		const { Image } = await containerSpec(fixture({ dockerImage: "" }));
+
+		expect(Image).toBe(LIBSQL_DEFAULT_IMAGE);
 	});
 
 	it.each([

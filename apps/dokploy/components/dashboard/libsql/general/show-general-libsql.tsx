@@ -21,6 +21,8 @@ interface Props {
 }
 
 export const ShowGeneralLibsql = ({ libsqlId }: Props) => {
+	const { data: permissions } = api.user.getPermissions.useQuery();
+	const canDeploy = permissions?.deployment.create ?? false;
 	const { data, refetch } = api.libsql.one.useQuery(
 		{
 			libsqlId,
@@ -72,160 +74,164 @@ export const ShowGeneralLibsql = ({ libsqlId }: Props) => {
 						<CardTitle className="text-xl">Deploy Settings</CardTitle>
 					</CardHeader>
 					<CardContent className="flex flex-row gap-4 flex-wrap">
-						<TooltipProvider delayDuration={0}>
-							<DialogAction
-								title="Deploy Libsql"
-								description="Are you sure you want to deploy this Libsql?"
-								type="default"
-								onClick={async () => {
-									setIsDeploying(true);
-									await new Promise((resolve) => setTimeout(resolve, 1000));
-									refetch();
-								}}
-							>
-								<Button
-									variant="default"
-									isLoading={data?.applicationStatus === "running"}
-									className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
-								>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<div className="flex items-center">
-												<Rocket className="size-4 mr-1" />
-												Deploy
-											</div>
-										</TooltipTrigger>
-										<TooltipPrimitive.Portal>
-											<TooltipContent sideOffset={5} className="z-60">
-												<p>Downloads and sets up the Libsql database</p>
-											</TooltipContent>
-										</TooltipPrimitive.Portal>
-									</Tooltip>
-								</Button>
-							</DialogAction>
-						</TooltipProvider>
-						<TooltipProvider delayDuration={0}>
-							<DialogAction
-								title="Reload Libsql"
-								description="Are you sure you want to reload this libsql?"
-								type="default"
-								onClick={async () => {
-									await reload({
-										libsqlId: libsqlId,
-										appName: data?.appName || "",
-									})
-										.then(() => {
-											toast.success("Libsql reloaded successfully");
+						{canDeploy && (
+							<>
+								<TooltipProvider delayDuration={0}>
+									<DialogAction
+										title="Deploy Libsql"
+										description="Are you sure you want to deploy this Libsql?"
+										type="default"
+										onClick={async () => {
+											setIsDeploying(true);
+											await new Promise((resolve) => setTimeout(resolve, 1000));
 											refetch();
-										})
-										.catch(() => {
-											toast.error("Error reloading Libsql");
-										});
-								}}
-							>
-								<Button
-									variant="secondary"
-									isLoading={isReloading}
-									className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
-								>
-									<Tooltip>
-										<TooltipTrigger asChild>
-											<div className="flex items-center">
-												<RefreshCcw className="size-4 mr-1" />
-												Reload
-											</div>
-										</TooltipTrigger>
-										<TooltipPrimitive.Portal>
-											<TooltipContent sideOffset={5} className="z-60">
-												<p>Restart the Libsql service without rebuilding</p>
-											</TooltipContent>
-										</TooltipPrimitive.Portal>
-									</Tooltip>
-								</Button>
-							</DialogAction>
-						</TooltipProvider>
-						{data?.applicationStatus === "idle" ? (
-							<TooltipProvider delayDuration={0}>
-								<DialogAction
-									title="Start Libsql"
-									description="Are you sure you want to start this Libsql?"
-									type="default"
-									onClick={async () => {
-										await start({
-											libsqlId: libsqlId,
-										})
-											.then(() => {
-												toast.success("Libsql started successfully");
-												refetch();
-											})
-											.catch(() => {
-												toast.error("Error starting Libsql");
-											});
-									}}
-								>
-									<Button
-										variant="secondary"
-										isLoading={isStarting}
-										className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+										}}
 									>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<div className="flex items-center">
-													<CheckCircle2 className="size-4 mr-1" />
-													Start
-												</div>
-											</TooltipTrigger>
-											<TooltipPrimitive.Portal>
-												<TooltipContent sideOffset={5} className="z-60">
-													<p>
-														Start the Libsql database (requires a previous
-														successful setup)
-													</p>
-												</TooltipContent>
-											</TooltipPrimitive.Portal>
-										</Tooltip>
-									</Button>
-								</DialogAction>
-							</TooltipProvider>
-						) : (
-							<TooltipProvider delayDuration={0}>
-								<DialogAction
-									title="Stop Libsql"
-									description="Are you sure you want to stop this Libsql?"
-									onClick={async () => {
-										await stop({
-											libsqlId: libsqlId,
-										})
-											.then(() => {
-												toast.success("Libsql stopped successfully");
-												refetch();
+										<Button
+											variant="default"
+											isLoading={data?.applicationStatus === "running"}
+											className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+										>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<div className="flex items-center">
+														<Rocket className="size-4 mr-1" />
+														Deploy
+													</div>
+												</TooltipTrigger>
+												<TooltipPrimitive.Portal>
+													<TooltipContent sideOffset={5} className="z-60">
+														<p>Downloads and sets up the Libsql database</p>
+													</TooltipContent>
+												</TooltipPrimitive.Portal>
+											</Tooltip>
+										</Button>
+									</DialogAction>
+								</TooltipProvider>
+								<TooltipProvider delayDuration={0}>
+									<DialogAction
+										title="Reload Libsql"
+										description="Are you sure you want to reload this libsql?"
+										type="default"
+										onClick={async () => {
+											await reload({
+												libsqlId: libsqlId,
+												appName: data?.appName || "",
 											})
-											.catch(() => {
-												toast.error("Error stopping Libsql");
-											});
-									}}
-								>
-									<Button
-										variant="destructive"
-										isLoading={isStopping}
-										className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+												.then(() => {
+													toast.success("Libsql reloaded successfully");
+													refetch();
+												})
+												.catch(() => {
+													toast.error("Error reloading Libsql");
+												});
+										}}
 									>
-										<Tooltip>
-											<TooltipTrigger asChild>
-												<div className="flex items-center">
-													<Ban className="size-4 mr-1" />
-													Stop
-												</div>
-											</TooltipTrigger>
-											<TooltipPrimitive.Portal>
-												<TooltipContent sideOffset={5} className="z-60">
-													<p>Stop the currently running Libsql database</p>
-												</TooltipContent>
-											</TooltipPrimitive.Portal>
-										</Tooltip>
-									</Button>
-								</DialogAction>
-							</TooltipProvider>
+										<Button
+											variant="secondary"
+											isLoading={isReloading}
+											className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+										>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<div className="flex items-center">
+														<RefreshCcw className="size-4 mr-1" />
+														Reload
+													</div>
+												</TooltipTrigger>
+												<TooltipPrimitive.Portal>
+													<TooltipContent sideOffset={5} className="z-60">
+														<p>Restart the Libsql service without rebuilding</p>
+													</TooltipContent>
+												</TooltipPrimitive.Portal>
+											</Tooltip>
+										</Button>
+									</DialogAction>
+								</TooltipProvider>
+								{data?.applicationStatus === "idle" ? (
+									<TooltipProvider delayDuration={0}>
+										<DialogAction
+											title="Start Libsql"
+											description="Are you sure you want to start this Libsql?"
+											type="default"
+											onClick={async () => {
+												await start({
+													libsqlId: libsqlId,
+												})
+													.then(() => {
+														toast.success("Libsql started successfully");
+														refetch();
+													})
+													.catch(() => {
+														toast.error("Error starting Libsql");
+													});
+											}}
+										>
+											<Button
+												variant="secondary"
+												isLoading={isStarting}
+												className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+											>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<div className="flex items-center">
+															<CheckCircle2 className="size-4 mr-1" />
+															Start
+														</div>
+													</TooltipTrigger>
+													<TooltipPrimitive.Portal>
+														<TooltipContent sideOffset={5} className="z-60">
+															<p>
+																Start the Libsql database (requires a previous
+																successful setup)
+															</p>
+														</TooltipContent>
+													</TooltipPrimitive.Portal>
+												</Tooltip>
+											</Button>
+										</DialogAction>
+									</TooltipProvider>
+								) : (
+									<TooltipProvider delayDuration={0}>
+										<DialogAction
+											title="Stop Libsql"
+											description="Are you sure you want to stop this Libsql?"
+											onClick={async () => {
+												await stop({
+													libsqlId: libsqlId,
+												})
+													.then(() => {
+														toast.success("Libsql stopped successfully");
+														refetch();
+													})
+													.catch(() => {
+														toast.error("Error stopping Libsql");
+													});
+											}}
+										>
+											<Button
+												variant="destructive"
+												isLoading={isStopping}
+												className="flex items-center gap-1.5 focus-visible:ring-2 focus-visible:ring-offset-2"
+											>
+												<Tooltip>
+													<TooltipTrigger asChild>
+														<div className="flex items-center">
+															<Ban className="size-4 mr-1" />
+															Stop
+														</div>
+													</TooltipTrigger>
+													<TooltipPrimitive.Portal>
+														<TooltipContent sideOffset={5} className="z-60">
+															<p>Stop the currently running Libsql database</p>
+														</TooltipContent>
+													</TooltipPrimitive.Portal>
+												</Tooltip>
+											</Button>
+										</DialogAction>
+									</TooltipProvider>
+								)}
+							</>
 						)}
 						<DockerTerminalModal
 							appName={data?.appName || ""}
