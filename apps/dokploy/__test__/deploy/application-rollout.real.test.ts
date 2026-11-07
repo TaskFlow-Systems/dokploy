@@ -13,7 +13,6 @@ import {
 	rebuildPreviewApplication,
 } from "@dokploy/server/services/application";
 import { rollback } from "@dokploy/server/services/rollbacks";
-import { waitForSwarmServiceConvergence } from "@dokploy/server/utils/docker/utils";
 import {
 	afterAll,
 	beforeAll,
@@ -686,8 +685,12 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 			} as never);
 			const [beforeRollback] = await runningTasks(application.appName);
 
-			await rollback("rollback");
-			await waitForSwarmServiceConvergence(application.appName);
+			const rolledBack = await run(() => rollback("rollback"));
+			expect(rolledBack.failure).toBeNull();
+			expect(rolledBack.savedStatuses).toEqual([
+				{ applicationStatus: "running" },
+				{ applicationStatus: "done" },
+			]);
 
 			const info = await inspect(application.appName);
 			expect(info.UpdateStatus?.State).toBe("completed");
@@ -697,6 +700,20 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 			expect(running[0]?.Spec?.ContainerSpec?.Image).toContain(IMAGE);
 
 			expectReportedDone(await rebuild(application));
+
+			// A rollback to a version that does not start is an error, not a success.
+			vi.mocked(db.query.rollbacks.findFirst).mockResolvedValue({
+				rollbackId: "rollback",
+				deploymentId: "deployment",
+				image: IMAGE,
+				fullContext: { ...application, ...CRASHES },
+			} as never);
+			const failedRollback = await run(() => rollback("rollback"));
+			expect(failedRollback.failure?.message).toMatch(ROLLED_BACK);
+			expect(failedRollback.savedStatuses).toEqual([
+				{ applicationStatus: "running" },
+				{ applicationStatus: "error" },
+			]);
 		},
 		REAL_TEST_TIMEOUT,
 	);
