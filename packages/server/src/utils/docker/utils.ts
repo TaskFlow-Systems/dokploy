@@ -1598,6 +1598,7 @@ type SwarmServiceSpec = {
 type SwarmTask = {
 	CreatedAt?: string;
 	DesiredState?: string;
+	ID?: string;
 	NodeID?: string;
 	Slot?: number;
 	Version?: { Index?: number };
@@ -1752,6 +1753,8 @@ export const waitForSwarmServiceConvergence = async (
 	const service = remoteDocker.getService(appName);
 	const startedAt = Date.now();
 	const firstSeenRunningAt = new Map<string, number>();
+	// Tasks whose container was found down while Swarm still showed them running.
+	const downTasks = new Set<string>();
 	let timeoutMs = options?.timeoutMs;
 	let quietLimitMs: number | undefined;
 	let taskErrorSeenAt: number | undefined;
@@ -1778,6 +1781,49 @@ export const waitForSwarmServiceConvergence = async (
 		}
 	};
 	const pause = () => new Promise((resolve) => setTimeout(resolve, intervalMs));
+
+	// Under load a node reports a container's exit to Swarm late: with the disks
+	// and CPUs of a host busy, a task that crashed after 3 s stayed `running` for
+	// 33 s, and this wait took a crashing database for a settled one. The engine
+	// of the node knows at once, but the panel reaches only the node it connects
+	// to, so tasks elsewhere still go by what Swarm says. Anything that cannot be
+	// read here leaves the decision to Swarm, as before.
+	let localNodeId: Promise<string | undefined> | undefined;
+	const isContainerDown = async (task: {
+		NodeID?: string;
+		Status?: { ContainerStatus?: { ContainerID?: string } };
+	}) => {
+		const containerId = task.Status?.ContainerStatus?.ContainerID;
+		if (!containerId) return false;
+		// dockerode passes abortSignal on, but its types leave it out.
+		const readInfo = remoteDocker.info as unknown as (options: {
+			abortSignal: AbortSignal;
+		}) => Promise<{ Swarm?: { NodeID?: string } } | undefined>;
+		localNodeId ??= Promise.resolve()
+			.then(() =>
+				readInfo.call(remoteDocker, {
+					abortSignal: AbortSignal.timeout(
+						options?.readTimeoutMs ?? SWARM_READ_TIMEOUT_MS,
+					),
+				}),
+			)
+			.then(
+				(info) => info?.Swarm?.NodeID || undefined,
+				() => undefined,
+			);
+		const nodeId = await localNodeId;
+		if (!nodeId || task.NodeID !== nodeId) return false;
+		try {
+			const container = await remoteDocker.getContainer(containerId).inspect({
+				abortSignal: AbortSignal.timeout(
+					options?.readTimeoutMs ?? SWARM_READ_TIMEOUT_MS,
+				),
+			});
+			return container?.State?.Running === false;
+		} catch (error) {
+			return (error as { statusCode?: number }).statusCode === 404;
+		}
+	};
 
 	while (true) {
 		let state: Awaited<ReturnType<typeof readService>>;
@@ -1816,8 +1862,8 @@ export const waitForSwarmServiceConvergence = async (
 		// a new service or a new replica, and a restart loop can show a running task on
 		// any poll. A restart always makes a new task, so the same ID staying up that
 		// long is the check Swarm would have made.
-		const settledTasksCount = currentTasks.filter((task) => {
-			if (task.Status?.State !== "running") {
+		const settledTasks = currentTasks.filter((task) => {
+			if (task.Status?.State !== "running" || downTasks.has(task.ID)) {
 				return false;
 			}
 			const firstSeenAt = firstSeenRunningAt.get(task.ID) ?? now;
@@ -1826,7 +1872,8 @@ export const waitForSwarmServiceConvergence = async (
 				now - firstSeenAt + runningBeforeServiceChangeMs(task, info) >=
 				monitorMs
 			);
-		}).length;
+		});
+		const settledTasksCount = settledTasks.length;
 		const updateState: string | undefined = info.UpdateStatus?.State;
 		// Until Swarm sets `updating` there is no StartedAt, and the failed tasks a
 		// service keeps from an earlier deployment are not this update's.
@@ -1890,11 +1937,22 @@ export const waitForSwarmServiceConvergence = async (
 				(task) => task.Status?.State === "complete",
 			).length;
 			if (settledTasksCount + completedRunsCount >= desiredTasksCount) {
-				return;
+				const down: string[] = [];
+				for (const task of settledTasks) {
+					if (await isContainerDown(task)) down.push(task.ID);
+				}
+				if (down.length === 0) {
+					return;
+				}
+				for (const id of down) downTasks.add(id);
 			}
 		}
 
-		if (taskError) {
+		const containerError =
+			downTasks.size > 0
+				? "a task's container had stopped while Swarm still reported it running"
+				: undefined;
+		if (taskError || containerError) {
 			taskErrorSeenAt ??= now;
 		}
 		if (
@@ -1903,7 +1961,7 @@ export const waitForSwarmServiceConvergence = async (
 		) {
 			const lastState = currentTasks[0]?.Status?.State ?? "unknown";
 			throw new ServiceConvergenceError(
-				`Service ${appName} did not converge within ${Math.min(elapsedMs, quietLimitMs)}ms: ${settledTasksCount}/${desiredTasksCount} tasks stayed running for ${monitorMs / 1000} s${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""})`,
+				`Service ${appName} did not converge within ${Math.min(elapsedMs, quietLimitMs)}ms: ${settledTasksCount}/${desiredTasksCount} tasks stayed running for ${monitorMs / 1000} s${updateState === "updating" ? ", Swarm is still updating it" : ""} (last state: ${lastState}${taskError ? `, task error: ${taskError}` : ""}${containerError ? `, ${containerError}` : ""})`,
 			);
 		}
 
