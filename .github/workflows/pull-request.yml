@@ -97,6 +97,20 @@ jobs:
         env:
           # The fork's db module throws without a password in production, and the Next build imports it.
           POSTGRES_PASSWORD: build-time-postgres-password
+      # A table or column in the schema without a migration builds and passes
+      # every test, then fails on the panel's database: #201 shipped
+      # libsql_grpc_ca that way. drizzle-kit writes a migration for the gap.
+      - name: Check that the migrations match the schema
+        if: matrix.part == 'build'
+        working-directory: apps/dokploy
+        run: |
+          set -euo pipefail
+          ./node_modules/.bin/drizzle-kit generate --name schema-drift --config ./server/db/drizzle.config.ts
+          if [ -n "$(git status --porcelain -- drizzle)" ]; then
+            git status --porcelain -- drizzle
+            echo "::error::The schema has changes without a migration: run 'bun run migration:generate' in apps/dokploy and commit the files."
+            exit 1
+          fi
       - name: Run the ${{ matrix.part }} tests
         if: matrix.part != 'build'
         working-directory: apps/dokploy
