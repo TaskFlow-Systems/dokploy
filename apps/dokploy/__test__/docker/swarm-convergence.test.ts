@@ -908,3 +908,252 @@ describe("waitForSwarmServiceConvergence and the engine of its node", () => {
 		expect(inspectContainer).not.toHaveBeenCalled();
 	});
 });
+
+describe("waitForSwarmServiceConvergence, tasks across nodes and failures", () => {
+	beforeEach(() => {
+		inspect.mockReset();
+		listTasks.mockReset();
+		info.mockReset();
+	});
+
+	const onNode = (node: string, fields: Parameters<typeof task>[0]) => ({
+		...task(fields),
+		NodeID: node,
+	});
+	const globalService = (state?: string) => {
+		const base = service(state);
+		return { ...base, Spec: { ...base.Spec, Mode: { Global: {} } } };
+	};
+
+	describe("a global service", () => {
+		it("waits for the task of every node that runs one", async () => {
+			inspect.mockResolvedValue(globalService("completed"));
+			listTasks.mockResolvedValue([
+				onNode("node-1", { id: "a", state: "running" }),
+				onNode("node-2", { id: "b", state: "preparing" }),
+			]);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 30,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain("did not converge");
+			expect(message).toContain("1/2 tasks stayed running");
+		});
+
+		it("passes once the task of each node has settled", async () => {
+			inspect.mockResolvedValue(globalService("completed"));
+			listTasks.mockResolvedValue([
+				onNode("node-1", { id: "a", state: "running" }),
+				onNode("node-2", { id: "b", state: "running" }),
+			]);
+
+			await expect(
+				waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+			).resolves.toBeUndefined();
+		});
+
+		it("counts a node once, whatever its older tasks, and one node at least", async () => {
+			inspect.mockResolvedValue(globalService("completed"));
+			listTasks.mockResolvedValue([
+				onNode("node-1", { id: "a", state: "running" }),
+				onNode("node-1", { id: "old", state: "failed", desired: "shutdown" }),
+			]);
+
+			await expect(
+				waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+			).resolves.toBeUndefined();
+		});
+	});
+
+	describe("an image that only one node has", () => {
+		const noImage = "No such image: registry.local/app:latest";
+
+		it("tells that the service needs a registry", async () => {
+			inspect.mockResolvedValue(service("updating"));
+			listTasks.mockResolvedValue([task({ state: "rejected", err: noImage })]);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 20,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain(`task error: ${noImage}`);
+			expect(message).toContain("needs a registry");
+		});
+
+		it("adds nothing to other task errors", async () => {
+			inspect.mockResolvedValue(service("updating"));
+			listTasks.mockResolvedValue([
+				task({ state: "pending", err: "no suitable node" }),
+			]);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 20,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain("did not converge");
+			expect(message).not.toContain("registry");
+		});
+	});
+
+	describe("a host-mode port with start-first", () => {
+		const withOrder = (order: string) => {
+			const base = service("updating");
+			return {
+				...base,
+				Spec: {
+					...base.Spec,
+					UpdateConfig: { ...base.Spec.UpdateConfig, Order: order },
+				},
+			};
+		};
+		const blocked = [
+			task({ id: "old", state: "running", version: 50 }),
+			task({
+				id: "new",
+				state: "pending",
+				err: "no suitable node (host-mode port already in use on 1 node)",
+			}),
+		];
+
+		it("fails at once and says to use stop-first", async () => {
+			inspect.mockResolvedValue(withOrder("start-first"));
+			listTasks.mockResolvedValue(blocked);
+
+			const message = await failureOf(waitForSwarmServiceConvergence("app"));
+
+			expect(message).toContain("cannot bind the published host-mode port");
+			expect(message).toContain("stop-first");
+			expect(inspect).toHaveBeenCalledTimes(1);
+		});
+
+		it("keeps the normal wait with stop-first", async () => {
+			inspect.mockResolvedValue(withOrder("stop-first"));
+			listTasks.mockResolvedValue(blocked);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 20,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain("did not converge");
+			expect(message).toContain("host-mode port already in use");
+		});
+
+		it("does not take the error of an earlier deployment for this update", async () => {
+			inspect.mockResolvedValue(withOrder("start-first"));
+			listTasks.mockResolvedValue([
+				task({
+					state: "pending",
+					err: "no suitable node (host-mode port already in use on 1 node)",
+					createdAt: "2026-11-04T09:00:00.000000000Z",
+				}),
+			]);
+
+			const message = await failureOf(
+				waitForSwarmServiceConvergence("app", null, {
+					timeoutMs: 20,
+					intervalMs: 1,
+				}),
+			);
+
+			expect(message).toContain("did not converge");
+		});
+	});
+
+	describe("a restart loop", () => {
+		const crash = (id: string, second: number) =>
+			task({
+				id,
+				state: "failed",
+				desired: "shutdown",
+				err: `task: non-zero exit (${second})`,
+				timestamp: `2026-11-04T10:00:0${second}.000000000Z`,
+			});
+
+		it("fails once three tasks of this update have failed", async () => {
+			inspect.mockResolvedValue(service("updating"));
+			listTasks.mockResolvedValue([
+				task({ id: "t4", state: "starting" }),
+				crash("t1", 3),
+				crash("t2", 4),
+				crash("t3", 5),
+			]);
+
+			const message = await failureOf(waitForSwarmServiceConvergence("app"));
+
+			expect(message).toContain(
+				"3 tasks of one slot in this update have failed",
+			);
+			expect(message).toContain("last task error: task: non-zero exit (5)");
+			expect(inspect).toHaveBeenCalledTimes(1);
+		});
+
+		it("passes three replicas that each fail once and then settle", async () => {
+			const replicas = (n: number) => ({
+				...service("completed"),
+				Spec: {
+					...service("completed").Spec,
+					Mode: { Replicated: { Replicas: n } },
+				},
+			});
+			inspect.mockResolvedValue(replicas(3));
+			listTasks.mockResolvedValue(
+				[1, 2, 3].flatMap((slot) => [
+					{ ...task({ id: `up-${slot}`, state: "running" }), Slot: slot },
+					{ ...crash(`down-${slot}`, 2 + slot), Slot: slot },
+				]),
+			);
+
+			await expect(
+				waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+			).resolves.toBeUndefined();
+		});
+
+		it("does not count tasks of an earlier deployment or cancelled ones", async () => {
+			inspect.mockResolvedValue(service("completed"));
+			listTasks.mockResolvedValue([
+				task({ id: "t4", state: "running" }),
+				crash("t1", 3),
+				crash("t2", 4),
+				{
+					...crash("t3", 5),
+					CreatedAt: "2026-11-04T09:00:00.000000000Z",
+				},
+				task({
+					id: "t5",
+					state: "failed",
+					desired: "shutdown",
+					err: "Canceled: context canceled",
+				}),
+			]);
+
+			await expect(
+				waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+			).resolves.toBeUndefined();
+		});
+
+		it("still passes after a single crash that recovers", async () => {
+			inspect.mockResolvedValue(service("completed"));
+			listTasks.mockResolvedValue([
+				task({ id: "t2", state: "running" }),
+				crash("t1", 3),
+			]);
+
+			await expect(
+				waitForSwarmServiceConvergence("app", null, { intervalMs: 1 }),
+			).resolves.toBeUndefined();
+		});
+	});
+});
