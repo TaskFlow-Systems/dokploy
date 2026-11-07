@@ -459,17 +459,20 @@ type KeyPatterns = {
 // keyword: the keyword begins with a word character and a separator is not one,
 // so a boundary always exists before it and scanning for one proves nothing.
 // Only what follows the keyword is bounded; 128 is well past the longest key
-// found in real configs and logs.
+// found in real configs and logs. The other rules bound the name on both sides
+// of the keyword, 60 before and 80 after, and a query key also ends at the next
+// `?`, `&` or `#`: a free name made `?a?a…` or `###…` take 20 to 40 s on
+// 200 KB, with the panel's event loop stopped.
 const VALUE_AFTER_KEY = String.raw`\s*:\s*[^\s,}\]]`;
 
 const DEFAULT_KEY_PATTERNS: KeyPatterns = {
 	beforeAuthorization: [
 		new RegExp(
-			`([?&#][^=\\s]*${SENSITIVE_KEY_PATTERN}[^=\\s]*=)([^&#\\s]+)`,
+			`([?&#][^=\\s?&#]{0,60}?${SENSITIVE_KEY_PATTERN}[^=\\s?&#]{0,80}=)([^&#\\s]+)`,
 			"gi",
 		),
 		new RegExp(
-			`(\\b[A-Z0-9_]*${SENSITIVE_KEY_PATTERN}[A-Z0-9_]*=)(${SHELL_VALUE_PATTERN})`,
+			`(\\b[A-Z0-9_]{0,60}?${SENSITIVE_KEY_PATTERN}[A-Z0-9_]{0,80}=)(${SHELL_VALUE_PATTERN})`,
 			"gi",
 		),
 	],
@@ -482,7 +485,7 @@ const DEFAULT_KEY_PATTERNS: KeyPatterns = {
 		// word after them is a positional argument (the database name), not a
 		// secret.
 		new RegExp(
-			`(\\s(?!--?no-)--?[a-z0-9-]*${SENSITIVE_KEY_PATTERN}[a-z0-9-]*(?:=|\\s+))(${SHELL_VALUE_PATTERN})`,
+			`(\\s(?!--?no-)--?[a-z0-9-]{0,60}?${SENSITIVE_KEY_PATTERN}[a-z0-9-]{0,80}(?:=|\\s+))(${SHELL_VALUE_PATTERN})`,
 			"gi",
 		),
 	],
@@ -514,9 +517,10 @@ const ASSIGN = String.raw`[ \t]*=(?![=>~])[ \t]*`;
 const BROAD_KEY_PATTERNS: KeyPatterns = {
 	beforeAuthorization: [
 		// A line that is one assignment: the value runs to the end of the line,
-		// spaces included (`password = correct horse`).
+		// spaces included (`password = correct horse`). A quoted value that closes
+		// at the end of a later line, such as a PEM key, is taken whole.
 		new RegExp(
-			`^([ \\t]*(?:(?:export|set|setenv)[ \\t]+)?["']?${KEY_NAME_HEAD}${BROAD_KEY}["']?${ASSIGN})(\\S.*)$`,
+			`^([ \\t]*(?:(?:export|set|setenv)[ \\t]+)?["']?${KEY_NAME_HEAD}${BROAD_KEY}["']?${ASSIGN})((?:"[^"]{0,8192}"|'[^']{0,8192}')(?=[ \\t]*$)|\\S.*$)`,
 			"gim",
 		),
 		new RegExp(
@@ -742,19 +746,30 @@ export function redactSensitiveText(
 		hideRest,
 	);
 
+	// shell-quote escapes `&` and `|` in a password (`a\&b`), so the value is a
+	// shell word, not a run up to the first separator. As for mysql, a client
+	// word without a password takes the rest of its command.
 	redacted = redacted.replace(
-		/(\bredis-cli\b[^\n;&|]*?\s-a\s+)("[^"]*"|'[^']*'|[^\s;&|]+)/gi,
+		new RegExp(
+			String.raw`(\bredis-cli\b(?:\\.|[^\n;&|\\])*?\s-a\s+)(${SHELL_VALUE_PATTERN})|\bredis-cli\b(?:\\.|[^\n;&|\\])*`,
+			"gi",
+		),
+		(match, prefix?: string) =>
+			prefix === undefined ? match : hideRest(match, prefix),
+	);
+
+	redacted = redacted.replace(
+		new RegExp(
+			String.raw`(\bCONFIG\s+SET\s+requirepass\s+)(${SHELL_VALUE_PATTERN})`,
+			"gi",
+		),
 		hideRest,
 	);
 
 	redacted = redacted.replace(
-		/(\bCONFIG\s+SET\s+requirepass\s+)("[^"]*"|'[^']*'|[^\s;&|]+)/gi,
-		hideRest,
-	);
-
-	redacted = redacted.replace(
-		/(\bmongo(?:dump|export|import|restore|sh)?\b[^\n;&|]*?\s-p\s+)[^\n;&|]+/gi,
-		hideRest,
+		/(\bmongo(?:dump|export|import|restore|sh)?\b(?:\\.|[^\n;&|\\])*?\s-p\s+)(?:\\.|[^\n;&|\\])+|\bmongo(?:dump|export|import|restore|sh)?\b(?:\\.|[^\n;&|\\])*/gi,
+		(match, prefix?: string) =>
+			prefix === undefined ? match : hideRest(match, prefix),
 	);
 
 	redacted = redacted.replace(

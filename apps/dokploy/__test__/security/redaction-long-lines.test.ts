@@ -1,3 +1,4 @@
+import { quoteShellArg } from "@dokploy/server/utils/filesystem/safe-path";
 import {
 	REDACTED_SECRET_VALUE as R,
 	redactSensitiveText,
@@ -28,6 +29,14 @@ describe("redactSensitiveText under default options on long lines", () => {
 		["sensitive words in a string", `"${"token ".repeat(100_000)}": ,`],
 		["sensitive words in an open string", `'${"token ".repeat(100_000)}`],
 		["a log after one quote", `"${"unexpected token\n".repeat(30_000)}`],
+		["query separators", "?a".repeat(100_000)],
+		["hashes", "#".repeat(200_000)],
+		["ampersands", "&".repeat(200_000)],
+		["a query key of keywords", `?${"token".repeat(40_000)}`],
+		["a flag of keywords", ` -${"token-".repeat(33_000)}`],
+		["an env name of keywords", "TOKEN_".repeat(33_000)],
+		["redis clients", "redis-cli ".repeat(20_000)],
+		["mongo clients", "mongosh ".repeat(25_000)],
 	])("stays fast on a line of %s", (_name, input) => {
 		const startedAt = performance.now();
 
@@ -120,5 +129,74 @@ describe("the mysql client rule", () => {
 		["mysql db mysql db", "mysql db mysql db"],
 	])("reads the client words of %s", (input, expected) => {
 		expect(redactSensitiveText(input)).toBe(expected);
+	});
+});
+
+describe("bounded key names", () => {
+	it.each([
+		["?api_key=abc&x=1", `?api_key=${R}&x=1`],
+		["https://h/p?a=1&access_token=abc", `https://h/p?a=1&access_token=${R}`],
+		["MY_SERVICE_SECRET_TOKEN=abc", `MY_SERVICE_SECRET_TOKEN=${R}`],
+		["run --db-password=abc next", `run --db-password=${R} next`],
+		["run --api-token abc next", `run --api-token ${R} next`],
+	])("still masks %s", (input, expected) => {
+		expect(redactSensitiveText(input)).toBe(expected);
+	});
+});
+
+describe("client passwords written by shell-quote", () => {
+	it.each([
+		"ab&cd12",
+		"x|yz|w",
+		"p&&q",
+		"a|b&c",
+		"&start",
+		"end|",
+		"mid&dle|x",
+	])("hides all of %s in a failed redis-cli command", (password) => {
+		const command = `docker exec "$ID" redis-cli --no-auth-warning -a ${quoteShellArg("old&pw")} CONFIG SET requirepass ${quoteShellArg(password)}`;
+
+		expect(redactSensitiveText(`Command failed: ${command}`)).toBe(
+			`Command failed: docker exec "$ID" redis-cli --no-auth-warning -a ${R} CONFIG SET requirepass ${R}`,
+		);
+	});
+
+	it("hides an escaped mongo password whole", () => {
+		expect(redactSensitiveText("mongosh -u root -p pass\\&word; ls")).toBe(
+			`mongosh -u root -p ${R}; ls`,
+		);
+	});
+
+	it("leaves a client word without a password alone", () => {
+		expect(redactSensitiveText("redis-cli ping && mongosh --eval 1")).toBe(
+			"redis-cli ping && mongosh --eval 1",
+		);
+	});
+});
+
+describe("a quoted value over several lines with broad keys", () => {
+	it("hides the whole value", () => {
+		expect(
+			redactSensitiveText(
+				'PRIVATE_KEY="-----BEGIN KEY-----\nabc\ndef\n-----END KEY-----"\nNEXT=1',
+				{ broadKeys: true },
+			),
+		).toBe(`PRIVATE_KEY=${R}\nNEXT=1`);
+	});
+
+	it("keeps the rest of a one-line value hidden as before", () => {
+		expect(
+			redactSensitiveText('password = "abc" # set by hand', {
+				broadKeys: true,
+			}),
+		).toBe(`password = ${R}`);
+	});
+
+	it("does not reach past an unclosed quote", () => {
+		expect(
+			redactSensitiveText('TOKEN="abc\nNAME=web\nPORT="80"', {
+				broadKeys: true,
+			}),
+		).toBe(`TOKEN=${R}\nNAME=web\nPORT="80"`);
 	});
 });
