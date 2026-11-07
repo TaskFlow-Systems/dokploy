@@ -11,6 +11,7 @@ import {
 	deployPreviewApplication,
 	rebuildApplication,
 	rebuildPreviewApplication,
+	reloadApplication,
 } from "@dokploy/server/services/application";
 import { rollback } from "@dokploy/server/services/rollbacks";
 import {
@@ -715,6 +716,36 @@ CMD ["/bin/sh", "-c", "sleep ${(LIMIT_WITHOUT_STOP_GRACE_MS + 5_000) / 1000}; to
 			const failedRollback = await run(() => rollback("rollback"));
 			expect(failedRollback.failure?.message).toMatch(ROLLED_BACK);
 			expect(failedRollback.savedStatuses).toEqual([
+				{ applicationStatus: "running" },
+				{ applicationStatus: "error" },
+			]);
+		},
+		REAL_TEST_TIMEOUT,
+	);
+
+	it(
+		"waits on a reload and sets the application's status",
+		async () => {
+			const application = applicationFixture("reload");
+			expectReportedDone(await rebuild(application));
+			const [beforeReload] = await runningTasks(application.appName);
+
+			loads(application);
+			const reloaded = await run(() => reloadApplication("app"));
+			expect(reloaded.failure).toBeNull();
+			expect(reloaded.savedStatuses).toEqual([
+				{ applicationStatus: "running" },
+				{ applicationStatus: "done" },
+			]);
+			const running = await runningTasks(application.appName);
+			expect(running).toHaveLength(1);
+			expect(running[0]?.ID).not.toBe(beforeReload?.ID);
+
+			// A reload whose new version does not start is an error, not a success.
+			loads({ ...application, ...CRASHES });
+			const failed = await run(() => reloadApplication("app"));
+			expect(failed.failure?.message).toMatch(ROLLED_BACK);
+			expect(failed.savedStatuses).toEqual([
 				{ applicationStatus: "running" },
 				{ applicationStatus: "error" },
 			]);

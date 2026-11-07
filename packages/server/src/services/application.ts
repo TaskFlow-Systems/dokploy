@@ -252,6 +252,22 @@ const rollOutApplication = async (
 	);
 };
 
+// `reload` replaces the task like a deployment does. Without the wait a reload
+// whose new version crashes went unseen and the status stayed what it was.
+export const reloadApplication = async (applicationId: string) => {
+	const application = await findApplicationById(applicationId);
+	await updateApplicationStatus(applicationId, "running");
+	try {
+		await mechanizeDockerContainer(application);
+		await waitForApplicationRollout(application.appName, application.serverId);
+	} catch (error) {
+		await updateApplicationStatus(applicationId, "error");
+		throw error;
+	}
+	await updateApplicationStatus(applicationId, "done");
+	return application;
+};
+
 export const deployApplication = async ({
 	applicationId,
 	titleLog = "Manual deployment",
