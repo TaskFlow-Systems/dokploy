@@ -222,42 +222,49 @@ const Libsql = (
 											>
 												General
 											</TabsTrigger>
-											<TabsTrigger
-												value="environment"
-												onPointerEnter={ShowEnvironment.preload}
-											>
-												Environment
-											</TabsTrigger>
-											<TabsTrigger
-												value="logs"
-												onPointerEnter={ShowDockerLogs.preload}
-											>
-												Logs
-											</TabsTrigger>
-											{((data?.serverId && isCloud) || !data?.server) && (
+											{permissions?.envVars.read && (
 												<TabsTrigger
-													value="monitoring"
-													onPointerEnter={
-														data?.serverId && isCloud
-															? ContainerPaidMonitoring.preload
-															: ContainerFreeMonitoring.preload
-													}
+													value="environment"
+													onPointerEnter={ShowEnvironment.preload}
 												>
-													Monitoring
+													Environment
 												</TabsTrigger>
 											)}
+											{permissions?.logs.read && (
+												<TabsTrigger
+													value="logs"
+													onPointerEnter={ShowDockerLogs.preload}
+												>
+													Logs
+												</TabsTrigger>
+											)}
+											{permissions?.monitoring.read &&
+												((data?.serverId && isCloud) || !data?.server) && (
+													<TabsTrigger
+														value="monitoring"
+														onPointerEnter={
+															data?.serverId && isCloud
+																? ContainerPaidMonitoring.preload
+																: ContainerFreeMonitoring.preload
+														}
+													>
+														Monitoring
+													</TabsTrigger>
+												)}
 											<TabsTrigger
 												value="backups"
 												onPointerEnter={ShowBackups.preload}
 											>
 												Backups
 											</TabsTrigger>
-											<TabsTrigger
-												value="advanced"
-												onPointerEnter={ShowDatabaseAdvancedSettings.preload}
-											>
-												Advanced
-											</TabsTrigger>
+											{permissions?.service.create && (
+												<TabsTrigger
+													value="advanced"
+													onPointerEnter={ShowDatabaseAdvancedSettings.preload}
+												>
+													Advanced
+												</TabsTrigger>
+											)}
 										</TabsList>
 									</div>
 
@@ -266,59 +273,65 @@ const Libsql = (
 											<ShowLibsqlGeneralTab libsqlId={libsqlId} />
 										</div>
 									</TabsContent>
-									<TabsContent value="environment">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowEnvironment id={libsqlId} type="libsql" />
-										</div>
-									</TabsContent>
-									<TabsContent value="monitoring">
-										<div className="pt-2.5">
-											<div className="flex flex-col gap-4 border rounded-lg p-6">
-												{data?.serverId && isCloud ? (
-													<ContainerPaidMonitoring
-														appName={data?.appName || ""}
-														serverId={data?.serverId || undefined}
-													/>
-												) : (
-													<>
-														{/* {monitoring?.enabledFeatures && (
-															<div className="flex flex-row border w-fit p-4 rounded-lg items-center gap-2">
-																<Label className="text-muted-foreground">
-																	Change Monitoring
-																</Label>
-																<Switch
-																	checked={toggleMonitoring}
-																	onCheckedChange={setToggleMonitoring}
-																/>
-															</div>
-														)}
-
-														{toggleMonitoring ? (
-															<ContainerPaidMonitoring
-																appName={data?.appName || ""}
-															/>
-														) : (
-															<div> */}
-														<ContainerFreeMonitoring
-															appName={data?.appName || ""}
-															serviceId={data?.libsqlId}
-														/>
-														{/* </div> */}
-														{/* )} */}
-													</>
-												)}
+									{permissions?.envVars.read && (
+										<TabsContent value="environment">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowEnvironment id={libsqlId} type="libsql" />
 											</div>
-										</div>
-									</TabsContent>
-									<TabsContent value="logs">
-										<div className="flex flex-col gap-4  pt-2.5">
-											<ShowDockerLogs
-												serverId={data?.serverId || ""}
-												appName={data?.appName || ""}
-												serviceId={data?.libsqlId}
-											/>
-										</div>
-									</TabsContent>
+										</TabsContent>
+									)}
+									{permissions?.monitoring.read && (
+										<TabsContent value="monitoring">
+											<div className="pt-2.5">
+												<div className="flex flex-col gap-4 border rounded-lg p-6">
+													{data?.serverId && isCloud ? (
+														<ContainerPaidMonitoring
+															appName={data?.appName || ""}
+															serverId={data?.serverId || undefined}
+														/>
+													) : (
+														<>
+															{/* {monitoring?.enabledFeatures && (
+																<div className="flex flex-row border w-fit p-4 rounded-lg items-center gap-2">
+																	<Label className="text-muted-foreground">
+																		Change Monitoring
+																	</Label>
+																	<Switch
+																		checked={toggleMonitoring}
+																		onCheckedChange={setToggleMonitoring}
+																	/>
+																</div>
+															)}
+	
+															{toggleMonitoring ? (
+																<ContainerPaidMonitoring
+																	appName={data?.appName || ""}
+																/>
+															) : (
+																<div> */}
+															<ContainerFreeMonitoring
+																appName={data?.appName || ""}
+																serviceId={data?.libsqlId}
+															/>
+															{/* </div> */}
+															{/* )} */}
+														</>
+													)}
+												</div>
+											</div>
+										</TabsContent>
+									)}
+									{permissions?.logs.read && (
+										<TabsContent value="logs">
+											<div className="flex flex-col gap-4  pt-2.5">
+												<ShowDockerLogs
+													serverId={data?.serverId || ""}
+													appName={data?.appName || ""}
+													serviceId={data?.libsqlId}
+												/>
+											</div>
+										</TabsContent>
+									)}
 									<TabsContent value="backups">
 										<div className="flex flex-col gap-4 pt-2.5">
 											<ShowBackups
@@ -328,14 +341,16 @@ const Libsql = (
 											/>
 										</div>
 									</TabsContent>
-									<TabsContent value="advanced">
-										<div className="flex flex-col gap-4 pt-2.5">
-											<ShowDatabaseAdvancedSettings
-												id={libsqlId}
-												type="libsql"
-											/>
-										</div>
-									</TabsContent>
+									{permissions?.service.create && (
+										<TabsContent value="advanced">
+											<div className="flex flex-col gap-4 pt-2.5">
+												<ShowDatabaseAdvancedSettings
+													id={libsqlId}
+													type="libsql"
+												/>
+											</div>
+										</TabsContent>
+									)}
 								</Tabs>
 							)}
 						</CardContent>

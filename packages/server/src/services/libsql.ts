@@ -3,6 +3,7 @@ import {
 	type apiCreateLibsql,
 	backups,
 	buildAppName,
+	LIBSQL_DEFAULT_IMAGE,
 	libsql,
 } from "@dokploy/server/db/schema";
 import { generatePassword } from "@dokploy/server/templates";
@@ -136,6 +137,7 @@ export const deployLibsql = async (
 	onData?: (data: any) => void,
 ) => {
 	const libsql = await findLibsqlById(libsqlId);
+	const image = libsql.dockerImage || LIBSQL_DEFAULT_IMAGE;
 	try {
 		await updateLibsqlById(libsqlId, {
 			applicationStatus: "running",
@@ -144,11 +146,11 @@ export const deployLibsql = async (
 		if (libsql.serverId) {
 			await execAsyncRemote(
 				libsql.serverId,
-				buildDockerPullCommand(libsql.dockerImage),
+				buildDockerPullCommand(image),
 				onData,
 			);
 		} else {
-			await pullImage(libsql.dockerImage, onData);
+			await pullImage(image, onData);
 		}
 
 		await buildLibsql(libsql);
