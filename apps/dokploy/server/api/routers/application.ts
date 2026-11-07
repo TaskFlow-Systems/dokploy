@@ -14,9 +14,9 @@ import {
 	getContainerLogs,
 	getWebServerSettings,
 	IS_CLOUD,
-	mechanizeDockerContainer,
 	readConfig,
 	readRemoteConfig,
+	reloadApplication,
 	removeDeployments,
 	removeDirectoryCode,
 	removeMonitoringDirectory,
@@ -481,12 +481,8 @@ export const applicationRouter = createTRPCRouter({
 			await checkServicePermissionAndAccess(ctx, input.applicationId, {
 				deployment: ["create"],
 			});
-			const application = await findApplicationById(input.applicationId);
-
 			try {
-				await updateApplicationStatus(input.applicationId, "idle");
-				await mechanizeDockerContainer(application);
-				await updateApplicationStatus(input.applicationId, "done");
+				const application = await reloadApplication(input.applicationId);
 				await audit(ctx, {
 					action: "reload",
 					resourceType: "application",
@@ -495,10 +491,12 @@ export const applicationRouter = createTRPCRouter({
 				});
 				return true;
 			} catch (error) {
-				await updateApplicationStatus(input.applicationId, "error");
 				throw new TRPCError({
 					code: "INTERNAL_SERVER_ERROR",
-					message: "Error reloading application",
+					message:
+						error instanceof Error && error.message
+							? `Error reloading application: ${error.message}`
+							: "Error reloading application",
 					cause: error,
 				});
 			}
