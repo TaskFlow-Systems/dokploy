@@ -235,7 +235,7 @@ describe("waitForSwarmServiceConvergence on real Docker: failed updates and buil
 			await timedWait(redis.appName);
 			const [before] = await runningTasks(redis.appName);
 
-			await rebuildDatabase(redis.redisId, "redis", 0);
+			await rebuildDatabase(redis.redisId, "redis");
 
 			expect(statuses).toEqual(["running", "done"]);
 			const rebuilt = await inspect(redis.appName);
