@@ -349,16 +349,16 @@ describe("the credentials components", () => {
 	describe("libsql replication", () => {
 		const props = { libsqlId: "d1" };
 
-		it("shows the internal replication string", () => {
-			expect(htmlOf(ShowInternalLibsqlCredentials, props)).toContain(
-				`value="http://${credentials}@db-abc:5001"`,
-			);
+		it("shows the internal replication string without credentials, since the port asks for a certificate", () => {
+			const html = htmlOf(ShowInternalLibsqlCredentials, props);
+			expect(html).toContain('value="https://db-abc:5001"');
+			expect(html).not.toContain(`${credentials}@db-abc:5001`);
 		});
 
-		it("shows the external replication string", () => {
-			expect(htmlOf(ShowExternalLibsqlCredentials, props)).toContain(
-				`value="http://${credentials}@203.0.113.10:15001"`,
-			);
+		it("shows the external replication string without credentials", () => {
+			const html = htmlOf(ShowExternalLibsqlCredentials, props);
+			expect(html).toContain('value="https://203.0.113.10:15001"');
+			expect(html).not.toContain(`${credentials}@203.0.113.10:15001`);
 		});
 
 		it("hides the external replication string on a replica", () => {

@@ -1,5 +1,7 @@
 // The replica's form imports this too, so it stays free of server-only modules.
 
+import { LIBSQL_GRPC_REPLICA_FLAGS } from "./libsql-grpc-flags";
+
 // The custom command form saves "" when left empty, even when the user only changed
 // the image, so "" asks for no override, as null does.
 export const getCustomLibsqlCommand = (command: string | null | undefined) =>
@@ -24,14 +26,14 @@ export const getLibsqlPrimaryUrlProblem = (
 	if (!sqldPrimaryUrl) {
 		return "A libSQL replica needs the URL of its primary";
 	}
-	const protocol = getHttpProtocol(sqldPrimaryUrl);
-	if (!protocol) {
-		return "The URL of a libSQL replica's primary must be a full http:// URL: use the primary's Internal Replication Connection URL";
+	if (!getHttpProtocol(sqldPrimaryUrl)) {
+		return "The URL of a libSQL replica's primary must be a full http:// or https:// URL: use the primary's Internal Replication Connection URL";
 	}
-	// sqld stays up and every request hangs. The field's placeholder used to suggest
-	// https, and only a custom command can pass the TLS flags.
-	if (protocol === "https:" && !getCustomLibsqlCommand(command)) {
-		return "The default libSQL command connects to its primary without TLS: use the primary's http:// Internal Replication Connection URL, or a custom command with the --primary-grpc-tls flags";
+	// The primary refuses a node without the panel's certificate, and sqld takes
+	// the certificate only from these flags.
+	const custom = getCustomLibsqlCommand(command);
+	if (custom && !custom.includes("--primary-grpc-tls")) {
+		return `A custom libSQL replica command has to connect with the panel's certificate: add ${LIBSQL_GRPC_REPLICA_FLAGS}`;
 	}
 	return null;
 };

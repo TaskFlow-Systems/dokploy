@@ -50,3 +50,7 @@ export const buildRedisUrl = (
 
 export const buildLibsqlUrl = (credentials: Credentials, endpoint: Endpoint) =>
 	buildUrl("http", credentials, endpoint);
+
+// Port 5001 checks a node's certificate, not a user and password.
+export const buildLibsqlGrpcUrl = ({ host, port }: Endpoint) =>
+	`https://${formatUrlHost(host)}:${port}`;
