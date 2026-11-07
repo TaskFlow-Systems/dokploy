@@ -16,7 +16,7 @@ import { deployRedis } from "@dokploy/server/services/redis";
 import { eq } from "drizzle-orm";
 import { removeService } from "../docker/utils";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
-import { quoteShellArgs } from "../shell";
+import { quoteShellArgs, quoteShellArgument } from "../shell";
 import { normalizeDockerVolumeName } from "../volume-backups/safe-input";
 
 type DatabaseType =
@@ -27,10 +27,37 @@ type DatabaseType =
 	| "postgres"
 	| "redis";
 
+// Swarm gives a container 10 s to stop by default and a service can ask for
+// more, and a volume in use cannot be removed: the fixed 6 s this used to wait
+// could leave the service removed and the Rebuild failed on `volume is in use`.
+const waitForContainersGone = async (
+	appName: string,
+	serverId: string | null | undefined,
+	limitMs: number,
+) => {
+	const seconds = Math.ceil(limitMs / 1000);
+	const list = quoteShellArgs([
+		"docker",
+		"ps",
+		"-aq",
+		"--filter",
+		`label=com.docker.swarm.service.name=${appName}`,
+	]);
+	const message = quoteShellArgument(
+		`The containers of ${appName} did not stop within ${seconds} s, so its volumes were left as they are`,
+	);
+	const command = `i=0; while [ -n "$(${list})" ]; do i=$((i + 1)); if [ "$i" -gt ${seconds} ]; then echo ${message} >&2; exit 1; fi; sleep 1; done`;
+	if (serverId) {
+		await execAsyncRemote(serverId, command);
+	} else {
+		await execAsync(command);
+	}
+};
+
 export const rebuildDatabase = async (
 	databaseId: string,
 	type: DatabaseType,
-	rebuildDelayMs = 6000,
+	stopLimitMs = 120_000,
 ) => {
 	const database = await findDatabaseById(databaseId, type);
 
@@ -39,8 +66,12 @@ export const rebuildDatabase = async (
 	}
 
 	await removeService(database.appName, database.serverId);
-	if (rebuildDelayMs > 0) {
-		await new Promise((resolve) => setTimeout(resolve, rebuildDelayMs));
+	if (stopLimitMs > 0) {
+		await waitForContainersGone(
+			database.appName,
+			database.serverId,
+			stopLimitMs,
+		);
 	}
 
 	for (const mount of database.mounts) {
