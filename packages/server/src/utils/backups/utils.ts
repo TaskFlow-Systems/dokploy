@@ -301,6 +301,34 @@ export const getServiceContainerCommand = (appName: string) => {
 	])} | head -n 1`;
 };
 
+// The panel reaches the engine of one node, so a database whose task runs on
+// another node of the cluster has no container there. Saying which node it is
+// tells that apart from a database that is not running.
+export const getMissingServiceContainerCommand = (appName: string) => {
+	const safeAppName = normalizeRestoreServiceName(appName);
+	if (!safeAppName) {
+		throw new Error("Invalid service name");
+	}
+	const nodes = quoteShellArgs([
+		"docker",
+		"service",
+		"ps",
+		"--filter",
+		"desired-state=running",
+		"--format",
+		"{{.Node}}",
+		safeAppName,
+	]);
+	const elsewhere = quoteShellArgs([`${safeAppName} runs on node`]);
+	const reach = quoteShellArgs([
+		", and the panel reaches only the containers of the node it connects to",
+	]);
+	const missing = quoteShellArgs([
+		`No running container found for ${safeAppName}`,
+	]);
+	return `NODE=$(${nodes} 2>/dev/null | head -n 1); if [ -n "$NODE" ]; then echo ${elsewhere} "$NODE"${reach} >&2; else echo ${missing} >&2; fi`;
+};
+
 export const getComposeContainerCommand = (
 	appName: string,
 	serviceName: string,

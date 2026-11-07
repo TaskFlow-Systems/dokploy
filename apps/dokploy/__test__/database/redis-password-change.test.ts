@@ -20,6 +20,8 @@ vi.mock("@dokploy/server/utils/servers/remote-docker", () => ({
 }));
 
 vi.mock("@dokploy/server/utils/backups/utils", () => ({
+	getMissingServiceContainerCommand: (appName: string) =>
+		`echo missing-${appName} >&2`,
 	getServiceContainerCommand: (appName: string) => `find-${appName}`,
 }));
 
