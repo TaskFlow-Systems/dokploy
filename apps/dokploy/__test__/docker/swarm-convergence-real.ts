@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { docker } from "@dokploy/server/constants";
 import { db } from "@dokploy/server/db";
@@ -28,7 +28,9 @@ const CHECKOUT_ID = createHash("sha256")
 	.update(process.cwd())
 	.digest("hex")
 	.slice(0, 8);
-export const RUN_ID = `${CHECKOUT_ID}-${Date.now()}`;
+// Both swarm-convergence files load this module, often in the same millisecond on a
+// machine with many workers, and each needs a network and services of its own.
+export const RUN_ID = `${CHECKOUT_ID}-${Date.now()}-${randomBytes(3).toString("hex")}`;
 const NETWORK = `real-swarm-net-${RUN_ID}`;
 
 const appNames: string[] = [];
