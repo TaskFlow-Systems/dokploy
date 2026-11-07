@@ -103,9 +103,19 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 			`A custom libSQL command that listens for gRPC has to require the panel's certificate: add ${LIBSQL_GRPC_PRIMARY_FLAGS}`,
 		);
 	}
+	const docker = await getRemoteDocker(libsql.serverId);
+	const currentEnv = await docker
+		.getService(appName)
+		.inspect({ abortSignal: AbortSignal.timeout(30_000) })
+		.then(
+			(service) =>
+				service.Spec?.TaskTemplate?.ContainerSpec?.Env as string[] | undefined,
+			() => undefined,
+		);
 	const grpcTlsEnv = await libsqlGrpcTlsEnv(
 		await getLibsqlGrpcCa(libsql.environment.project.organizationId),
 		appName,
+		currentEnv,
 	);
 
 	const basicAuth = Buffer.from(
@@ -154,8 +164,6 @@ export const buildLibsql = async (rawLibsql: LibsqlNested) => {
 		serviceType: "libsql",
 	});
 	const filesMount = generateFileMounts(appName, libsql);
-
-	const docker = await getRemoteDocker(libsql.serverId);
 
 	let finalCommand = customCommand
 		? `${LIBSQL_GRPC_TLS_SETUP}\n${customCommand}`

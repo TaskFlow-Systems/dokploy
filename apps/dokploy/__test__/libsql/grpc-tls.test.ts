@@ -2,6 +2,7 @@ import { createPrivateKey, X509Certificate } from "node:crypto";
 import {
 	createLibsqlGrpcCa,
 	issueLibsqlGrpcCertificate,
+	libsqlGrpcTlsEnv,
 } from "@dokploy/server/utils/databases/libsql-grpc-tls";
 import { describe, expect, it } from "vitest";
 
@@ -46,5 +47,46 @@ describe("the libSQL gRPC certificates", () => {
 		expect(
 			new X509Certificate(foreign.certificate).verify(ours.publicKey),
 		).toBe(false);
+	});
+});
+
+// What the service spec holds after prepareEnvironmentVariables.
+const asSpecEnv = (lines: string) =>
+	lines.split("\n").map((line) => line.replace(/^(\w+)="(.*)"$/, "$1=$2"));
+
+describe("the certificate a redeploy hands the node", () => {
+	it("stays the one in the running spec, so nothing else restarts", async () => {
+		const ca = await createLibsqlGrpcCa("org-1");
+		const first = await libsqlGrpcTlsEnv(ca, "db-app");
+
+		expect(await libsqlGrpcTlsEnv(ca, "db-app", asSpecEnv(first))).toBe(first);
+	});
+
+	it("is new without a running spec, or when its authority changed", async () => {
+		const ca = await createLibsqlGrpcCa("org-1");
+		const first = await libsqlGrpcTlsEnv(ca, "db-app");
+
+		expect(await libsqlGrpcTlsEnv(ca, "db-app")).not.toBe(first);
+		expect(
+			await libsqlGrpcTlsEnv(
+				await createLibsqlGrpcCa("org-1"),
+				"db-app",
+				asSpecEnv(first),
+			),
+		).not.toBe(first);
+	});
+
+	it("is new when the spec holds a certificate the authority did not sign", async () => {
+		const ca = await createLibsqlGrpcCa("org-1");
+		const forged = asSpecEnv(
+			await libsqlGrpcTlsEnv(await createLibsqlGrpcCa("org-2"), "db-app"),
+		).map((line) =>
+			line.startsWith("DOKPLOY_GRPC_CA=")
+				? `DOKPLOY_GRPC_CA=${Buffer.from(ca.certificate).toString("base64")}`
+				: line,
+		);
+
+		const next = await libsqlGrpcTlsEnv(ca, "db-app", forged);
+		expect(next).not.toContain(forged[1]?.split("=")[1] ?? "-");
 	});
 });

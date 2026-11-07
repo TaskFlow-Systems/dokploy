@@ -2,7 +2,7 @@ import { docker } from "@dokploy/server/constants";
 import { buildLibsql } from "@dokploy/server/utils/databases/libsql";
 import { buildRedis } from "@dokploy/server/utils/databases/redis";
 import { waitForSwarmServiceConvergence } from "@dokploy/server/utils/docker/utils";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
 	CATCHES_EVERY_RUN,
 	CRASH_AFTER_S,
@@ -24,6 +24,15 @@ import {
 	volumeNames,
 	waitUntil,
 } from "./swarm-convergence-real";
+
+// The authority lives in the panel's database, which these tests leave out.
+vi.mock("@dokploy/server/services/libsql-grpc-ca", async () => {
+	const { createLibsqlGrpcCa } = await import(
+		"@dokploy/server/utils/databases/libsql-grpc-tls"
+	);
+	const ca = await createLibsqlGrpcCa("org");
+	return { getLibsqlGrpcCa: async () => ca };
+});
 
 describe("waitForSwarmServiceConvergence on real Docker", () => {
 	beforeAll(setUpRealSwarm, REAL_TEST_TIMEOUT);

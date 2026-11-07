@@ -110,7 +110,50 @@ export const issueLibsqlGrpcCertificate = async (
 
 const base64 = (pem: string) => Buffer.from(pem, "utf8").toString("base64");
 
-export const libsqlGrpcTlsEnv = async (ca: LibsqlGrpcCa, appName: string) => {
+const envValue = (env: readonly string[], name: string) =>
+	env.find((line) => line.startsWith(`${name}=`))?.slice(name.length + 1);
+
+// A certificate that the running spec already carries, from the same
+// authority and with years left, keeps the Env as it is: a new one on every
+// deployment would restart a database that nothing else changed.
+const reusableLines = async (
+	ca: LibsqlGrpcCa,
+	currentEnv: readonly string[] | undefined,
+) => {
+	if (!currentEnv) return null;
+	const caValue = envValue(currentEnv, "DOKPLOY_GRPC_CA");
+	const certValue = envValue(currentEnv, "DOKPLOY_GRPC_CERT");
+	const keyValue = envValue(currentEnv, "DOKPLOY_GRPC_KEY");
+	if (caValue !== base64(ca.certificate) || !certValue || !keyValue) {
+		return null;
+	}
+	try {
+		const certificate = new x509.X509Certificate(
+			Buffer.from(certValue, "base64").toString("utf8"),
+		);
+		const authority = new x509.X509Certificate(ca.certificate);
+		const valid =
+			(await certificate.verify({ publicKey: authority.publicKey })) &&
+			certificate.notAfter.getTime() > Date.now() + YEAR_MS;
+		return valid
+			? [
+					`DOKPLOY_GRPC_CA="${caValue}"`,
+					`DOKPLOY_GRPC_CERT="${certValue}"`,
+					`DOKPLOY_GRPC_KEY="${keyValue}"`,
+				].join("\n")
+			: null;
+	} catch {
+		return null;
+	}
+};
+
+export const libsqlGrpcTlsEnv = async (
+	ca: LibsqlGrpcCa,
+	appName: string,
+	currentEnv?: readonly string[],
+) => {
+	const reused = await reusableLines(ca, currentEnv);
+	if (reused) return reused;
 	const leaf = await issueLibsqlGrpcCertificate(ca, appName);
 	return [
 		`DOKPLOY_GRPC_CA="${base64(ca.certificate)}"`,
