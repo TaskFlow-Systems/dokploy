@@ -64,16 +64,28 @@ jobs:
       
       - name: Install Nixpacks
         if: matrix.part != 'build' && runner.environment == 'github-hosted'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run:  |
           export NIXPACKS_VERSION=1.41.0
-          curl -sSL https://nixpacks.com/install.sh | bash
+          scripts/github-release-asset.sh railwayapp/nixpacks "v$NIXPACKS_VERSION" "nixpacks-v$NIXPACKS_VERSION-$(uname -m)-unknown-linux-musl.tar.gz" "$RUNNER_TEMP/nixpacks.tar.gz"
+          sudo tar -xzf "$RUNNER_TEMP/nixpacks.tar.gz" -C /usr/local/bin nixpacks
           echo "Nixpacks installed $NIXPACKS_VERSION"
 
       - name: Install Railpack
         if: matrix.part != 'build' && runner.environment == 'github-hosted'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run:  |
-          export RAILPACK_VERSION=0.42.0
-          curl -sSL https://railpack.com/install.sh | bash
+          export RAILPACK_VERSION=0.43.0
+          scripts/github-release-asset.sh railwayapp/railpack "v$RAILPACK_VERSION" "railpack-v$RAILPACK_VERSION-$(uname -m | sed s/aarch64/arm64/)-unknown-linux-musl.tar.gz" "$RUNNER_TEMP/railpack.tar.gz"
+          sudo tar -xzf "$RUNNER_TEMP/railpack.tar.gz" -C /usr/local/bin railpack
+          # The mise Railpack pins, where Railpack looks for it (see Dockerfile).
+          export MISE_VERSION=2026.10.14
+          scripts/github-release-asset.sh jdx/mise "v$MISE_VERSION" "mise-v$MISE_VERSION-linux-$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')-musl.tar.gz" "$RUNNER_TEMP/mise.tar.gz"
+          mkdir -p /tmp/railpack/mise
+          tar -xzf "$RUNNER_TEMP/mise.tar.gz" -O mise/bin/mise > "/tmp/railpack/mise/mise-$MISE_VERSION"
+          chmod 0755 "/tmp/railpack/mise/mise-$MISE_VERSION"
           echo "Railpack installed $RAILPACK_VERSION"
       
       - name: Add build tools to PATH
