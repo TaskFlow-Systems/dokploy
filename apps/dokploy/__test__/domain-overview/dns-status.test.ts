@@ -3,12 +3,24 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const dns = vi.hoisted(() => ({
 	resolve4: vi.fn(),
 	resolve6: vi.fn(),
+	resolveTxt: vi.fn(),
+	resolveMx: vi.fn(),
+	resolveNs: vi.fn(),
+	resolveSoa: vi.fn(),
+	resolveCname: vi.fn(),
+	resolveCaa: vi.fn(),
 }));
 
 vi.mock("node:dns", () => ({
 	promises: {
 		resolve4: dns.resolve4,
 		resolve6: dns.resolve6,
+		resolveTxt: dns.resolveTxt,
+		resolveMx: dns.resolveMx,
+		resolveNs: dns.resolveNs,
+		resolveSoa: dns.resolveSoa,
+		resolveCname: dns.resolveCname,
+		resolveCaa: dns.resolveCaa,
 	},
 }));
 
@@ -125,6 +137,16 @@ describe("DNS lookups", () => {
 		vi.clearAllMocks();
 		vi.useRealTimers();
 		clearDnsLookupCache();
+		for (const probe of [
+			dns.resolveTxt,
+			dns.resolveMx,
+			dns.resolveNs,
+			dns.resolveSoa,
+			dns.resolveCname,
+			dns.resolveCaa,
+		]) {
+			probe.mockRejectedValue(dnsError("ENOTFOUND"));
+		}
 	});
 
 	it("maps a name that resolves to this server", async () => {
@@ -157,6 +179,18 @@ describe("DNS lookups", () => {
 
 		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
 			"nxdomain",
+		);
+	});
+
+	it("maps a name that Bun reports as ENOTFOUND for the address but that has other records", async () => {
+		dns.resolve4.mockRejectedValue(dnsError("ENOTFOUND"));
+		dns.resolve6.mockRejectedValue(dnsError("ENOTFOUND"));
+		dns.resolveTxt.mockResolvedValue([["v=spf1 -all"]]);
+
+		const records = await resolveDomainRecords("txt-only.example.test");
+
+		expect(mapDnsStatus({ records, serverAddresses: ["192.0.2.10"] })).toBe(
+			"no_address",
 		);
 	});
 
