@@ -501,10 +501,11 @@ export const postgresRouter = createTRPCRouter({
 			});
 
 			const pg = await findPostgresById(postgresId);
-			const { appName, serverId, databaseUser } = pg;
+			const { appName, serverId, databaseUser, databaseName } = pg;
 
 			const containerCmd = getServiceContainerCommand(appName);
 			const passwordChangeCommand = buildPostgresPasswordChangeCommand({
+				databaseName,
 				databaseUser,
 				password,
 			});
