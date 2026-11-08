@@ -753,10 +753,8 @@ export const extractBranchName = (headers: any, body: any) => {
 };
 
 export const getProviderByHeader = (headers: any) => {
-	if (headers["x-github-event"]) {
-		return "github";
-	}
-
+	// Gitea (and Forgejo) also send X-GitHub-Event and X-Hub-Signature-256 for
+	// GitHub compatibility, so a provider's own header has to win over GitHub's.
 	if (headers["x-gitea-event"]) {
 		return "gitea";
 	}
@@ -771,6 +769,10 @@ export const getProviderByHeader = (headers: any) => {
 
 	if (headers["x-softserve-event"]) {
 		return "soft-serve";
+	}
+
+	if (headers["x-github-event"]) {
+		return "github";
 	}
 
 	return null;
