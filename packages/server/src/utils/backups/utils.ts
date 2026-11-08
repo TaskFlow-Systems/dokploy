@@ -31,6 +31,7 @@ import { runMariadbBackup } from "./mariadb";
 import { runMongoBackup } from "./mongo";
 import { runMySqlBackup } from "./mysql";
 import { runPostgresBackup } from "./postgres";
+import { guardScheduledRun } from "./scheduled-run";
 import { runWebServerBackup } from "./web-server";
 
 export const scheduleBackup = (backup: BackupSchedule) => {
@@ -57,7 +58,7 @@ export const scheduleBackup = (backup: BackupSchedule) => {
 		libsql,
 		compose,
 	} = backup;
-	scheduleJob(backupId, schedule, async () => {
+	const run = async () => {
 		if (backup.backupType === "database") {
 			if (databaseType === "postgres" && postgres) {
 				await runPostgresBackup(postgres, backup);
@@ -82,7 +83,8 @@ export const scheduleBackup = (backup: BackupSchedule) => {
 			await runComposeBackup(compose, backup);
 			await keepLatestNBackups(backup, compose.serverId);
 		}
-	});
+	};
+	scheduleJob(backupId, schedule, guardScheduledRun(backupId, run));
 };
 
 export const removeScheduleBackup = (backupId: string) => {
