@@ -76,6 +76,7 @@ import {
 } from "@/server/db/schema";
 import { assertBuildsConcurrencyAllowed } from "@/server/queues/concurrency";
 import { applyDockerCleanupSchedule } from "@/server/utils/docker-cleanup";
+import { cancelScheduleJobsByOwner } from "@/server/utils/schedule-jobs";
 
 const getMetricsTarget = async (
 	input: { serverId?: string },
@@ -786,6 +787,7 @@ export const serverRouter = createTRPCRouter({
 						: {}),
 				});
 				await removeDeploymentsByServerId(currentServer);
+				await cancelScheduleJobsByOwner({ serverId: input.serverId });
 				await deleteServer(input.serverId);
 
 				if (IS_CLOUD) {

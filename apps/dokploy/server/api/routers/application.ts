@@ -100,6 +100,7 @@ import {
 	myQueue,
 } from "@/server/queues/queueSetup";
 import { cancelDeployment, deploy } from "@/server/utils/deploy";
+import { cancelScheduleJobsByOwner } from "@/server/utils/schedule-jobs";
 
 const applicationRegistryFields = [
 	"registryId",
@@ -526,6 +527,10 @@ export const applicationRouter = createTRPCRouter({
 					await removePreviewDeployment(previewDeployment.previewDeploymentId);
 				} catch (_) {}
 			}
+
+			await cancelScheduleJobsByOwner({
+				applicationId: input.applicationId,
+			});
 
 			const result = await db
 				.delete(applications)
