@@ -10,7 +10,11 @@ import {
 	getServiceContainerCommand,
 } from "../backups/utils";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
-import { normalizeRestoreBackupFile, quoteRestoreShellArg } from "./safe-input";
+import {
+	normalizeRestoreBackupFile,
+	quoteRestoreShellArg,
+	wrapBashPipefail,
+} from "./safe-input";
 
 export const buildGzipTarArchivePolicyCommand = (localBackupPath: string) => {
 	const quotedLocalBackupPath = quoteRestoreShellArg(localBackupPath);
@@ -68,7 +72,7 @@ export const restoreLibsqlBackup = async (
 		const containerSearch = getServiceContainerCommand(appName);
 		const restoreCommand = `cat ${quotedLocalBackupPath} | docker exec -i "$CONTAINER_ID" sh -c ${quoteRestoreShellArg("tar xzf - -C /var/lib/sqld")}`;
 
-		const command = `
+		const command = wrapBashPipefail(`
 set -e
 rm -rf ${quotedTempDir}
 mkdir -p ${quotedTempDir}
@@ -77,7 +81,7 @@ ${rcloneCommand}
 ${buildGzipTarArchivePolicyCommand(localBackupPath)}
 ${restoreCommand}
 rm -rf ${quotedTempDir}
-`;
+`);
 
 		emit("Starting restore...");
 		emit(`Restoring libsql from ${objectPath}`);

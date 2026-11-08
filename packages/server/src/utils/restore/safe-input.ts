@@ -47,3 +47,17 @@ export const normalizeRestoreServiceName = (serviceName?: string) => {
 };
 
 export const quoteRestoreShellArg = (value: string) => quoteShellArg(value);
+
+// Scripts with pipes run under bash with pipefail, so a failing first stage is
+// not hidden by a last stage that exits 0. The login shell of a remote host (or
+// /bin/sh on a Debian panel image) may be dash, which has no pipefail.
+// The script is carried in a quoted heredoc inside a command substitution, so
+// its text is not quoted a second time (the redaction of secrets relies on the
+// shapes quoting gives them) and bash's stdin stays free for `docker exec -i`.
+export const wrapBashPipefail = (script: string) => {
+	const delimiter = "DOKPLOY_SCRIPT_END";
+	if (script.includes(delimiter)) {
+		throw new Error("Script contains the heredoc delimiter.");
+	}
+	return `bash -c "$(cat <<'${delimiter}'\nset -o pipefail\n${script}\n${delimiter}\n)"`;
+};
