@@ -16,6 +16,9 @@ import {
 	normalizeVolumeBackupServiceName,
 	quoteVolumeBackupShellArg,
 } from "./safe-input";
+import { resolveVolumeBackupServerId } from "./server-id";
+
+export { resolveVolumeBackupServerId };
 
 interface RestartSafeBackupCommandOptions {
 	stopCommand: string;
@@ -77,18 +80,6 @@ export const getVolumeServiceAppName = (
 		serviceAppName || volumeBackup.appName,
 	);
 };
-
-export const resolveVolumeBackupServerId = (
-	volumeBackup: Awaited<ReturnType<typeof findVolumeBackupById>>,
-) =>
-	volumeBackup.application?.serverId ||
-	volumeBackup.compose?.serverId ||
-	volumeBackup.postgres?.serverId ||
-	volumeBackup.mysql?.serverId ||
-	volumeBackup.mariadb?.serverId ||
-	volumeBackup.mongo?.serverId ||
-	volumeBackup.redis?.serverId ||
-	volumeBackup.libsql?.serverId;
 
 export const backupVolume = async (
 	volumeBackup: Awaited<ReturnType<typeof findVolumeBackupById>>,

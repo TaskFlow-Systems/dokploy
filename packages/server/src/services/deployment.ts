@@ -27,6 +27,7 @@ import {
 	execAsyncRemote,
 } from "@dokploy/server/utils/process/execAsync";
 import { trackDeploymentResult } from "@dokploy/server/utils/tracking/posthog";
+import { resolveVolumeBackupServerId } from "@dokploy/server/utils/volume-backups/server-id";
 import { TRPCError } from "@trpc/server";
 import { format } from "date-fns";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
@@ -822,8 +823,7 @@ export const createDeploymentVolumeBackup = async (
 ) => {
 	const volumeBackup = await findVolumeBackupById(deployment.volumeBackupId);
 
-	const serverId =
-		volumeBackup.application?.serverId || volumeBackup.compose?.serverId;
+	const serverId = resolveVolumeBackupServerId(volumeBackup);
 	await removeLastTenDeployments(
 		deployment.volumeBackupId,
 		"volumeBackup",
