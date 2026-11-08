@@ -12,8 +12,8 @@ vi.mock("node:dns", () => ({
 }));
 
 // providerFetch sends requests through the undici package's fetch.
-vi.mock("undici", async (importOriginal) => ({
-	...(await importOriginal<typeof import("undici")>()),
+vi.mock("@dokploy/server/utils/undici", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/utils/undici")>()),
 	fetch: mocks.fetch,
 }));
 

@@ -2,7 +2,7 @@ import {
 	sendTelegramNotification,
 	TELEGRAM_SEND_ATTEMPTS,
 } from "@dokploy/server/utils/notifications/utils";
-import { Agent } from "undici";
+import { Agent } from "@dokploy/server/utils/undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const connection = {
@@ -17,7 +17,13 @@ const connectFailure = (code = "UND_ERR_CONNECT_TIMEOUT") =>
 const reply = (status: number, body: unknown = { ok: status === 200 }) =>
 	new Response(JSON.stringify(body), { status });
 
-const fetchMock = vi.fn();
+const fetchMock = vi.hoisted(() => vi.fn());
+
+// The sender posts through the undici package's fetch.
+vi.mock("@dokploy/server/utils/undici", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/utils/undici")>()),
+	fetch: fetchMock,
+}));
 
 const send = async () => {
 	const result = sendTelegramNotification(connection, "Backup failed").then(
@@ -30,7 +36,6 @@ const send = async () => {
 
 beforeEach(() => {
 	fetchMock.mockReset();
-	vi.stubGlobal("fetch", fetchMock);
 	vi.useFakeTimers({ toFake: ["setTimeout"] });
 	vi.spyOn(console, "log").mockImplementation(() => {});
 });

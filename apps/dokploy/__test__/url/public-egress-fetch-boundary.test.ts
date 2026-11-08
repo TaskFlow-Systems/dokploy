@@ -4,6 +4,13 @@ import {
 } from "@dokploy/server/utils/url/network";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// The pinned request goes through the undici package's fetch.
+const undiciFetch = vi.hoisted(() => vi.fn());
+vi.mock("@dokploy/server/utils/undici", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/utils/undici")>()),
+	fetch: undiciFetch,
+}));
+
 describe("public egress fetch boundary", () => {
 	afterEach(() => {
 		vi.unstubAllGlobals();
@@ -24,6 +31,7 @@ describe("public egress fetch boundary", () => {
 			return new Response("ok");
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		await expect(
 			fetchWithPublicEgress(
@@ -45,6 +53,7 @@ describe("public egress fetch boundary", () => {
 			return new Response(JSON.stringify({ ok: true }), { status: 200 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		const response = await fetchWithPublicEgress(
 			"https://api.example.com/models",
@@ -58,7 +67,7 @@ describe("public egress fetch boundary", () => {
 
 		await expect(response.json()).resolves.toEqual({ ok: true });
 		expect(fetchMock).toHaveBeenCalledWith(
-			"https://api.example.com/models",
+			new URL("https://api.example.com/models"),
 			expect.objectContaining({
 				dispatcher: expect.any(Object),
 				redirect: "error",
@@ -71,6 +80,7 @@ describe("public egress fetch boundary", () => {
 			return new Response(null, { status: 204 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 		const request = new Request("https://api.example.com/models", {
 			method: "POST",
 			body: JSON.stringify({ model: "test" }),
@@ -89,8 +99,12 @@ describe("public egress fetch boundary", () => {
 
 		expect(response.status).toBe(204);
 		expect(fetchMock).toHaveBeenCalledWith(
-			request,
+			new URL("https://api.example.com/models"),
 			expect.objectContaining({
+				method: "POST",
+				headers: [["content-type", "application/json"]],
+				body: new TextEncoder().encode(JSON.stringify({ model: "test" }))
+					.buffer,
 				dispatcher: expect.any(Object),
 			}),
 		);
