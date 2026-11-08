@@ -281,7 +281,10 @@ export const getMongoBackupCommand = (
 
 export const getLibsqlBackupCommand = (database: string) => {
 	const safeDatabase = normalizeRestoreDatabaseName(database);
-	const innerCommand = `tar cf - -C /var/lib/sqld ${quoteRestoreShellArg(safeDatabase)} | gzip`;
+	// One process, no pipe: this runs under `sh`, which has no pipefail, and a
+	// `tar | gzip` pipe would report gzip's success after tar failed to read the
+	// name, uploading an empty archive as a good backup.
+	const innerCommand = `tar czf - -C /var/lib/sqld ${quoteRestoreShellArg(safeDatabase)}`;
 	return `docker exec -i "$CONTAINER_ID" sh -c ${quoteRestoreShellArg(innerCommand)}`;
 };
 
