@@ -140,7 +140,10 @@ jobs:
           frontend="${RAILPACK_FRONTEND:-$(docker run --rm --entrypoint railpack dokploy-bun-check:main --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)}"
           echo "Railpack frontend: $frontend"
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$app:/src" -e FRONTEND="$frontend" --entrypoint sh dokploy-bun-check:main -ec '
-            railpack prepare /src --plan-out /src/railpack-plan.json --info-out /src/railpack-info.json
+            # The image carries the mise Railpack pins; a download here means
+            # MISE_VERSION in the Dockerfile no longer matches Railpack.
+            railpack --verbose prepare /src --plan-out /src/railpack-plan.json --info-out /src/railpack-info.json 2>&1 | tee /src/prepare.log
+            grep -q "Mise executable exists" /src/prepare.log
             docker buildx create --name railpack-smoke --driver docker-container
             docker buildx build --builder railpack-smoke --build-arg "BUILDKIT_SYNTAX=ghcr.io/railwayapp/railpack-frontend:v$FRONTEND" -f /src/railpack-plan.json --output type=docker,name=railpack-smoke /src
             docker buildx rm railpack-smoke

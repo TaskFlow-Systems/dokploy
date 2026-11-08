@@ -146,6 +146,18 @@ RUN github-release-asset railwayapp/railpack "v$RAILPACK_VERSION" "railpack-v$RA
     && tar -xzf /tmp/railpack.tar.gz -C /usr/local/bin railpack \
     && rm /tmp/railpack.tar.gz
 
+# Railpack downloads the mise version it pins (core/mise/version.txt of its
+# release) from github.com on its first build and keeps it at
+# /tmp/railpack/mise/mise-<version>. Placed there beforehand, builds on the
+# panel do not depend on github.com. Keep this at Railpack's version.
+ARG MISE_VERSION=2026.10.14
+RUN mise_arch="$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')" \
+    && github-release-asset jdx/mise "v$MISE_VERSION" "mise-v$MISE_VERSION-linux-$mise_arch-musl.tar.gz" /tmp/mise.tar.gz \
+    && mkdir -p /tmp/railpack/mise \
+    && tar -xzf /tmp/mise.tar.gz -O mise/bin/mise > "/tmp/railpack/mise/mise-$MISE_VERSION" \
+    && chmod 0755 "/tmp/railpack/mise/mise-$MISE_VERSION" \
+    && rm /tmp/mise.tar.gz
+
 # Install buildpacks
 COPY --from=buildpacksio/pack:0.40.10 /usr/local/bin/pack /usr/local/bin/pack
 
