@@ -1,10 +1,14 @@
 import { readdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 // Lists the packages that Bun answers with a built-in module of its own
 // instead of the copy in node_modules.
-const root = path.resolve(import.meta.dir, "../../../../..");
+const root = path.resolve(
+	path.dirname(fileURLToPath(import.meta.url)),
+	"../../../../..",
+);
 const replaced = new Set<string>();
 for (const dir of ["", "apps/dokploy", "packages/server"]) {
 	const modules = path.join(root, dir, "node_modules");
