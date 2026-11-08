@@ -8,7 +8,10 @@ import {
 	cleanAppName,
 	compose,
 } from "@dokploy/server/db/schema";
-import { getBuildComposeCommand } from "@dokploy/server/utils/builders/compose";
+import {
+	getBuildComposeCommand,
+	getStackStartCommand,
+} from "@dokploy/server/utils/builders/compose";
 import { randomizeSpecificationFile } from "@dokploy/server/utils/docker/compose";
 import { waitForComposeContainers } from "@dokploy/server/utils/docker/compose-containers";
 import { extractComposeVariables } from "@dokploy/server/utils/docker/compose-variables";
@@ -837,12 +840,22 @@ export const startCompose = async (composeId: string) => {
 			}
 		}
 
+		if (compose.composeType === "stack") {
+			const command = await getStackStartCommand(compose);
+			if (compose.serverId) {
+				await execAsyncRemote(compose.serverId, command);
+			} else {
+				await execAsync(command);
+			}
+			await waitForStackRollout(compose.appName, compose.serverId);
+		}
+
 		await updateCompose(composeId, {
 			composeStatus: "done",
 		});
 	} catch (error) {
 		await updateCompose(composeId, {
-			composeStatus: "idle",
+			composeStatus: compose.composeType === "stack" ? "error" : "idle",
 		});
 		throw error;
 	}
