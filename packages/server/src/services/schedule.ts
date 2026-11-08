@@ -1,6 +1,6 @@
 import path from "node:path";
 import { TRPCError } from "@trpc/server";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import type { z } from "zod";
 import { IS_CLOUD, paths } from "../constants";
 import { db } from "../db";
@@ -202,6 +202,34 @@ export const findScheduleById = async (scheduleId: string) => {
 		});
 	}
 	return schedule;
+};
+
+export const scheduleExists = async (scheduleId: string) => {
+	const schedule = await db.query.schedules.findFirst({
+		where: eq(schedules.scheduleId, scheduleId),
+		columns: { scheduleId: true },
+	});
+	return !!schedule;
+};
+
+export const findSchedulesByOwner = async (owner: {
+	applicationId?: string;
+	composeId?: string;
+	serverId?: string;
+}) => {
+	const conditions = [
+		owner.applicationId
+			? eq(schedules.applicationId, owner.applicationId)
+			: undefined,
+		owner.composeId ? eq(schedules.composeId, owner.composeId) : undefined,
+		owner.serverId ? eq(schedules.serverId, owner.serverId) : undefined,
+	].filter((condition) => condition !== undefined);
+	if (conditions.length === 0) {
+		return [];
+	}
+	return await db.query.schedules.findMany({
+		where: or(...conditions),
+	});
 };
 
 export const findScheduleOrganizationId = async (scheduleId: string) => {

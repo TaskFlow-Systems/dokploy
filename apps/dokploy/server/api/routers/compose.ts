@@ -100,6 +100,7 @@ import {
 	myQueue,
 } from "@/server/queues/queueSetup";
 import { cancelDeployment, deploy } from "@/server/utils/deploy";
+import { cancelScheduleJobsByOwner } from "@/server/utils/schedule-jobs";
 import { generatePassword } from "@/templates/utils";
 import { createTRPCRouter, protectedProcedure } from "../trpc";
 import { restoreApiKeyText } from "../utils/api-key-output-guard";
@@ -477,6 +478,8 @@ export const composeRouter = createTRPCRouter({
 					message: "You are not authorized to delete this compose",
 				});
 			}
+
+			await cancelScheduleJobsByOwner({ composeId: input.composeId });
 
 			const result = await db
 				.delete(composeTable)

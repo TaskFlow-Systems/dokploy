@@ -8,8 +8,10 @@ import {
 } from "@dokploy/server/services/deployment";
 import {
 	findScheduleById,
+	findSchedulesByOwner,
 	getScheduleDirectory,
 	getScheduleScriptPath,
+	scheduleExists,
 } from "@dokploy/server/services/schedule";
 import { scheduledJobs, scheduleJob as scheduleJobNode } from "node-schedule";
 import { quote } from "shell-quote";
@@ -33,7 +35,16 @@ export const scheduleJob = (schedule: Schedule) => {
 			rule: cronExpression,
 		},
 		async () => {
-			await runCommand(scheduleId);
+			try {
+				// The row can vanish with its owner, and nothing else stops the job.
+				if (!(await scheduleExists(scheduleId))) {
+					removeScheduleJob(scheduleId);
+					return;
+				}
+				await runCommand(scheduleId);
+			} catch (error) {
+				console.error(`Schedule ${scheduleId} failed to run:`, error);
+			}
 		},
 	);
 };
@@ -41,6 +52,18 @@ export const scheduleJob = (schedule: Schedule) => {
 export const removeScheduleJob = (scheduleId: string) => {
 	const currentJob = scheduledJobs[scheduleId];
 	currentJob?.cancel();
+};
+
+export const removeScheduleJobsByOwner = async (owner: {
+	applicationId?: string;
+	composeId?: string;
+	serverId?: string;
+}) => {
+	const ownedSchedules = await findSchedulesByOwner(owner);
+	for (const ownedSchedule of ownedSchedules) {
+		removeScheduleJob(ownedSchedule.scheduleId);
+	}
+	return ownedSchedules;
 };
 
 export const runCommand = async (scheduleId: string) => {
