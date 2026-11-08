@@ -19,7 +19,7 @@ export const validateRClone = () => `
 `;
 
 export const validateSwarm = () => `
-  if docker info --format '{{.Swarm.LocalNodeState}}' | grep -q 'active'; then
+  if docker info --format '{{.Swarm.LocalNodeState}}' | grep -qx 'active'; then
     echo true
   else
     echo false
@@ -82,7 +82,7 @@ export const validateMainDirectory = () => `
 `;
 
 export const validateDokployNetwork = () => `
-  if docker network ls | grep -q 'dokploy-network'; then
+  if docker network ls --format '{{.Name}}' | grep -qx 'dokploy-network'; then
 	echo true
   else
 	echo false
@@ -100,7 +100,7 @@ export const validateSudoAccess = () => `
 `;
 
 export const validateDockerGroup = () => `
-  if groups | grep -qw docker; then
+  if groups | tr ' ' '\n' | grep -qx docker; then
     echo true
   else
     echo false
