@@ -119,6 +119,11 @@ describe("CI workflow", () => {
 			PINNED_VERSIONS.railpack,
 		);
 	});
+	it("places the same mise for Railpack as the Dockerfile", () => {
+		expect(pinIn(ci, /export MISE_VERSION=(\S+)/)).toBe(
+			pinIn(read("Dockerfile"), /ARG MISE_VERSION=(\S+)/),
+		);
+	});
 });
 
 describe("image audit workflow", () => {

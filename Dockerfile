@@ -5,13 +5,20 @@
 FROM node:26.13.0-trixie-slim@sha256:e4db4c914bf8ad241bd24804fc25d272d89bad97e68cdc8a1414862790a02c39 AS base
 ENV BUN_INSTALL="/root/.bun"
 ENV PATH="$BUN_INSTALL/bin:$PATH"
+# Bun, Nixpacks and Railpack come from GitHub releases; the script falls back to
+# the GitHub API when github.com fails to serve them.
+COPY scripts/github-release-asset.sh /usr/local/bin/github-release-asset
 # The Node base image can lag behind a Debian security update by days, and the
 # image scan fails on any fixed finding, so the base stage takes every update.
 RUN apt-get update \
     && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends apt bash ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.4 \
+    && bun_arch="$(uname -m | sed 's/x86_64/x64/')" \
+    && github-release-asset oven-sh/bun bun-v1.4.4 "bun-linux-$bun_arch.zip" /tmp/bun.zip \
+    && unzip -q /tmp/bun.zip -d /tmp/bun \
+    && install -D -m 0755 "/tmp/bun/bun-linux-$bun_arch/bun" "$BUN_INSTALL/bin/bun" \
+    && rm -rf /tmp/bun /tmp/bun.zip \
     && ln -sf "$BUN_INSTALL/bin/bun" "$BUN_INSTALL/bin/bunx" \
     && npm install -g node-gyp@13.1.0
 
@@ -107,7 +114,7 @@ COPY --from=build /usr/src/app/packages/server/dist ./packages/server/dist
 # needs only the CLI and its buildx and compose plugins. get.docker.com would
 # also install the engine, containerd and the rootless extras: unused binaries
 # that scanners report.
-ARG DOCKER_VERSION=29.9.2
+ARG DOCKER_VERSION=29.9.3
 RUN . /etc/os-release \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
@@ -126,19 +133,30 @@ RUN apt-get update \
     && rm -rf /tmp/rclone.zip "/tmp/rclone-v${RCLONE_VERSION}-linux-amd64" /var/lib/apt/lists/*
 
 # Install Nixpacks and tsx
-# | VERBOSE=1 VERSION=1.21.0 bash
 
 ARG NIXPACKS_VERSION=1.41.0
-RUN curl -sSL https://nixpacks.com/install.sh -o install.sh \
-    && chmod +x install.sh \
-    && NIXPACKS_VERSION="$NIXPACKS_VERSION" ./install.sh -y \
-    && rm install.sh \
+RUN github-release-asset railwayapp/nixpacks "v$NIXPACKS_VERSION" "nixpacks-v$NIXPACKS_VERSION-$(uname -m)-unknown-linux-musl.tar.gz" /tmp/nixpacks.tar.gz \
+    && tar -xzf /tmp/nixpacks.tar.gz -C /usr/local/bin nixpacks \
+    && rm /tmp/nixpacks.tar.gz \
     && bun install -g tsx
 
 # Install Railpack
-ARG RAILPACK_VERSION=0.42.0
-RUN curl -sSL https://railpack.com/install.sh \
-    | RAILPACK_VERSION="$RAILPACK_VERSION" bash -s -- --yes --bin-dir /usr/local/bin
+ARG RAILPACK_VERSION=0.43.0
+RUN github-release-asset railwayapp/railpack "v$RAILPACK_VERSION" "railpack-v$RAILPACK_VERSION-$(uname -m | sed s/aarch64/arm64/)-unknown-linux-musl.tar.gz" /tmp/railpack.tar.gz \
+    && tar -xzf /tmp/railpack.tar.gz -C /usr/local/bin railpack \
+    && rm /tmp/railpack.tar.gz
+
+# Railpack downloads the mise version it pins (core/mise/version.txt of its
+# release) from github.com on its first build and keeps it at
+# /tmp/railpack/mise/mise-<version>. Placed there beforehand, builds on the
+# panel do not depend on github.com. Keep this at Railpack's version.
+ARG MISE_VERSION=2026.10.14
+RUN mise_arch="$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')" \
+    && github-release-asset jdx/mise "v$MISE_VERSION" "mise-v$MISE_VERSION-linux-$mise_arch-musl.tar.gz" /tmp/mise.tar.gz \
+    && mkdir -p /tmp/railpack/mise \
+    && tar -xzf /tmp/mise.tar.gz -O mise/bin/mise > "/tmp/railpack/mise/mise-$MISE_VERSION" \
+    && chmod 0755 "/tmp/railpack/mise/mise-$MISE_VERSION" \
+    && rm /tmp/mise.tar.gz
 
 # Install buildpacks
 COPY --from=buildpacksio/pack:0.40.10 /usr/local/bin/pack /usr/local/bin/pack
