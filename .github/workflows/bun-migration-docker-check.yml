@@ -83,9 +83,30 @@ jobs:
             ssh -V
             for tool in ssh-keyscan pkill htpasswd rsync jq zip unzip ip tini; do command -v "$tool"; done
           '
-          # The image compiles node-pty and the tests mock it, so only this runs it:
-          # on Node, as an ESM import from /app, the way the panel's server does. The
-          # sleep and read fail a child that dies after its first output, as under Bun.
+          # The panel's server runs on Bun and takes its terminals from Bun.spawn's
+          # own PTY (server/wss/pty.ts); the same command must pass through it here.
+          docker run --rm --entrypoint bun dokploy-bun-check:main -e '
+            setTimeout(() => {
+              console.error("Bun PTY: no exit in 30 s");
+              process.exit(1);
+            }, 30000);
+            const command = "echo first; sleep 1; read -r line; echo got $line; exit 7";
+            let output = "";
+            const decoder = new TextDecoder();
+            const proc = Bun.spawn(["/bin/sh", "-c", command], {
+              terminal: { cols: 80, rows: 30, data(_terminal, data) { output += decoder.decode(data, { stream: true }); } },
+            });
+            proc.terminal.write("ping\n");
+            const exitCode = await proc.exited;
+            proc.terminal.close();
+            console.log(`Bun PTY: exit ${exitCode}, output ${JSON.stringify(output)}`);
+            process.exit(exitCode === 7 && output.includes("first") && output.includes("got ping") ? 0 : 1);
+          '
+          # node-pty serves the panel when it runs on Node (development, and the
+          # Node command the Dockerfile keeps for going back). The image compiles it
+          # and the tests mock it, so only this runs it: as an ESM import from /app.
+          # The sleep and read fail a child that dies after its first output, as
+          # node-pty's does under Bun.
           docker run --rm --entrypoint node dokploy-bun-check:main --input-type=module -e '
             import { spawn } from "node-pty";
             setTimeout(() => {

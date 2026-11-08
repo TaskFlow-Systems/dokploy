@@ -3,7 +3,6 @@ import type http from "node:http";
 import { findServerById, IS_CLOUD, validateRequest } from "@dokploy/server";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
 import { quoteShellArgs } from "@dokploy/server/utils/shell";
-import { spawn } from "node-pty";
 import { Client } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
@@ -12,6 +11,7 @@ import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { verifyWebSocketOrigin } from "./origin";
+import { spawnPty } from "./pty";
 import {
 	getTerminalHangupArgs,
 	isValidContainerId,
@@ -256,11 +256,16 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					return;
 				}
 
-				const ptyProcess = spawn(
+				const ptyProcess = await spawnPty(
 					"docker",
 					["exec", "-it", "-e", sessionMarker, "-w", "/", containerId, shell],
 					{ cols, rows },
 				);
+				if (ws.readyState !== ws.OPEN) {
+					ptyProcess.kill();
+					execFile("docker", hangupArgs, () => {});
+					return;
+				}
 
 				ptyProcess.onData((data) => {
 					ws.send(data);
