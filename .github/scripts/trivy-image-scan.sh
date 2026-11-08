@@ -45,6 +45,8 @@ rows() {
 fixed='(.FixedVersion // "") != ""'
 unfixed='(.FixedVersion // "") == ""'
 fixable_count="$(count "$fixed")"
+# A new build fixes these: the base stage takes every Debian update of the day.
+os_fixable_count="$(jq "[.Results[]? | select(.Class == \"os-pkgs\") | .Vulnerabilities[]? | select($fixed)] | length" "$report")"
 unfixed_count="$(count "$unfixed")"
 ignored_count="$(jq '[.Results[]?.ExperimentalModifiedFindings[]? | select(.Status == "ignored")] | length' "$report")"
 header='| Severity | ID | Package | Installed | Fixed in | Target |
@@ -87,6 +89,10 @@ header='| Severity | ID | Package | Installed | Fixed in | Target |
 cat "$summary"
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
 	cat "$summary" >>"$GITHUB_STEP_SUMMARY"
+fi
+
+if [ -n "${GITHUB_OUTPUT:-}" ]; then
+	echo "os-fixable=${os_fixable_count}" >>"$GITHUB_OUTPUT"
 fi
 
 if [ "$fixable_count" -gt 0 ]; then

@@ -1,0 +1,224 @@
+name: Pins auto-update
+
+# deps-auto-update.yml moves the npm packages; this moves what the images and
+# servers pin: the Node base image (a new release or a new digest of the same
+# tag, which carries Debian fixes), Bun, the Docker CLI and engine, rclone,
+# Nixpacks, pack, Traefik, Postgres and Redis. .github/scripts/pins-update.sh
+# decides the range: patch and minor releases in the same major, patches only
+# for Traefik, Redis and 0.x tools. Releases outside it, and Railpack, are
+# listed in the PR for a manual one. Every day it keeps one PR from
+# deps/pins-auto-update into AgentHits-Dev and starts the checks on it; the
+# image build and Trivy scan in bun-migration-docker-check.yml show whether
+# the new pins carry a fix. It never merges. A commit of anyone else in the
+# branch stops the daily rebuild until the PR is merged or closed.
+on:
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pins-auto-update
+  cancel-in-progress: false
+
+env:
+  BRANCH: deps/pins-auto-update
+  BASE: AgentHits-Dev
+  CI_WORKFLOWS: "pull-request.yml bun-migration-docker-check.yml"
+  BOT_EMAIL: "41898282+github-actions[bot]@users.noreply.github.com"
+
+jobs:
+  update:
+    if: github.ref == 'refs/heads/AgentHits-Dev'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      changed: ${{ steps.update.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Update pins
+        id: update
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/pins"
+          rm -rf "$out"
+          mkdir -p "$out/files"
+          .github/scripts/pins-update.sh "$out"
+
+          mapfile -t changed_files < <(git diff --name-only)
+          for path in "${changed_files[@]}"; do
+            case "$path" in
+              Dockerfile | Dockerfile.* | .devcontainer/Dockerfile | .nvmrc | package.json | apps/*/package.json | packages/*/package.json | install-agenthits.sh | update.sh | packages/server/src/setup/component-versions.ts) ;;
+              *)
+                echo "::error::pins-update.sh changed a file outside the pin files: $path"
+                exit 1
+                ;;
+            esac
+          done
+
+          {
+            echo "Daily update of the pinned images and tools ($(date -u +%F), workflow \`pins-auto-update\`): patch and minor releases in the same major, patches only for Traefik, Redis and 0.x tools."
+            echo
+            if [ -s "$out/changes.tsv" ]; then
+              echo "| Pin | Was | Now |"
+              echo "|---|---|---|"
+              awk -F'\t' '{ printf "| %s | %s | %s |\n", $1, $2, $3 }' "$out/changes.tsv"
+            else
+              echo "No pin changed."
+            fi
+            echo
+            if [ -s "$out/held.tsv" ]; then
+              echo "### Newer releases left for a manual PR"
+              echo
+              echo "| Pin | Current | Newer | Why |"
+              echo "|---|---|---|---|"
+              awk -F'\t' '{ printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4 }' "$out/held.tsv"
+              echo
+            fi
+            echo "---"
+            echo "Before merging: green \`$CI_WORKFLOWS\` runs (event \`workflow_dispatch\`) on the head of this PR; the workflow starts them, since a push with the workflow token starts no \`pull_request\` run. The Trivy scan of the built image is in \`bun-migration-docker-check\`."
+          } > "$out/report.md"
+          cat "$out/report.md" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${#changed_files[@]}" -eq 0 ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "${changed_files[@]}" > "$out/files.txt"
+          for f in "${changed_files[@]}"; do
+            mkdir -p "$out/files/$(dirname "$f")"
+            cp "$f" "$out/files/$f"
+          done
+          {
+            echo "chore(deps): update pinned images and tools"
+            echo
+            awk -F'\t' '{ printf "- %s: %s -> %s\n", $1, $2, $3 }' "$out/changes.tsv"
+            echo
+            echo "Daily pins-auto-update run: newest release within the allowed range"
+            echo "(.github/scripts/pins-update.sh)."
+          } > "$out/commit.txt"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pins-auto-update
+          path: ${{ runner.temp }}/pins
+          retention-days: 3
+
+  publish:
+    needs: update
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: pins-auto-update
+          path: ${{ runner.temp }}/pins
+      - name: Open PR of the branch
+        id: pr
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { data } = await github.rest.pulls.list({
+              ...context.repo,
+              state: 'open',
+              head: `${context.repo.owner}:${process.env.BRANCH}`,
+              base: process.env.BASE,
+            });
+            core.setOutput('number', data.length ? String(data[0].number) : '');
+      - name: Commit and push the branch
+        id: branch
+        env:
+          CHANGED: ${{ needs.update.outputs.changed }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          remote=false
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+            remote=true
+          fi
+          if [ -n "$PR" ] && $remote; then
+            foreign="$(git log --format='%h %ae' "origin/$BASE..origin/$BRANCH" | grep -v -F " $BOT_EMAIL" || true)"
+            if [ -n "$foreign" ]; then
+              echo "::notice::Branch $BRANCH of open PR #$PR has commits of others, so it is not rebuilt until the PR is merged or closed: $(echo "$foreign" | tr '\n' ' ')"
+              echo "action=skip" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          if [ "$CHANGED" != "true" ]; then
+            echo "action=close" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "$BOT_EMAIL"
+          git checkout -q -B "$BRANCH"
+          cp -R "$RUNNER_TEMP/pins/files/." .
+          mapfile -t files < "$RUNNER_TEMP/pins/files.txt"
+          git add -- "${files[@]}"
+          git commit -q -F "$RUNNER_TEMP/pins/commit.txt"
+          if $remote && [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "origin/$BRANCH^{tree}")" ]; then
+            echo "Branch $BRANCH already holds the same tree."
+            echo "action=same" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+          echo "action=pushed" >> "$GITHUB_OUTPUT"
+      - name: PR and checks of the branch
+        uses: actions/github-script@v8
+        env:
+          ACTION: ${{ steps.branch.outputs.action }}
+          PR: ${{ steps.pr.outputs.number }}
+        with:
+          script: |
+            const fs = require('node:fs');
+            const { ACTION: action, BRANCH: branch, BASE: base, CI_WORKFLOWS: ciWorkflows, RUNNER_TEMP: tmp } = process.env;
+            const repo = context.repo;
+            let pr = process.env.PR ? Number(process.env.PR) : null;
+            const summary = (text) => core.summary.addRaw(`${text}\n`).write();
+
+            if (action === 'skip') {
+              await summary(`PR #${pr}: the branch has commits of others, not rebuilt.`);
+              return;
+            }
+            if (action === 'close') {
+              if (pr) {
+                await github.rest.issues.createComment({ ...repo, issue_number: pr, body: `Nothing to update: ${base} already has the newest pins in range. PR closed, branch deleted.` });
+                await github.rest.pulls.update({ ...repo, pull_number: pr, state: 'closed' });
+              }
+              try {
+                await github.rest.git.deleteRef({ ...repo, ref: `heads/${branch}` });
+              } catch (error) {
+                if (error.status !== 404 && error.status !== 422) throw error;
+              }
+              await summary(pr ? `Nothing to update, PR #${pr} closed.` : 'Nothing to update.');
+              return;
+            }
+
+            const title = 'chore(deps): update pinned images and tools';
+            const body = fs.readFileSync(`${tmp}/pins/report.md`, 'utf8');
+            if (pr) {
+              await github.rest.pulls.update({ ...repo, pull_number: pr, title, body });
+            } else {
+              ({ data: { number: pr } } = await github.rest.pulls.create({ ...repo, head: branch, base, title, body }));
+            }
+            if (action === 'pushed') {
+              for (const workflow of ciWorkflows.split(' ')) {
+                await github.rest.actions.createWorkflowDispatch({ ...repo, workflow_id: workflow, ref: branch });
+              }
+            }
+            await summary(`PR #${pr}: ${action === 'pushed' ? `branch updated, started ${ciWorkflows}` : 'branch unchanged, description updated'}.`);
