@@ -37,6 +37,7 @@ const formSchema = z.object({
 		.transform((v) => (v === "" ? undefined : v)),
 	clientId: z.string().min(1, "Client ID is required"),
 	clientSecret: z.string().min(1, "Client Secret is required"),
+	webhookSecret: z.string().optional(),
 });
 
 interface Props {
@@ -102,6 +103,7 @@ export const EditGiteaProvider = ({ giteaId }: Props) => {
 			giteaInternalUrl: "",
 			clientId: "",
 			clientSecret: "",
+			webhookSecret: "",
 		},
 	});
 
@@ -113,6 +115,7 @@ export const EditGiteaProvider = ({ giteaId }: Props) => {
 				giteaInternalUrl: gitea.giteaInternalUrl || "",
 				clientId: gitea.clientId || "",
 				clientSecret: gitea.clientSecret || "",
+				webhookSecret: "",
 			});
 		}
 	}, [gitea, form]);
@@ -126,6 +129,7 @@ export const EditGiteaProvider = ({ giteaId }: Props) => {
 			giteaInternalUrl: values.giteaInternalUrl ?? null,
 			clientId: values.clientId,
 			clientSecret: values.clientSecret,
+			webhookSecret: values.webhookSecret || undefined,
 		})
 			.then(async () => {
 				await utils.gitProvider.getAll.invalidate();
@@ -280,6 +284,27 @@ export const EditGiteaProvider = ({ giteaId }: Props) => {
 											{...field}
 										/>
 									</FormControl>
+									<FormMessage />
+								</FormItem>
+							)}
+						/>
+						<FormField
+							control={form.control}
+							name="webhookSecret"
+							render={({ field }) => (
+								<FormItem>
+									<FormLabel>Deploy Webhook Secret (Optional)</FormLabel>
+									<FormControl>
+										<Input
+											type="password"
+											placeholder="Leave blank to keep existing value"
+											{...field}
+										/>
+									</FormControl>
+									<FormDescription>
+										Set the same value in the Gitea webhook Secret field.
+										Without it, the panel refuses push events from Gitea.
+									</FormDescription>
 									<FormMessage />
 								</FormItem>
 							)}

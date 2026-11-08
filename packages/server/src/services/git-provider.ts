@@ -25,6 +25,7 @@ const gitlabSecretKeys = [
 
 const giteaSecretKeys = [
 	"clientSecret",
+	"webhookSecret",
 	"accessToken",
 	"refreshToken",
 ] as const;
