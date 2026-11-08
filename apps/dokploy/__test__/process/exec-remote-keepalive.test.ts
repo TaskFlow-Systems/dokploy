@@ -13,13 +13,14 @@ vi.mock("@dokploy/server/utils/servers/destination", () => ({
 import type { ExecError } from "@dokploy/server/utils/process/ExecError";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { getRemoteDocker } from "@dokploy/server/utils/servers/remote-docker";
-import { Client, type ServerChannel, Server as SshServer, utils } from "ssh2";
+import { Client, type ServerChannel, Server as SshServer } from "ssh2";
+import { generateSshTestKey } from "../helpers/ssh-test-key";
 
 const KEEPALIVE_INTERVAL_MS = 15_000;
 const KEEPALIVE_TICKS_UNTIL_LOSS = 5;
 
-const clientKey = utils.generateKeyPairSync("ed25519").private;
-const hostKey = utils.generateKeyPairSync("ed25519").private;
+const clientKey = generateSshTestKey();
+const hostKey = generateSshTestKey();
 
 const waitUntil = async (condition: () => boolean) => {
 	while (!condition()) {

@@ -113,6 +113,7 @@ for (let cycle = 0; cycle < cycles; cycle++) {
 	);
 	await new Promise<void>((resolve, reject) => {
 		ws.on("error", reject);
+		ws.once("close", () => reject(new Error("closed before the prompt")));
 		ws.on("message", (data) => {
 			if (/[#$] $/.test(data.toString())) {
 				resolve();

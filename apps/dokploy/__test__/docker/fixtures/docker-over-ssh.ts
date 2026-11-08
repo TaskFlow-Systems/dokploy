@@ -1,9 +1,10 @@
 import http from "node:http";
 import net, { type AddressInfo } from "node:net";
-import { Server, utils } from "ssh2";
+import { Server } from "ssh2";
+import { generateSshTestKey } from "../../helpers/ssh-test-key";
 
-export const clientKey = utils.generateKeyPairSync("ed25519").private;
-const hostKey = utils.generateKeyPairSync("ed25519").private;
+export const clientKey = generateSshTestKey();
+const hostKey = generateSshTestKey();
 
 // A Docker API that answers three calls, behind an ssh2 server that serves
 // `docker system dial-stdio` the way a real host does: the channel is a raw
