@@ -322,13 +322,12 @@ describe("container terminal hangs up its shell when it closes", () => {
 		// The container: the shell appears 30 ms after the client left, i.e.
 		// after the first scan (at 0) and the second (20 ms later).
 		let shellStartsAt = Number.POSITIVE_INFINITY;
-		let shellAlive = false;
 		let hungUp = 0;
 		mocks.execFile.mockImplementation(
 			(_file: string, _args: string[], callback: () => void) => {
-				if (Date.now() >= shellStartsAt) shellAlive = true;
-				if (shellAlive) {
-					shellAlive = false;
+				if (Date.now() >= shellStartsAt) {
+					// The shell exists; this scan hangs it up and it is gone.
+					shellStartsAt = Number.POSITIVE_INFINITY;
 					hungUp++;
 				}
 				callback();

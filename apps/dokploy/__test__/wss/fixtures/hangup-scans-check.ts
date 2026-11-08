@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runHangupScans } from "../../../server/wss/hangup-scans";
@@ -37,11 +38,11 @@ await scans.done;
 // The shell appeared at 1.2 s; the scan at about 2.5 s hung it up, once.
 const lines = async (file: string) =>
 	existsSync(file)
-		? (await Bun.file(file).text()).split("\n").filter(Boolean)
+		? (await readFile(file, "utf8")).split("\n").filter(Boolean)
 		: [];
 console.log(
 	JSON.stringify({
-		runtime: typeof Bun === "undefined" ? "node" : "bun",
+		runtime: "Bun" in globalThis ? "bun" : "node",
 		scans: (await lines(calls)).length,
 		hangups: (await lines(hup)).length,
 		elapsedOk: Date.now() - closedAt >= 7400,
