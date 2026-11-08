@@ -169,29 +169,33 @@ export const runCommand = async (scheduleId: string) => {
 			}
 		} else if (scheduleType === "dokploy-server") {
 			const writeStream = createWriteStream(deployment.logPath, { flags: "a" });
-			const { SCHEDULES_PATH } = paths();
-			const fullPath = getScheduleDirectory(SCHEDULES_PATH, appName);
+			try {
+				const { SCHEDULES_PATH } = paths();
+				const fullPath = getScheduleDirectory(SCHEDULES_PATH, appName);
 
-			await spawnAsync(
-				"bash",
-				["-c", "./script.sh"],
-				async (data) => {
-					if (writeStream.writable) {
-						// we need to extract the PID and Schedule ID from the data
-						const pid = data?.match(/PID: (\d+)/)?.[1];
+				await spawnAsync(
+					"bash",
+					["-c", "./script.sh"],
+					async (data) => {
+						if (writeStream.writable) {
+							// we need to extract the PID and Schedule ID from the data
+							const pid = data?.match(/PID: (\d+)/)?.[1];
 
-						if (pid) {
-							await updateDeployment(deployment.deploymentId, {
-								pid,
-							});
+							if (pid) {
+								await updateDeployment(deployment.deploymentId, {
+									pid,
+								});
+							}
+							writeStream.write(data);
 						}
-						writeStream.write(data);
-					}
-				},
-				{
-					cwd: fullPath,
-				},
-			);
+					},
+					{
+						cwd: fullPath,
+					},
+				);
+			} finally {
+				writeStream.end();
+			}
 		} else if (scheduleType === "server") {
 			const { SCHEDULES_PATH } = paths(true);
 			const scriptPath = getScheduleScriptPath(SCHEDULES_PATH, appName);
