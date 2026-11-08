@@ -41,7 +41,9 @@ export const isProcedureDeniedForApiKey = (path: string) =>
 	API_KEY_DENIED_PROCEDURES.has(path) ||
 	path.endsWith(".revealEnvironment") ||
 	path.endsWith(".revealCredentials") ||
-	path.endsWith(".revealWebhookToken");
+	path.endsWith(".revealWebhookToken") ||
+	path.endsWith(".revealWebhookSecret") ||
+	path.endsWith(".regenerateWebhookSecret");
 
 export const assertProcedureAllowedForApiKey = (path: string) => {
 	if (isProcedureDeniedForApiKey(path)) {

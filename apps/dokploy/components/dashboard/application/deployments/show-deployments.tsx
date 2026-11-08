@@ -33,6 +33,7 @@ import { ClearDeployments } from "./clear-deployments";
 import { KillBuild } from "./kill-build";
 import { RefreshToken } from "./refresh-token";
 import { ShowDeployment } from "./show-deployment";
+import { WebhookSecret } from "./webhook-secret";
 
 const HIDDEN_SECRET = "__DOKPLOY_REDACTED_SECRET__";
 
@@ -290,6 +291,9 @@ export const ShowDeployments = ({
 								)}
 							</div>
 						</div>
+						{(type === "application" || type === "compose") && (
+							<WebhookSecret id={id} type={type} />
+						)}
 					</div>
 				)}
 

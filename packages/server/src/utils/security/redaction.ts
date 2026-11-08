@@ -212,6 +212,7 @@ export const redactDeployableServiceSecretsFor = <
 		"previewBuildSecrets",
 		"password",
 		"refreshToken",
+		"webhookSecret",
 	]);
 	if (!redacted) {
 		return redacted;

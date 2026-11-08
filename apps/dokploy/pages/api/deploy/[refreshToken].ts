@@ -56,6 +56,12 @@ type DeployWebhookProviderCredentials = {
 	gitlab?: { secret?: string | null; webhookSecret?: string | null } | null;
 	bitbucket?: object | null;
 	gitea?: { webhookSecret?: string | null } | null;
+	/**
+	 * The service's own Deploy Webhook Secret. It is the only proof for the
+	 * sources that have no provider row (Custom Git) and for the providers that
+	 * have no panel-side credentials (Bitbucket, Soft Serve).
+	 */
+	service?: { sourceType?: string | null; webhookSecret?: string | null };
 };
 
 export const DEPLOY_WEBHOOK_BODY_LIMIT = 25 * 1024 * 1024;
@@ -130,6 +136,52 @@ export const branchNotMatchMessage = (headers: NextApiRequest["headers"]) =>
 		? "Branch Not Match"
 		: "Branch Not Match: the request has no Git provider event header (X-GitHub-Event, X-Gitlab-Event, X-Gitea-Event or X-Event-Key), so the pushed branch cannot be read";
 
+const sha256Signature = (secret: string, body: Buffer | string) =>
+	`sha256=${hmacSha256Hex(secret, body)}`;
+
+/**
+ * Checks a request against the service's own secret, by the proof the sender's
+ * provider uses (the event header names the provider):
+ *  - GitHub: X-Hub-Signature-256 = sha256=<hex HMAC of the raw body>
+ *  - GitLab: X-Gitlab-Token = the secret
+ *  - Gitea / Forgejo: X-Gitea-Signature = <hex HMAC>, or the GitHub-compatible
+ *    X-Hub-Signature-256 they also send
+ *  - Bitbucket Cloud and Data Center: X-Hub-Signature = sha256=<hex HMAC>
+ *  - Soft Serve: X-SoftServe-Signature = sha256=<hex HMAC>
+ */
+const isServiceSecretValid = (
+	req: NextApiRequest,
+	provider: string,
+	secret: string,
+) => {
+	const header = (name: string) => getHeaderValue(req.headers[name]);
+	const prefixed = (name: string) =>
+		constantTimeEquals(
+			header(name)?.toLowerCase(),
+			sha256Signature(secret, signedBody(req)),
+		);
+
+	switch (provider) {
+		case "github":
+			return prefixed("x-hub-signature-256");
+		case "gitlab":
+			return constantTimeEquals(header("x-gitlab-token"), secret);
+		case "gitea":
+			return (
+				constantTimeEquals(
+					header("x-gitea-signature")?.toLowerCase(),
+					hmacSha256Hex(secret, signedBody(req)),
+				) || prefixed("x-hub-signature-256")
+			);
+		case "bitbucket":
+			return prefixed("x-hub-signature");
+		case "soft-serve":
+			return prefixed("x-softserve-signature");
+		default:
+			return false;
+	}
+};
+
 export const isProviderDeployWebhookAuthenticated = async (
 	req: NextApiRequest,
 	providers: DeployWebhookProviderCredentials,
@@ -137,6 +189,19 @@ export const isProviderDeployWebhookAuthenticated = async (
 	const provider = getProviderByHeader(req.headers);
 	if (!provider) {
 		return true;
+	}
+
+	const serviceSecret = providers.service?.webhookSecret;
+	if (
+		provider === "bitbucket" ||
+		provider === "soft-serve" ||
+		providers.service?.sourceType === "git"
+	) {
+		// No provider row to take a secret from: only the service's own secret
+		// can prove the sender, and without one the request stays refused.
+		return (
+			!!serviceSecret && isServiceSecretValid(req, provider, serviceSecret)
+		);
 	}
 
 	if (provider === "github") {
@@ -257,6 +322,10 @@ export default async function handler(
 				gitlab: application.gitlab,
 				bitbucket: application.bitbucket,
 				gitea: application.gitea,
+				service: {
+					sourceType: application.sourceType,
+					webhookSecret: application.webhookSecret,
+				},
 			})
 		) {
 			return;
@@ -668,10 +737,12 @@ export const extractCommitMessage = (headers: any, body: any) => {
 	}
 
 	// Bitbucket
-	if (headers["x-event-key"]?.includes("repo:push")) {
-		return body.push.changes && body.push.changes.length > 0
-			? body.push.changes[0].new.target.message
-			: "NEW COMMIT";
+	if (isBitbucketEvent(headers)) {
+		return (
+			body?.push?.changes?.[0]?.new?.target?.message ??
+			body?.changes?.[0]?.ref?.displayId ??
+			"NEW COMMIT"
+		);
 	}
 
 	// Gitea
@@ -714,10 +785,12 @@ export const extractHash = (headers: any, body: any) => {
 	}
 
 	// Bitbucket
-	if (headers["x-event-key"]?.includes("repo:push")) {
-		return body.push.changes && body.push.changes.length > 0
-			? body.push.changes[0].new.target.hash
-			: "NEW COMMIT";
+	if (isBitbucketEvent(headers)) {
+		return (
+			body?.push?.changes?.[0]?.new?.target?.hash ??
+			body?.changes?.[0]?.toHash ??
+			"NEW COMMIT"
+		);
 	}
 
 	// Gitea
@@ -745,12 +818,26 @@ export const extractBranchName = (headers: any, body: any) => {
 		return body?.ref ? body?.ref.replace("refs/heads/", "") : null;
 	}
 
-	if (headers["x-event-key"]?.includes("repo:push")) {
-		return body?.push?.changes[0]?.new?.name;
+	if (isBitbucketEvent(headers)) {
+		// Cloud: push.changes[].new.name; Data Center: changes[].ref.displayId
+		const cloud = body?.push?.changes?.[0]?.new;
+		if (cloud) {
+			return cloud.type && cloud.type !== "branch" ? null : cloud.name;
+		}
+		const change = body?.changes?.[0];
+		if (change?.ref?.type === "BRANCH" && change.type !== "DELETE") {
+			return change.ref.displayId;
+		}
 	}
 
 	return null;
 };
+
+// repo:push is Bitbucket Cloud, repo:refs_changed Bitbucket Data Center.
+const isBitbucketEvent = (headers: any) =>
+	typeof headers["x-event-key"] === "string" &&
+	(headers["x-event-key"].includes("repo:push") ||
+		headers["x-event-key"].includes("repo:refs_changed"));
 
 export const getProviderByHeader = (headers: any) => {
 	// Gitea (and Forgejo) also send X-GitHub-Event and X-Hub-Signature-256 for
@@ -763,7 +850,7 @@ export const getProviderByHeader = (headers: any) => {
 		return "gitlab";
 	}
 
-	if (headers["x-event-key"]?.includes("repo:push")) {
+	if (isBitbucketEvent(headers)) {
 		return "bitbucket";
 	}
 

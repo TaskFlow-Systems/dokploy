@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import {
 	clearOldDeployments,
 	createApplication,
@@ -1142,6 +1143,57 @@ export const applicationRouter = createTRPCRouter({
 				resourceName: `${application.appName} (webhook token)`,
 			});
 			return { refreshToken: application.refreshToken };
+		}),
+
+	revealWebhookSecret: protectedProcedure
+		.input(apiFindOneApplication)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				deployment: ["create"],
+			});
+			const service = await findApplicationById(input.applicationId);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "application",
+				resourceId: input.applicationId,
+				resourceName: `${service.appName} (webhook secret)`,
+			});
+			return { webhookSecret: service.webhookSecret ?? null };
+		}),
+	regenerateWebhookSecret: protectedProcedure
+		.input(apiFindOneApplication)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				service: ["create"],
+			});
+			const webhookSecret = randomBytes(24).toString("hex");
+			await updateApplication(input.applicationId, { webhookSecret });
+			const service = await findApplicationById(input.applicationId);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "application",
+				resourceId: input.applicationId,
+				resourceName: `${service.appName} (webhook secret)`,
+			});
+			return { webhookSecret };
+		}),
+	removeWebhookSecret: protectedProcedure
+		.input(apiFindOneApplication)
+		.mutation(async ({ input, ctx }) => {
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				service: ["create"],
+			});
+			await updateApplication(input.applicationId, { webhookSecret: null });
+			const service = await findApplicationById(input.applicationId);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "application",
+				resourceId: input.applicationId,
+				resourceName: `${service.appName} (webhook secret removed)`,
+			});
+			return true;
 		}),
 
 	refreshToken: protectedProcedure

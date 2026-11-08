@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import {
 	addDomainToCompose,
@@ -899,6 +900,57 @@ export const composeRouter = createTRPCRouter({
 				resourceName: `${compose.appName} (webhook token)`,
 			});
 			return { refreshToken: compose.refreshToken };
+		}),
+
+	revealWebhookSecret: protectedProcedure
+		.input(apiFindCompose)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			await checkServicePermissionAndAccess(ctx, input.composeId, {
+				deployment: ["create"],
+			});
+			const service = await findComposeById(input.composeId);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "compose",
+				resourceId: input.composeId,
+				resourceName: `${service.appName} (webhook secret)`,
+			});
+			return { webhookSecret: service.webhookSecret ?? null };
+		}),
+	regenerateWebhookSecret: protectedProcedure
+		.input(apiFindCompose)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			await checkServicePermissionAndAccess(ctx, input.composeId, {
+				service: ["create"],
+			});
+			const webhookSecret = randomBytes(24).toString("hex");
+			await updateCompose(input.composeId, { webhookSecret });
+			const service = await findComposeById(input.composeId);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "compose",
+				resourceId: input.composeId,
+				resourceName: `${service.appName} (webhook secret)`,
+			});
+			return { webhookSecret };
+		}),
+	removeWebhookSecret: protectedProcedure
+		.input(apiFindCompose)
+		.mutation(async ({ input, ctx }) => {
+			await checkServicePermissionAndAccess(ctx, input.composeId, {
+				service: ["create"],
+			});
+			await updateCompose(input.composeId, { webhookSecret: null });
+			const service = await findComposeById(input.composeId);
+			await audit(ctx, {
+				action: "update",
+				resourceType: "compose",
+				resourceId: input.composeId,
+				resourceName: `${service.appName} (webhook secret removed)`,
+			});
+			return true;
 		}),
 
 	refreshToken: protectedProcedure
