@@ -549,17 +549,20 @@ export const volumeBackupsRouter = createTRPCRouter({
 			const vb = await findVolumeBackupById(input.volumeBackupId);
 			await assertVolumeBackupServiceAccess(ctx, vb, "create");
 			try {
-				const result = await runVolumeBackup(input.volumeBackupId);
-				await audit(ctx, {
-					action: "run",
-					resourceType: "volumeBackup",
-					resourceId: input.volumeBackupId,
-				});
-				return result;
+				await runVolumeBackup(input.volumeBackupId);
 			} catch (error) {
 				console.error(error);
-				return false;
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: `Volume backup failed: ${error instanceof Error ? error.message : String(error)}`,
+				});
 			}
+			await audit(ctx, {
+				action: "run",
+				resourceType: "volumeBackup",
+				resourceId: input.volumeBackupId,
+			});
+			return true;
 		}),
 	restoreVolumeBackupWithLogs: withPermission("volumeBackup", "restore")
 		.meta({

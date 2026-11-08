@@ -65,8 +65,10 @@ export const ShowVolumeBackups = ({
 			await runManually({ volumeBackupId });
 			toast.success("Volume backup run successfully");
 			await refetchVolumeBackups();
-		} catch {
-			toast.error("Error running volume backup");
+		} catch (error) {
+			toast.error(
+				error instanceof Error ? error.message : "Error running volume backup",
+			);
 		} finally {
 			setRunningBackups((prev) => {
 				const newSet = new Set(prev);
