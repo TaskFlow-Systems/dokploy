@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
 	restoreMySqlBackup: vi.fn(),
 	restorePostgresBackup: vi.fn(),
 	restoreWebServerBackup: vi.fn(),
+	sendDatabaseBackupNotifications: vi.fn(),
 	runComposeBackup: vi.fn(),
 	runLibsqlBackup: vi.fn(),
 	runMariadbBackup: vi.fn(),
@@ -207,6 +208,18 @@ vi.mock("@dokploy/server/utils/process/execAsync", () => ({
 	execAsyncRemote: mocks.execAsyncRemote,
 }));
 
+vi.mock("@dokploy/server/services/environment", () => ({
+	findEnvironmentById: mocks.findEnvironmentById,
+}));
+
+vi.mock("@dokploy/server/services/project", () => ({
+	findProjectById: mocks.findProjectById,
+}));
+
+vi.mock("@dokploy/server/utils/notifications/database-backup", () => ({
+	sendDatabaseBackupNotifications: mocks.sendDatabaseBackupNotifications,
+}));
+
 vi.mock("@dokploy/server/utils/restore", () => ({
 	restoreComposeBackup: mocks.restoreComposeBackup,
 	restoreLibsqlBackup: mocks.restoreLibsqlBackup,
@@ -223,6 +236,7 @@ vi.mock("@/server/utils/backup", () => ({
 	updateJob: mocks.updateJob,
 }));
 
+const { ExecError } = await import("@dokploy/server/utils/process/ExecError");
 const { backupRouter } = await import("../../server/api/routers/backup");
 const { restorePostgresBackup } = await import(
 	"@dokploy/server/utils/restore/postgres"
@@ -1282,5 +1296,190 @@ describe("backup read redaction", () => {
 		]) {
 			expect(serialized).not.toContain(secret);
 		}
+	});
+});
+
+describe("restore failure reporting", () => {
+	const drain = async (input: typeof safePostgresInput) => {
+		const logs: string[] = [];
+		let thrown: unknown;
+		try {
+			const stream = await createCaller().restoreBackupWithLogs(input);
+			for await (const log of stream as AsyncIterable<string>) {
+				logs.push(log);
+			}
+		} catch (error) {
+			thrown = error;
+		}
+		return { logs, thrown };
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.checkPermission.mockResolvedValue(undefined);
+		mocks.checkServicePermissionAndAccess.mockResolvedValue(undefined);
+		mocks.findDestinationById.mockResolvedValue(safeDestination);
+		mocks.findPostgresById.mockResolvedValue({
+			name: "main-db",
+			environmentId: "env-1",
+			appName: "app-one",
+			databaseUser: "dokploy",
+			serverId: "server-1",
+		});
+		mocks.normalizeS3Path.mockImplementation((prefix: string) => `${prefix}/`);
+		mocks.findRestoreBackups.mockResolvedValue([
+			{
+				appName: "backup-one",
+				backupType: "database",
+				databaseType: "postgres",
+				destinationId: "destination-1",
+				prefix: "prefix",
+				postgres: { appName: "app-one" },
+				postgresId: "postgres-1",
+			},
+		]);
+		mocks.findEnvironmentById.mockResolvedValue({ projectId: "project-1" });
+		mocks.findProjectById.mockResolvedValue({
+			name: "shop",
+			organizationId: "org-1",
+		});
+		mocks.sendDatabaseBackupNotifications.mockResolvedValue(undefined);
+	});
+
+	it("ends the stream with the remote stderr, once, and notifies", async () => {
+		mocks.restorePostgresBackup.mockRejectedValue(
+			new ExecError("Remote command failed with exit code 1", {
+				command: "docker exec ...",
+				stderr:
+					'pg_restore: error: connection to server failed: database "x" does not exist\nPGPASSWORD=hunter2 failed',
+				exitCode: 1,
+				serverId: "server-1",
+			}),
+		);
+
+		const { logs, thrown } = await drain(safePostgresInput);
+
+		expect(logs.filter((log) => log.startsWith("Error:"))).toHaveLength(1);
+		expect(logs.at(-1)).toContain('database "x" does not exist');
+		expect(logs.join("\n")).not.toContain("hunter2");
+		expect(thrown).toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+		expect((thrown as Error).message).toContain("exit code 1");
+		expect((thrown as Error).message).toContain('database "x" does not exist');
+		expect((thrown as Error).message).not.toContain("hunter2");
+
+		await vi.waitFor(() =>
+			expect(mocks.sendDatabaseBackupNotifications).toHaveBeenCalledTimes(1),
+		);
+		const notification = mocks.sendDatabaseBackupNotifications.mock.calls[0]![0];
+		expect(notification).toMatchObject({
+			operation: "restore",
+			type: "error",
+			applicationName: "main-db",
+			projectName: "shop",
+			organizationId: "org-1",
+			databaseType: "postgres",
+			databaseName: "appdb",
+		});
+		expect(notification.errorMessage).toContain('database "x" does not exist');
+		expect(notification.errorMessage).not.toContain("hunter2");
+	});
+
+	it("reports a local failure that the restore function already logged only once", async () => {
+		mocks.restorePostgresBackup.mockImplementation(
+			async (_db, _dest, _input, emit: (log: string) => void) => {
+				emit("Starting restore...");
+				emit("Error: gzip: stdin: not in gzip format");
+				throw new Error("gzip: stdin: not in gzip format");
+			},
+		);
+
+		const { logs, thrown } = await drain(safePostgresInput);
+
+		expect(logs).toEqual([
+			"Starting restore...",
+			"Error: gzip: stdin: not in gzip format",
+		]);
+		expect(thrown).toMatchObject({
+			code: "INTERNAL_SERVER_ERROR",
+			message: "gzip: stdin: not in gzip format",
+		});
+		await vi.waitFor(() =>
+			expect(mocks.sendDatabaseBackupNotifications).toHaveBeenCalledTimes(1),
+		);
+	});
+
+	it("still fails the stream when the notification cannot be sent", async () => {
+		mocks.restorePostgresBackup.mockRejectedValue(new Error("boom"));
+		mocks.sendDatabaseBackupNotifications.mockRejectedValue(new Error("down"));
+
+		const { thrown } = await drain(safePostgresInput);
+
+		expect(thrown).toMatchObject({
+			code: "INTERNAL_SERVER_ERROR",
+			message: "boom",
+		});
+	});
+
+	it("does not notify and does not throw for a successful restore", async () => {
+		mocks.restorePostgresBackup.mockResolvedValue(undefined);
+
+		const { thrown } = await drain(safePostgresInput);
+
+		expect(thrown).toBeUndefined();
+		expect(mocks.sendDatabaseBackupNotifications).not.toHaveBeenCalled();
+	});
+
+	it("keeps the real postgres restore error text for remote and local runs", async () => {
+		const { formatRestoreError } = await import(
+			"@dokploy/server/utils/restore/failure"
+		);
+		const postgres = {
+			appName: "app-one",
+			databaseUser: "dokploy",
+			serverId: "server-1",
+		};
+		const logs: string[] = [];
+
+		mocks.execAsyncRemote.mockRejectedValue(
+			new ExecError("Remote command failed with exit code 1", {
+				command: "x",
+				stderr: "pg_restore: error: could not connect",
+				exitCode: 1,
+				serverId: "server-1",
+			}),
+		);
+		await expect(
+			restorePostgresBackup(
+				postgres as never,
+				safeDestination as never,
+				safePostgresInput,
+				(log) => logs.push(log),
+			),
+		).rejects.toBeInstanceOf(ExecError);
+		expect(logs.at(-1)).toBe(
+			"Error: Remote command failed with exit code 1\npg_restore: error: could not connect",
+		);
+
+		logs.length = 0;
+		mocks.execAsync.mockRejectedValue(
+			new ExecError("Command execution failed: exit code 2", {
+				command: "x",
+				stderr:
+					"NOTICE: Config file \"/root/.config/rclone/rclone.conf\" not found - using defaults\ngzip: stdin: not in gzip format\n",
+				exitCode: 2,
+			}),
+		);
+		await expect(
+			restorePostgresBackup(
+				{ ...postgres, serverId: null } as never,
+				safeDestination as never,
+				safePostgresInput,
+				(log) => logs.push(log),
+			),
+		).rejects.toBeInstanceOf(ExecError);
+		expect(logs.at(-1)).toBe(
+			"Error: Command execution failed: exit code 2\ngzip: stdin: not in gzip format",
+		);
+		expect(formatRestoreError("plain")).toBe("plain");
 	});
 });

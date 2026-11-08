@@ -281,6 +281,7 @@ export const RestoreBackup = ({
 			},
 			onError(error) {
 				console.error("Restore logs error:", error);
+				toast.error(error.message || "Restore failed");
 				setIsDeploying(false);
 			},
 		},
