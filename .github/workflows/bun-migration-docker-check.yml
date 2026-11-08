@@ -126,6 +126,49 @@ jobs:
             pty.write("ping\n");
           '
 
+      # The panel's server runs on Bun. This starts the image as it ships, with
+      # Postgres and a swarm, and fails unless the server answers, its process
+      # is bun, and undici is the npm package there: Bun's built-in undici
+      # ignores `dispatcher`, which skipped the address checks of outbound
+      # requests (utils/undici.ts).
+      - name: Start the panel on Bun
+        run: |
+          docker swarm init >/dev/null 2>&1 || true
+          docker network create bun-smoke >/dev/null
+          docker run -d --name bun-smoke-pg --network bun-smoke \
+            -e POSTGRES_USER=dokploy -e POSTGRES_DB=dokploy -e POSTGRES_PASSWORD=smoke-postgres-password \
+            postgres:18-alpine >/dev/null
+          docker run -d --name bun-smoke-panel --network bun-smoke \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -e POSTGRES_HOST=bun-smoke-pg -e POSTGRES_PASSWORD=smoke-postgres-password \
+            -e BETTER_AUTH_SECRET=smoke-better-auth-secret-0123456789abcdef \
+            -e ADVERTISE_ADDR=127.0.0.1 -e SCHEDULES_SIGNING_KEY=smoke-schedules-key \
+            -e DEPLOYMENTS_SIGNING_KEY=smoke-deployments-key \
+            dokploy-bun-check:main >/dev/null
+          up=0
+          for _ in $(seq 1 120); do
+            if docker exec bun-smoke-panel curl -fs -o /dev/null http://127.0.0.1:3000/api/trpc/settings.health; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" != 1 ]; then docker logs bun-smoke-panel 2>&1 | tail -60; exit 1; fi
+          # tini and sh carry the same words in their arguments, so the server
+          # is the process whose executable is bun.
+          docker exec bun-smoke-panel ps -eo comm=,args= | tee /dev/stderr | awk '$1 == "bun" && /dist\/server\.mjs/ { found = 1 } $1 == "node" && /dist\/server\.mjs/ { exit 1 } END { exit !found }'
+          docker exec -w /app bun-smoke-panel bun -e '
+            const { Agent, fetch } = await import("/app/packages/server/dist/utils/undici.js");
+            const http = require("node:http");
+            const server = http.createServer((req, res) => res.end(req.headers.host));
+            await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+            const agent = new Agent({ connect: { lookup: (_h, o, cb) => (o.all ? cb(null, [{ address: "127.0.0.1", family: 4 }]) : cb(null, "127.0.0.1", 4)) } });
+            const res = await fetch(`http://pinned.invalid:${server.address().port}/`, { dispatcher: agent });
+            console.log(`undici on Bun: ${res.status} ${await res.text()}`);
+            await agent.close();
+            server.close();
+            process.exit(res.status === 200 ? 0 : 1);
+          '
+          docker rm -f bun-smoke-panel bun-smoke-pg >/dev/null
+          docker network rm bun-smoke >/dev/null
+
       # Repeats the panel's Railpack path (railpack prepare, then buildx with the
       # Railpack frontend on a docker-container builder) from inside the image,
       # so a Railpack bump that cannot build a plain Node app fails here.
