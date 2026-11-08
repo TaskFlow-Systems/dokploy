@@ -4,6 +4,7 @@ import {
 	IS_CLOUD,
 	sendDockerCleanupNotifications,
 } from "@dokploy/server";
+import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
 import { scheduledJobs, scheduleJob } from "node-schedule";
 import { removeJob, schedule } from "./backup";
 
@@ -20,10 +21,14 @@ export const applyDockerCleanupSchedule = async (
 				type: "server",
 			});
 		} else {
-			scheduleJob(serverId, CLEANUP_CRON_JOB, async () => {
-				await cleanupAll(serverId);
-				await sendDockerCleanupNotifications(organizationId);
-			});
+			scheduleJob(
+				serverId,
+				CLEANUP_CRON_JOB,
+				guardScheduledRun(serverId, async () => {
+					await cleanupAll(serverId);
+					await sendDockerCleanupNotifications(organizationId);
+				}),
+			);
 		}
 	} else {
 		if (IS_CLOUD) {

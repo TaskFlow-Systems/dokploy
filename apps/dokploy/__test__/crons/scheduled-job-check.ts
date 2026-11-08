@@ -1,5 +1,5 @@
 import { scheduleJob } from "node-schedule";
-import { guardScheduledRun } from "../../../../../packages/server/src/utils/backups/scheduled-run";
+import { guardScheduledRun } from "../../../../packages/server/src/utils/crons/guard";
 
 // Real node-schedule timers: one job whose backup throws the way a run*Backup
 // does after it recorded the failure. The unguarded job is the control, it has

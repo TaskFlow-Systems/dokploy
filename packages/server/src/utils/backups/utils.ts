@@ -3,6 +3,7 @@ import { assertRcloneAdditionalFlagsAllowed } from "@dokploy/server/db/validatio
 import { logger } from "@dokploy/server/lib/logger";
 import type { BackupSchedule } from "@dokploy/server/services/backup";
 import type { Destination } from "@dokploy/server/services/destination";
+import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
 import {
 	assertDestinationEndpointAllowed,
 	normalizeDestinationEndpointUrl,
@@ -31,7 +32,6 @@ import { runMariadbBackup } from "./mariadb";
 import { runMongoBackup } from "./mongo";
 import { runMySqlBackup } from "./mysql";
 import { runPostgresBackup } from "./postgres";
-import { guardScheduledRun } from "./scheduled-run";
 import { runWebServerBackup } from "./web-server";
 
 export const scheduleBackup = (backup: BackupSchedule) => {

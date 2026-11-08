@@ -96,6 +96,7 @@ import {
 	acquireTraefikOperation,
 	runningTraefikOperation,
 } from "@dokploy/server/setup/traefik-operation-lock";
+import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
 import { isProtectedTraefikPath } from "@dokploy/server/utils/traefik/application";
 import { generateOpenApiDocument } from "@dokploy/trpc-openapi";
 import { TRPCError } from "@trpc/server";
@@ -673,15 +674,19 @@ export const settingsRouter = createTRPCRouter({
 							type: "server",
 						});
 					} else {
-						scheduleJob(server.serverId, CLEANUP_CRON_JOB, async () => {
-							console.log(
-								`Docker Cleanup ${new Date().toLocaleString()}] Running...`,
-							);
+						scheduleJob(
+							server.serverId,
+							CLEANUP_CRON_JOB,
+							guardScheduledRun(server.serverId, async () => {
+								console.log(
+									`Docker Cleanup ${new Date().toLocaleString()}] Running...`,
+								);
 
-							await cleanupAll(server.serverId);
+								await cleanupAll(server.serverId);
 
-							await sendDockerCleanupNotifications(server.organizationId);
-						});
+								await sendDockerCleanupNotifications(server.organizationId);
+							}),
+						);
 					}
 				} else {
 					if (IS_CLOUD) {
@@ -701,17 +706,21 @@ export const settingsRouter = createTRPCRouter({
 				});
 
 				if (settingsUpdated?.enableDockerCleanup) {
-					scheduleJob("docker-cleanup", CLEANUP_CRON_JOB, async () => {
-						console.log(
-							`Docker Cleanup ${new Date().toLocaleString()}] Running...`,
-						);
+					scheduleJob(
+						"docker-cleanup",
+						CLEANUP_CRON_JOB,
+						guardScheduledRun("docker-cleanup", async () => {
+							console.log(
+								`Docker Cleanup ${new Date().toLocaleString()}] Running...`,
+							);
 
-						await cleanupAll();
+							await cleanupAll();
 
-						await sendDockerCleanupNotifications(
-							ctx.session.activeOrganizationId,
-						);
-					});
+							await sendDockerCleanupNotifications(
+								ctx.session.activeOrganizationId,
+							);
+						}),
+					);
 				} else {
 					const currentJob = scheduledJobs["docker-cleanup"];
 					currentJob?.cancel();

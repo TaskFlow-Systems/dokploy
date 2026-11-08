@@ -8,6 +8,7 @@ import { eq } from "drizzle-orm";
 import { scheduleJob } from "node-schedule";
 import { db } from "../../db/index";
 import { startLogCleanup } from "../access-log/handler";
+import { guardScheduledRun } from "../crons/guard";
 import { cleanupAll } from "../docker/utils";
 import { sendDockerCleanupNotifications } from "../notifications/docker-cleanup";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
@@ -30,20 +31,24 @@ export const initCronJobs = async () => {
 
 	if (webServerSettings?.enableDockerCleanup) {
 		try {
-			scheduleJob("docker-cleanup", CLEANUP_CRON_JOB, async () => {
-				console.log(
-					`Docker Cleanup ${new Date().toLocaleString()}]  Running docker cleanup`,
-				);
+			scheduleJob(
+				"docker-cleanup",
+				CLEANUP_CRON_JOB,
+				guardScheduledRun("docker-cleanup", async () => {
+					console.log(
+						`Docker Cleanup ${new Date().toLocaleString()}]  Running docker cleanup`,
+					);
 
-				await cleanupAll();
+					await cleanupAll();
 
-				const owner = await db.query.member.findFirst({
-					where: eq(member.role, "owner"),
-				});
-				if (owner) {
-					await sendDockerCleanupNotifications(owner.organizationId);
-				}
-			});
+					const owner = await db.query.member.findFirst({
+						where: eq(member.role, "owner"),
+					});
+					if (owner) {
+						await sendDockerCleanupNotifications(owner.organizationId);
+					}
+				}),
+			);
 		} catch (error) {
 			console.error("[Backup] Docker Cleanup Error", error);
 		}
@@ -55,18 +60,22 @@ export const initCronJobs = async () => {
 		const { serverId, enableDockerCleanup, name, organizationId } = server;
 		if (enableDockerCleanup) {
 			try {
-				scheduleJob(serverId, CLEANUP_CRON_JOB, async () => {
-					console.log(
-						`SERVER-BACKUP[${new Date().toLocaleString()}] Running Cleanup ${name}`,
-					);
+				scheduleJob(
+					serverId,
+					CLEANUP_CRON_JOB,
+					guardScheduledRun(serverId, async () => {
+						console.log(
+							`SERVER-BACKUP[${new Date().toLocaleString()}] Running Cleanup ${name}`,
+						);
 
-					await cleanupAll(serverId);
+						await cleanupAll(serverId);
 
-					await sendDockerCleanupNotifications(
-						organizationId,
-						`Docker cleanup for Server ${name} (${serverId})`,
-					);
-				});
+						await sendDockerCleanupNotifications(
+							organizationId,
+							`Docker cleanup for Server ${name} (${serverId})`,
+						);
+					}),
+				);
 			} catch (error) {
 				console.error(`[Backup] ${error}`);
 			}

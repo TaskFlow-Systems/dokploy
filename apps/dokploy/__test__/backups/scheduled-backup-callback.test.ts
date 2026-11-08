@@ -1,6 +1,3 @@
-import { execFile } from "node:child_process";
-import path from "node:path";
-import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -73,7 +70,7 @@ describe("scheduled backup callback", () => {
 		expect(mocks.keepLatestNBackups).not.toHaveBeenCalled();
 		expect(mocks.loggerError).toHaveBeenCalledTimes(1);
 		expect(mocks.loggerError.mock.calls[0]?.[0]).toMatchObject({
-			backupId: "backup-1",
+			jobId: "backup-1",
 			error: "Remote command failed with exit code 1",
 		});
 	});
@@ -89,25 +86,4 @@ describe("scheduled backup callback", () => {
 		expect(mocks.keepLatestNBackups).toHaveBeenCalledTimes(1);
 		expect(mocks.loggerError).not.toHaveBeenCalled();
 	});
-});
-
-// Vitest runs on Node (the tests above); the panel's server runs on Bun, so the
-// same scenario runs in a Bun process, with real node-schedule timers.
-describe("scheduled job under Bun", () => {
-	it("a guarded failing run raises no unhandled rejection, an unguarded one does", async () => {
-		const fixture = path.join(
-			__dirname,
-			"fixtures",
-			"scheduled-backup-check.ts",
-		);
-		const { stdout } = await promisify(execFile)("bun", [fixture], {
-			timeout: 30_000,
-			cwd: path.resolve(__dirname, "../.."),
-		});
-		const result = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
-
-		expect(result.runtime).toBe("bun");
-		expect(result.calls).toEqual({ guarded: 1, unguarded: 1 });
-		expect(result.rejections).toEqual(["backup stage failed"]);
-	}, 40_000);
 });
