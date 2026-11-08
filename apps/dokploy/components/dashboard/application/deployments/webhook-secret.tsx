@@ -16,7 +16,7 @@ interface Props {
 // provider row, Bitbucket and Soft Serve send a signature but have no panel-side
 // credentials. GitHub, GitLab and Gitea keep the secret of their provider.
 const HELP: Record<string, string> = {
-	git: "Custom Git: paste the secret into the webhook of any GitHub, GitLab, Gitea or Forgejo mirror (Secret / Secret token field), or into the webhook of Bitbucket or Soft Serve (ssh <host> webhook create <repo> <url> -e push -s <secret>). The panel accepts GitHub's X-Hub-Signature-256, GitLab's X-Gitlab-Token, Gitea's X-Gitea-Signature, Bitbucket's X-Hub-Signature and Soft Serve's X-SoftServe-Signature. Without a secret these webhooks are refused.",
+	git: "Custom Git: paste the secret into the webhook of any GitHub, GitLab, Gitea or Forgejo mirror (Secret / Secret token field), or into the webhook of Bitbucket or Soft Serve (ssh <host> repo webhook create <repo> <url> -e push -s <secret>). The panel accepts GitHub's X-Hub-Signature-256, GitLab's X-Gitlab-Token, Gitea's X-Gitea-Signature, Bitbucket's X-Hub-Signature and Soft Serve's X-SoftServe-Signature. Without a secret these webhooks are refused.",
 	bitbucket:
 		"Bitbucket: paste the secret into the Secret field of the repository webhook (Repository settings > Webhooks). Bitbucket signs each request in X-Hub-Signature. Without a secret its webhooks are refused.",
 };
