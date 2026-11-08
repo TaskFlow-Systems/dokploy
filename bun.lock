@@ -68,7 +68,7 @@
         "@codemirror/search": "^6.7.2",
         "@codemirror/view": "^6.43.15",
         "@dokploy/server": "workspace:*",
-        "@dokploy/trpc-openapi": "0.0.18",
+        "@dokploy/trpc-openapi": "0.0.19",
         "@faker-js/faker": "^10.6.0",
         "@hookform/resolvers": "^5.9.2",
         "@octokit/auth-app": "^8.3.1",
@@ -594,7 +594,7 @@
 
     "@dokploy/server": ["@dokploy/server@workspace:packages/server"],
 
-    "@dokploy/trpc-openapi": ["@dokploy/trpc-openapi@0.0.18", "", { "dependencies": { "co-body": "6.2.0", "h3": "1.15.1", "openapi3-ts": "4.4.0" }, "optionalDependencies": { "@rollup/rollup-linux-x64-gnu": "4.6.1" }, "peerDependencies": { "@trpc/server": "^11.1.0", "zod": "^4.3.6", "zod-openapi": "^5.0.1" } }, "sha512-CbppvUEe8eK1fiNGQL5AH8KIRRlHk5bGPUEIyc2VBZE0un4kfUs5DXKSKsMLDomoES5ZEdrjT4nKpwYvhDha0w=="],
+    "@dokploy/trpc-openapi": ["@dokploy/trpc-openapi@0.0.19", "", { "dependencies": { "co-body": "6.2.0", "h3": "1.15.1", "openapi3-ts": "4.4.0" }, "optionalDependencies": { "@rollup/rollup-linux-x64-gnu": "4.6.1" }, "peerDependencies": { "@trpc/server": "^11.1.0", "zod": "^4.3.6", "zod-openapi": "^5.0.1" } }, "sha512-pmajIu1tIU3yqqbYdRHKFbA8gP37gO7F61PL9AFNtoyhh6gVxALXQLDabtE7dobKAhNDmIj6vV1a2vyP1Zi7/w=="],
 
     "@dotenvx/dotenvx": ["@dotenvx/dotenvx@1.75.1", "", { "dependencies": { "@dotenvx/primitives": "^0.8.0", "commander": "^11.1.0", "conf": "^10.2.0", "dotenv": "^17.2.1", "enquirer": "^2.4.1", "env-paths": "^2.2.1", "execa": "^5.1.1", "fdir": "^6.2.0", "ignore": "^5.3.0", "object-treeify": "1.1.33", "open": "^8.4.2", "picomatch": "^4.0.4", "systeminformation": "^5.22.11", "undici": "^7.11.0", "which": "^4.0.0", "yocto-spinner": "^1.1.0" }, "bin": { "dotenvx": "src/cli/dotenvx.js" } }, "sha512-/BITOC9dmS/edY2zQwZNicQ059O6RKabtQfyEafV0nGtfYRNHYy1DIPiYVcov40+tob9hfmBnbR963dS+EQ1DQ=="],
 
@@ -1316,7 +1316,7 @@
 
     "@rolldown/pluginutils": ["@rolldown/pluginutils@1.0.1", "", {}, "sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw=="],
 
-    "@rollup/rollup-linux-x64-gnu": ["@rollup/rollup-linux-x64-gnu@4.6.1", "", { "os": "linux", "cpu": "x64" }, "sha512-DNGZvZDO5YF7jN5fX8ZqmGLjZEXIJRdJEdTFMhiyXqyXubBa0WVLDWSNlQ5JR2PNgDbEV1VQowhVRUh+74D+RA=="],
+    "@rollup/rollup-linux-x64-gnu": ["@rollup/rollup-linux-x64-gnu@4.6.1", "", { "os": "linux", "cpu": "x64", "libc": "glibc" }, "sha512-DNGZvZDO5YF7jN5fX8ZqmGLjZEXIJRdJEdTFMhiyXqyXubBa0WVLDWSNlQ5JR2PNgDbEV1VQowhVRUh+74D+RA=="],
 
     "@rrweb/types": ["@rrweb/types@2.0.0-alpha.20", "", {}, "sha512-RbnDgKxA/odwB1R4gF7eUUj+rdSrq6ROQJsnMw7MIsGzlbSYvJeZN8YY4XqU0G6sKJvXI6bSzk7w/G94jNwzhw=="],
 
