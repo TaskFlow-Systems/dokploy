@@ -99,6 +99,7 @@ describe("mongo backup of a database that is not there", () => {
 			{
 				encoding: "utf8",
 				env: {
+					...process.env,
 					PATH: `${dir}/bin:/usr/bin:/bin`,
 					CONTAINER_ID: "c",
 				},
