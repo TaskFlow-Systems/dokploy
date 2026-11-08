@@ -34,6 +34,8 @@ import { KillBuild } from "./kill-build";
 import { RefreshToken } from "./refresh-token";
 import { ShowDeployment } from "./show-deployment";
 
+const HIDDEN_SECRET = "__DOKPLOY_REDACTED_SECRET__";
+
 interface Props {
 	id: string;
 	type:
@@ -103,11 +105,43 @@ export const ShowDeployments = ({
 		new Set(),
 	);
 
+	// `application.one` and `compose.one` give the token as a placeholder, so
+	// the real URL is asked for on the first click on it.
+	const [revealedToken, setRevealedToken] = useState<string | null>(null);
+	const { mutateAsync: revealApplicationToken } =
+		api.application.revealWebhookToken.useMutation();
+	const { mutateAsync: revealComposeToken } =
+		api.compose.revealWebhookToken.useMutation();
+	const isTokenHidden =
+		refreshToken === HIDDEN_SECRET && revealedToken === null;
+	const webhookToken =
+		refreshToken === HIDDEN_SECRET
+			? (revealedToken ?? "••••••••")
+			: refreshToken;
 	const webhookUrl = useMemo(
 		() =>
-			`${url}/api/deploy${type === "compose" ? "/compose" : ""}/${refreshToken}`,
-		[url, refreshToken, type],
+			`${url}/api/deploy${type === "compose" ? "/compose" : ""}/${webhookToken}`,
+		[url, webhookToken, type],
 	);
+
+	const copyWebhookUrl = async () => {
+		let token = revealedToken ?? refreshToken;
+		if (isTokenHidden) {
+			try {
+				const answer =
+					type === "compose"
+						? await revealComposeToken({ composeId: id })
+						: await revealApplicationToken({ applicationId: id });
+				token = answer.refreshToken ?? "";
+				setRevealedToken(token);
+			} catch {
+				toast.error("You are not allowed to see the webhook URL.");
+				return;
+			}
+		}
+		copy(`${url}/api/deploy${type === "compose" ? "/compose" : ""}/${token}`);
+		toast.success("Copied to clipboard.");
+	};
 
 	const MAX_DESCRIPTION_LENGTH = 200;
 
@@ -242,16 +276,17 @@ export const ShowDeployments = ({
 										badgeVariants({ variant: "outline" }),
 										"p-2 rounded-md ml-1 mr-1 hover:border-primary hover:text-primary-foreground hover:bg-primary hover:cursor-pointer whitespace-normal break-all",
 									)}
-									onClick={() => {
-										copy(webhookUrl);
-										toast.success("Copied to clipboard.");
-									}}
+									onClick={copyWebhookUrl}
 								>
 									{webhookUrl}
 									<Copy className="h-4 w-4 ml-2" />
 								</button>
 								{(type === "application" || type === "compose") && (
-									<RefreshToken id={id} type={type} />
+									<RefreshToken
+										id={id}
+										type={type}
+										onRefreshed={() => setRevealedToken(null)}
+									/>
 								)}
 							</div>
 						</div>

@@ -40,7 +40,8 @@ const API_KEY_UNSCRUBBED_PROCEDURES = new Set(["settings.getOpenApiDocument"]);
 export const isProcedureDeniedForApiKey = (path: string) =>
 	API_KEY_DENIED_PROCEDURES.has(path) ||
 	path.endsWith(".revealEnvironment") ||
-	path.endsWith(".revealCredentials");
+	path.endsWith(".revealCredentials") ||
+	path.endsWith(".revealWebhookToken");
 
 export const assertProcedureAllowedForApiKey = (path: string) => {
 	if (isProcedureDeniedForApiKey(path)) {

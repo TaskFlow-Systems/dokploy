@@ -16,8 +16,9 @@ import { api } from "@/utils/api";
 interface Props {
 	id: string;
 	type: "application" | "compose";
+	onRefreshed?: () => void;
 }
-export const RefreshToken = ({ id, type }: Props) => {
+export const RefreshToken = ({ id, type, onRefreshed }: Props) => {
 	const { mutateAsync } =
 		type === "application"
 			? api.application.refreshToken.useMutation()
@@ -54,6 +55,7 @@ export const RefreshToken = ({ id, type }: Props) => {
 											composeId: id,
 										});
 									}
+									onRefreshed?.();
 									toast.success("Refresh updated");
 								})
 								.catch(() => {
