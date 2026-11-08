@@ -141,9 +141,12 @@ jobs:
           echo "Railpack frontend: $frontend"
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$app:/src" -e FRONTEND="$frontend" --entrypoint sh dokploy-bun-check:main -ec '
             # The image carries the mise Railpack pins; a download here means
-            # MISE_VERSION in the Dockerfile no longer matches Railpack.
-            railpack --verbose prepare /src --plan-out /src/railpack-plan.json --info-out /src/railpack-info.json 2>&1 | tee /src/prepare.log
-            grep -q "Mise executable exists" /src/prepare.log
+            # MISE_VERSION in the Dockerfile no longer matches Railpack. A
+            # verbose plan asks the build for a MISE_VERBOSE secret, so the
+            # plan that is built comes from a plain run.
+            railpack --verbose prepare /src --plan-out /tmp/verbose-plan.json > /tmp/prepare.log 2>&1 || { cat /tmp/prepare.log; exit 1; }
+            grep -q "Mise executable exists" /tmp/prepare.log || { cat /tmp/prepare.log; exit 1; }
+            railpack prepare /src --plan-out /src/railpack-plan.json --info-out /src/railpack-info.json
             docker buildx create --name railpack-smoke --driver docker-container
             docker buildx build --builder railpack-smoke --build-arg "BUILDKIT_SYNTAX=ghcr.io/railwayapp/railpack-frontend:v$FRONTEND" -f /src/railpack-plan.json --output type=docker,name=railpack-smoke /src
             docker buildx rm railpack-smoke
