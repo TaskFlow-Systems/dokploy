@@ -9,6 +9,7 @@ import {
 	findDestinationByIdForOrganization,
 } from "@dokploy/server/services/destination";
 import { findVolumeBackupById } from "@dokploy/server/services/volume-backups";
+import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
 import {
 	execAsync,
 	execAsyncRemote,
@@ -79,14 +80,13 @@ const getOrganizationId = (
 
 export const scheduleVolumeBackup = async (volumeBackupId: string) => {
 	const volumeBackup = await findVolumeBackupById(volumeBackupId);
-	scheduleJob(volumeBackupId, volumeBackup.cronExpression, async () => {
-		try {
-			await runVolumeBackup(volumeBackupId);
-		} catch {
-			// runVolumeBackup has already marked the deployment and sent the
-			// notification; nobody awaits a scheduled run.
-		}
-	});
+	// runVolumeBackup has already marked the deployment and sent the
+	// notification; nobody awaits a scheduled run.
+	scheduleJob(
+		volumeBackupId,
+		volumeBackup.cronExpression,
+		guardScheduledRun(volumeBackupId, () => runVolumeBackup(volumeBackupId)),
+	);
 };
 
 export const removeVolumeBackupJob = async (volumeBackupId: string) => {
