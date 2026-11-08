@@ -59,7 +59,7 @@ vi.mock("@/server/utils/deploy", () => ({
 	deploy: vi.fn(),
 }));
 
-const { default: handler } = await import(
+const { default: handler, getProviderByHeader } = await import(
 	"../../pages/api/deploy/[refreshToken]"
 );
 
@@ -150,6 +150,51 @@ describe("Gitea deploy webhook", () => {
 
 		expect(response.status).not.toHaveBeenCalledWith(401);
 		expect(queueMocks.add).toHaveBeenCalled();
+	});
+
+	it("treats a real Gitea delivery, which also carries GitHub's headers, as Gitea", async () => {
+		const githubStyleSignature = `sha256=${sign("gitea-hook-secret", giteaRaw)}`;
+		const giteaHeaders = {
+			"x-gitea-event": "push",
+			"x-gitea-event-type": "push",
+			"x-gitea-delivery": "delivery-1",
+			"x-gitea-signature": sign("gitea-hook-secret", giteaRaw),
+			"x-gogs-event": "push",
+			"x-gogs-signature": sign("gitea-hook-secret", giteaRaw),
+			"x-github-event": "push",
+			"x-github-event-type": "push",
+			"x-github-delivery": "delivery-1",
+			"x-hub-signature": "sha1=0",
+			"x-hub-signature-256": githubStyleSignature,
+		};
+		expect(getProviderByHeader(giteaHeaders)).toBe("gitea");
+
+		const response = createResponse();
+		await handler(streamRequest(giteaRaw, giteaHeaders), response);
+		expect(response.status).not.toHaveBeenCalledWith(401);
+		expect(queueMocks.add).toHaveBeenCalled();
+		expect(webhookMocks.verify).not.toHaveBeenCalled();
+
+		vi.clearAllMocks();
+		const wrong = createResponse();
+		await handler(
+			streamRequest(giteaRaw, {
+				...giteaHeaders,
+				"x-gitea-signature": sign("other-secret", giteaRaw),
+			}),
+			wrong,
+		);
+		expect(wrong.status).toHaveBeenCalledWith(401);
+		expect(queueMocks.add).not.toHaveBeenCalled();
+	});
+
+	it("still reads a delivery with only GitHub's headers as GitHub", () => {
+		expect(
+			getProviderByHeader({
+				"x-github-event": "push",
+				"x-hub-signature-256": "sha256=0",
+			}),
+		).toBe("github");
 	});
 
 	it("refuses a wrong signature, a missing one and a provider without a secret", async () => {
