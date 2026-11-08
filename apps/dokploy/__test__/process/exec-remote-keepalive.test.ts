@@ -13,7 +13,7 @@ vi.mock("@dokploy/server/utils/servers/destination", () => ({
 import type { ExecError } from "@dokploy/server/utils/process/ExecError";
 import { execAsyncRemote } from "@dokploy/server/utils/process/execAsync";
 import { getRemoteDocker } from "@dokploy/server/utils/servers/remote-docker";
-import { type ServerChannel, Server as SshServer, utils } from "ssh2";
+import { Client, type ServerChannel, Server as SshServer, utils } from "ssh2";
 
 const KEEPALIVE_INTERVAL_MS = 15_000;
 const KEEPALIVE_TICKS_UNTIL_LOSS = 5;
@@ -243,11 +243,19 @@ describe("getRemoteDocker", () => {
 			sshKey: { privateKey: clientKey },
 		};
 
+		const connect = vi.spyOn(Client.prototype, "connect");
 		const docker = await getRemoteDocker("deploy-server");
+		const { agent } = docker.modem as unknown as {
+			agent: { createConnection: (options: object, cb: () => void) => void };
+		};
+		agent.createConnection({}, () => {});
 
-		expect((docker.modem as { sshOptions?: object }).sshOptions).toMatchObject({
-			keepaliveInterval: KEEPALIVE_INTERVAL_MS,
-			keepaliveCountMax: KEEPALIVE_TICKS_UNTIL_LOSS - 1,
-		});
+		expect(connect).toHaveBeenCalledWith(
+			expect.objectContaining({
+				keepaliveInterval: KEEPALIVE_INTERVAL_MS,
+				keepaliveCountMax: KEEPALIVE_TICKS_UNTIL_LOSS - 1,
+			}),
+		);
+		connect.mockRestore();
 	});
 });

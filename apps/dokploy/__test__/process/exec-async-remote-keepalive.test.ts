@@ -93,7 +93,13 @@ describe("remote exec over SSH", () => {
 
 	it("enables SSH keepalive for the remote Docker API", async () => {
 		const remoteDocker = await getRemoteDocker("server-1");
+		const { agent } = remoteDocker.modem as unknown as {
+			agent: { createConnection: (options: object, cb: () => void) => void };
+		};
+		agent.createConnection({}, () => {});
 
-		expect((remoteDocker.modem as any).sshOptions).toMatchObject(sshKeepalive);
+		await vi.waitFor(() =>
+			expect(clients[0]?.connectConfig).toMatchObject(sshKeepalive),
+		);
 	});
 });
