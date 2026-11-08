@@ -74,6 +74,10 @@ ARG DOKPLOY_FORK_VERSION=off_v0.29.8/Fork_local
 ENV NODE_ENV=production
 ENV DOKPLOY_OFFICIAL_VERSION=$DOKPLOY_OFFICIAL_VERSION
 ENV DOKPLOY_FORK_VERSION=$DOKPLOY_FORK_VERSION
+# Node sizes the young generation from the host's RAM: on a 4 GB server it
+# grows to ~60 MB under load, while the panel's short-lived request garbage
+# fits in far less. A service-level NODE_OPTIONS replaces this value.
+ENV NODE_OPTIONS=--max-semi-space-size=16
 
 # Recommends would add systemd, dbus and X11 libraries; the packages the panel
 # calls are listed instead: openssh-client for git over SSH and ssh-keyscan,
@@ -83,7 +87,7 @@ RUN apt-get update \
     && git lfs install \
     && rm -rf /var/lib/apt/lists/*
 
-# The panel runs on Bun, with Node kept for going back. npm, npx and node-gyp only serve the build
+# The panel runs on node and bun. npm, npx and node-gyp only serve the build
 # stages, and npm ships its own copies of packages with open advisories.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/node-gyp \
     /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/node-gyp
@@ -148,15 +152,7 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=5 \
   CMD curl -fs http://localhost:3000/api/trpc/settings.health || exit 1
 
-# tini reaps HEALTHCHECK child processes that the server (as PID 1) leaves defunct.
+# tini reaps HEALTHCHECK child processes that Node (as PID 1) leaves defunct.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# The server runs on Bun: on the same panel it answered API calls 7-24% and
-# pages 14-19% faster than on Node, started in 2.8 s instead of 6.2 s and
-# peaked at about half the memory under load, while holding 50-70 MB more at
-# rest. --smol runs Bun's GC more often, a few percent faster and lighter
-# there. Bun reads /app/.env by itself, as dotenv did for Node. Node stays in
-# the image: a service command of
-#   sh -c "node -r dotenv/config dist/migration.mjs && exec node -r dotenv/config dist/server.mjs"
-# runs the same build on Node.
-  CMD ["sh", "-c", "bun dist/wait-for-postgres.mjs && bun dist/migration.mjs && exec bun --smol dist/server.mjs"]
+  CMD ["sh", "-c", "bun run wait-for-postgres && exec bun run start"]
