@@ -1,8 +1,9 @@
 import type { AddressInfo } from "node:net";
-import { Server, utils } from "ssh2";
+import { Server } from "ssh2";
+import { generateSshTestKey } from "../../helpers/ssh-test-key";
 
-export const clientKey = utils.generateKeyPairSync("ed25519").private;
-const hostKey = utils.generateKeyPairSync("ed25519").private;
+export const clientKey = generateSshTestKey();
+const hostKey = generateSshTestKey();
 
 // A real ssh2 server whose shell echoes what it gets. `live` is the number of
 // client connections it still holds, which is what a leak keeps above zero.
