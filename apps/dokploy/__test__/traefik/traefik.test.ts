@@ -114,6 +114,7 @@ const baseApp: ApplicationNested = {
 	isStaticSpa: null,
 	redirects: [],
 	refreshToken: "",
+	webhookSecret: null,
 	registry: null,
 	registryId: null,
 	replicas: 1,

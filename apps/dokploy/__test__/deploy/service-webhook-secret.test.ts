@@ -313,11 +313,11 @@ describe.each(targets)(
 			);
 			const raw = bitbucketCloud("main");
 			const ok = createResponse();
-			await target.handler(streamRequest(raw, formats[0].headers(raw)), ok);
+			await target.handler(streamRequest(raw, formats[0]!.headers(raw)), ok);
 			expect(ok.status).not.toHaveBeenCalledWith(401);
 			const bad = createResponse();
 			await target.handler(
-				streamRequest(raw, formats[0].headers(raw, "nope")),
+				streamRequest(raw, formats[0]!.headers(raw, "nope")),
 				bad,
 			);
 			expect(bad.status).toHaveBeenCalledWith(401);
