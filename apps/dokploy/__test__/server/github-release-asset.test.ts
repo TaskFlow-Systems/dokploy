@@ -21,6 +21,7 @@ let dir = "";
 let webStatus = 200;
 let recordedDigest: string | undefined = digest;
 let assetAccept: string | undefined;
+let apiFailuresLeft = 0;
 
 beforeAll(async () => {
 	server = http.createServer((req, res) => {
@@ -32,6 +33,11 @@ beforeAll(async () => {
 			return;
 		}
 		if (url === "/api/repos/owner/tool/releases/tags/v1") {
+			if (apiFailuresLeft > 0) {
+				apiFailuresLeft -= 1;
+				res.writeHead(503).end("Service Unavailable");
+				return;
+			}
 			res.writeHead(200, { "content-type": "application/json" }).end(
 				JSON.stringify({
 					assets: [
@@ -63,7 +69,7 @@ afterAll(async () => {
 	await rm(dir, { recursive: true, force: true });
 });
 
-const run = async (name: string) => {
+const run = async (name: string, rounds = 1) => {
 	const out = path.join(dir, name);
 	try {
 		const { stderr } = await promisify(execFile)(
@@ -74,7 +80,8 @@ const run = async (name: string) => {
 					...process.env,
 					GITHUB_RELEASE_WEB: `${base}/web`,
 					GITHUB_RELEASE_API: `${base}/api`,
-					GITHUB_RELEASE_RETRIES: "0",
+					GITHUB_RELEASE_ROUNDS: String(rounds),
+					GITHUB_RELEASE_PAUSE: "0",
 					GITHUB_TOKEN: "",
 				},
 			},
@@ -104,6 +111,25 @@ describe("github-release-asset.sh", () => {
 		expect(result.body).toEqual(asset);
 		expect(assetAccept).toBe("application/octet-stream");
 		expect(result.stderr).toContain("trying the GitHub API");
+	});
+
+	it("goes round again when the API fails as well", async () => {
+		webStatus = 504;
+		recordedDigest = digest;
+		apiFailuresLeft = 1;
+		const result = await run("tool.tar.gz", 2);
+		expect(result.ok).toBe(true);
+		expect(result.body).toEqual(asset);
+		expect(result.stderr).toContain("round 1 of 2");
+	});
+
+	it("gives up after the last round", async () => {
+		webStatus = 504;
+		apiFailuresLeft = 5;
+		const result = await run("tool.tar.gz", 2);
+		apiFailuresLeft = 0;
+		expect(result.ok).toBe(false);
+		expect(result.stderr).toContain("in 2 rounds");
 	});
 
 	it("refuses a file from the API that does not match its digest", async () => {
