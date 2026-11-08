@@ -319,6 +319,34 @@ export const createCommand = (compose: ComposeNested, projectPath?: string) => {
 	return "";
 };
 
+export const getStackStartCommand = async (rawCompose: ComposeNested) => {
+	const compose = await withResolvedVaultRefs(rawCompose);
+	const { COMPOSE_PATH } = paths(!!compose.serverId);
+	const projectPath = join(COMPOSE_PATH, compose.appName, "code");
+	const path = normalizeRelativeFilePath(
+		compose.sourceType === "raw" ? "docker-compose.yml" : compose.composePath,
+	);
+	const quotedAppName = quoteShellArgument(compose.appName);
+	const deployCommand = quoteShellArgs([
+		"docker",
+		"stack",
+		"deploy",
+		"-c",
+		path,
+		compose.appName,
+		"--prune",
+		"--with-registry-auth",
+	]);
+
+	return `
+set -e
+cd ${quoteShellArgument(projectPath)}
+${compose.isolatedDeployment ? `docker network inspect ${quotedAppName} >/dev/null 2>&1 || docker network create --driver overlay --attachable ${quotedAppName}` : ""}
+env -i PATH="$PATH" HOME="$HOME" ${getExportEnvCommand(compose)} ${deployCommand}
+${compose.isolatedDeployment ? `docker network connect ${quotedAppName} $(docker ps --filter "name=dokploy-traefik" -q) >/dev/null 2>&1 || true` : ""}
+`;
+};
+
 export const getCreateEnvFileCommand = (compose: ComposeNested) => {
 	const { COMPOSE_PATH } = paths(!!compose.serverId);
 	const { env, composePath, appName } = compose;
