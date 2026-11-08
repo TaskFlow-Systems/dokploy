@@ -133,6 +133,54 @@ export const clearDnsLookupCache = () => {
 	cache.clear();
 };
 
+// Bun's resolver answers ENOTFOUND for "the name exists, but has no record of
+// this type" where Node answers ENODATA, so ENOTFOUND on the address lookups
+// alone cannot tell NXDOMAIN from a name with no address. A name that answers
+// any of these other queries exists.
+const EXISTENCE_PROBES: ((name: string) => Promise<unknown>)[] = [
+	(name: string) => dnsPromises.resolveTxt(name),
+	(name: string) => dnsPromises.resolveMx(name),
+	(name: string) => dnsPromises.resolveNs(name),
+	(name: string) => dnsPromises.resolveSoa(name),
+	(name: string) => dnsPromises.resolveCname(name),
+	(name: string) => dnsPromises.resolveCaa(name),
+];
+
+const nameExists = async (name: string) => {
+	const probes = await Promise.all(
+		EXISTENCE_PROBES.map(async (probe) => {
+			try {
+				await withTimeout(
+					probe(name) as Promise<string[]>,
+					DNS_LOOKUP_TIMEOUT_MS,
+				);
+				return true;
+			} catch (error) {
+				return errorCode(error) === "ENODATA";
+			}
+		}),
+	);
+	return probes.some(Boolean);
+};
+
+const asNoData = (lookup: DnsLookup): DnsLookup =>
+	!lookup.ok && lookup.code === "ENOTFOUND"
+		? { ok: false, code: "ENODATA" }
+		: lookup;
+
+const resolveRecords = async (domain: string): Promise<DnsRecords> => {
+	const [a, aaaa] = await Promise.all([
+		lookupFamily((name) => dnsPromises.resolve4(name), domain),
+		lookupFamily((name) => dnsPromises.resolve6(name), domain),
+	]);
+	const absent = (lookup: DnsLookup) =>
+		!lookup.ok && lookup.code === "ENOTFOUND";
+	if ((absent(a) || absent(aaaa)) && (await nameExists(domain))) {
+		return { a: asNoData(a), aaaa: asNoData(aaaa) };
+	}
+	return { a, aaaa };
+};
+
 // Failed lookups are cached too, so a slow resolver is not asked again on every
 // page load for ten minutes.
 export const resolveDomainRecords = (domain: string): Promise<DnsRecords> => {
@@ -146,10 +194,7 @@ export const resolveDomainRecords = (domain: string): Promise<DnsRecords> => {
 			cache.delete(name);
 		}
 	}
-	const records = Promise.all([
-		lookupFamily((name) => dnsPromises.resolve4(name), domain),
-		lookupFamily((name) => dnsPromises.resolve6(name), domain),
-	]).then(([a, aaaa]) => ({ a, aaaa }));
+	const records = resolveRecords(domain);
 	cache.set(domain, { expiresAt: now + DNS_CACHE_TTL_MS, records });
 	return records;
 };
