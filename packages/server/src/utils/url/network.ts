@@ -1,6 +1,6 @@
 import { lookup as lookupHost } from "node:dns/promises";
 import { isIP } from "node:net";
-import { Agent } from "undici";
+import { Agent, fetch as undiciFetch } from "@dokploy/server/utils/undici";
 
 export type HostAddress = {
 	address: string;
@@ -169,10 +169,6 @@ export const assertCloudHostResolvesPublic = async (
 	};
 };
 
-type FetchInitWithDispatcher = RequestInit & {
-	dispatcher?: Agent;
-};
-
 type PublicEgressFetchOptions = {
 	allowPrivateNetwork?: boolean;
 	fieldName?: string;
@@ -187,7 +183,7 @@ const createPinnedPublicHostDispatcher = (resolvedHost: ResolvedPublicHost) => {
 
 	return new Agent({
 		connect: {
-			lookup(hostname, _options, callback) {
+			lookup(hostname, options, callback) {
 				const normalizedLookupHostname = normalizeHostname(String(hostname));
 				if (normalizedLookupHostname !== resolvedHost.hostname) {
 					callback(
@@ -212,7 +208,14 @@ const createPinnedPublicHostDispatcher = (resolvedHost: ResolvedPublicHost) => {
 					return;
 				}
 
-				callback(null, address.address, address.family === 6 ? 6 : 4);
+				const family = address.family === 6 ? 6 : 4;
+				// Node asks for every address (`all`) when it connects with
+				// autoSelectFamily, and then reads an array.
+				if ((options as { all?: boolean }).all) {
+					callback(null, [{ address: address.address, family }]);
+					return;
+				}
+				callback(null, address.address, family);
 			},
 		},
 	});
@@ -261,14 +264,30 @@ export const fetchWithPublicEgress = async (
 	const dispatcher = createPinnedPublicHostDispatcher(resolvedHost);
 
 	try {
-		const response = await fetch(input, {
+		// Node's and Bun's own fetch reject or ignore an Agent from the undici
+		// package, so the pinned request goes through its fetch, which in turn
+		// takes no Request of the runtime's fetch: its parts go as options.
+		const fromRequest =
+			input instanceof Request
+				? {
+						method: input.method,
+						headers: Array.from(input.headers),
+						body:
+							input.method === "GET" || input.method === "HEAD"
+								? undefined
+								: await input.arrayBuffer(),
+						redirect: input.redirect,
+					}
+				: {};
+		const response = await undiciFetch(url, {
+			...fromRequest,
 			...init,
 			dispatcher,
-		} as FetchInitWithDispatcher);
+		} as Parameters<typeof undiciFetch>[1]);
 		const body = await response.arrayBuffer();
 
 		return new Response(body.byteLength === 0 ? null : body, {
-			headers: response.headers,
+			headers: Array.from(response.headers),
 			status: response.status,
 			statusText: response.statusText,
 		});

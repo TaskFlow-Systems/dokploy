@@ -4,6 +4,13 @@ import {
 } from "@dokploy/server/templates/github";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Pinned requests go through the undici package's fetch.
+const undiciFetch = vi.hoisted(() => vi.fn());
+vi.mock("@dokploy/server/utils/undici", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/utils/undici")>()),
+	fetch: undiciFetch,
+}));
+
 const metadata = [
 	{
 		id: "postgres",
@@ -68,6 +75,7 @@ describe("template GitHub base URL boundary", () => {
 			return new Response(JSON.stringify(metadata), { status: 200 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		await expect(fetchTemplatesList(baseUrl)).rejects.toThrow(
 			/template base URL/i,
@@ -81,6 +89,7 @@ describe("template GitHub base URL boundary", () => {
 			return new Response(JSON.stringify(metadata), { status: 200 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		await expect(
 			fetchTemplatesList("https://templates.example.com/", {
@@ -89,7 +98,7 @@ describe("template GitHub base URL boundary", () => {
 		).resolves.toEqual(metadata);
 
 		expect(fetchMock).toHaveBeenCalledWith(
-			"https://templates.example.com/meta.json",
+			new URL("https://templates.example.com/meta.json"),
 			expect.objectContaining({
 				redirect: "error",
 				signal: expect.any(AbortSignal),
@@ -102,6 +111,7 @@ describe("template GitHub base URL boundary", () => {
 			return new Response(JSON.stringify(metadata), { status: 200 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		await expect(
 			fetchTemplatesList("https://templates.example.com/", {
@@ -117,6 +127,7 @@ describe("template GitHub base URL boundary", () => {
 			return new Response(templateToml, { status: 200 });
 		});
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		await expect(
 			fetchTemplateFiles("postgres", "https://127.0.0.1"),
@@ -135,6 +146,7 @@ describe("template GitHub base URL boundary", () => {
 				}),
 			);
 		vi.stubGlobal("fetch", fetchMock);
+		undiciFetch.mockImplementation(fetchMock);
 
 		await expect(
 			fetchTemplateFiles("postgres", "https://templates.example.com/", {
@@ -146,7 +158,9 @@ describe("template GitHub base URL boundary", () => {
 
 		expect(fetchMock).toHaveBeenNthCalledWith(
 			1,
-			"https://templates.example.com/blueprints/postgres/template.toml",
+			new URL(
+				"https://templates.example.com/blueprints/postgres/template.toml",
+			),
 			expect.objectContaining({
 				redirect: "error",
 				signal: expect.any(AbortSignal),
@@ -154,7 +168,9 @@ describe("template GitHub base URL boundary", () => {
 		);
 		expect(fetchMock).toHaveBeenNthCalledWith(
 			2,
-			"https://templates.example.com/blueprints/postgres/docker-compose.yml",
+			new URL(
+				"https://templates.example.com/blueprints/postgres/docker-compose.yml",
+			),
 			expect.objectContaining({
 				redirect: "error",
 				signal: expect.any(AbortSignal),

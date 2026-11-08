@@ -12,9 +12,9 @@ import type {
 	teams,
 	telegram,
 } from "@dokploy/server/db/schema";
+import { Agent, fetch as undiciFetch } from "@dokploy/server/utils/undici";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
-import { Agent } from "undici";
 import { fetchWithPublicEgress } from "../url/network";
 import {
 	assertNotificationBaseUrlAllowed,
@@ -167,8 +167,6 @@ const TELEGRAM_CONNECT_ERROR_CODES = new Set([
 ]);
 const TELEGRAM_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 
-type FetchInitWithDispatcher = RequestInit & { dispatcher?: Agent };
-
 const connectErrorCode = (error: unknown) => {
 	const cause = (error as { cause?: { code?: unknown } })?.cause;
 	const code = typeof cause?.code === "string" ? cause.code : undefined;
@@ -215,12 +213,12 @@ export const sendTelegramNotification = async (
 		for (let attempt = 1; attempt <= TELEGRAM_SEND_ATTEMPTS; attempt++) {
 			let waitMs = TELEGRAM_RETRY_DELAYS_MS[attempt - 1] ?? 0;
 			try {
-				const response = await fetch(url, {
+				const response = await undiciFetch(url, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body,
 					dispatcher,
-				} as FetchInitWithDispatcher);
+				});
 				if (response.ok) {
 					return;
 				}
