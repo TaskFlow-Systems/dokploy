@@ -241,6 +241,7 @@ describe("database change-password command boundary", () => {
 		const databaseUser = "dokploy_user";
 		mocks.findPostgresById.mockResolvedValue({
 			appName: "postgres-app",
+			databaseName: "dokploy_db",
 			databaseUser,
 			serverId: "server-1",
 		});
@@ -255,7 +256,9 @@ describe("database change-password command boundary", () => {
 		const command = mocks.execAsyncRemote.mock.calls[0]?.[1] as string;
 		const postgresSql =
 			"ALTER USER \"dokploy_user\" WITH PASSWORD 'safePassword123';";
-		expect(command).toContain(`psql -U ${quoteShellArg(databaseUser)} -c`);
+		expect(command).toContain(
+			`psql -U ${quoteShellArg(databaseUser)} -d ${quoteShellArg("dokploy_db")} -c`,
+		);
 		expect(command).toContain(quoteShellArg(postgresSql));
 		expect(command).not.toContain(`psql -U ${databaseUser}`);
 		expect(command).not.toContain(`ALTER USER \\"${databaseUser}\\"`);

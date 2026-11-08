@@ -75,6 +75,7 @@ import { parse } from "toml";
 import { stringify } from "yaml";
 import { z } from "zod";
 import { slugify } from "@/lib/slug";
+import { assertBrowserSession } from "@/server/api/utils/api-key-session";
 import {
 	apiCreateCompose,
 	apiDeleteCompose,
@@ -883,6 +884,23 @@ export const composeRouter = createTRPCRouter({
 			);
 			return `docker ${command}`;
 		}),
+	revealWebhookToken: protectedProcedure
+		.input(apiFindCompose)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			await checkServicePermissionAndAccess(ctx, input.composeId, {
+				deployment: ["create"],
+			});
+			const compose = await findComposeById(input.composeId);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "compose",
+				resourceId: compose.composeId,
+				resourceName: `${compose.appName} (webhook token)`,
+			});
+			return { refreshToken: compose.refreshToken };
+		}),
+
 	refreshToken: protectedProcedure
 		.input(apiFindCompose)
 		.mutation(async ({ input, ctx }) => {

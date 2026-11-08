@@ -7,6 +7,7 @@ import {
 	normalizeRestoreDatabaseName,
 	normalizeRestoreServiceName,
 	quoteRestoreShellArg,
+	wrapBashPipefail,
 } from "./safe-input";
 
 const getDockerExecShellCommand = (command: string) => {
@@ -181,5 +182,5 @@ export const getRestoreCommand = ({
 		cmd += ` && ${getMongoSpecificCommand(rcloneCommand, restoreCommand, backupFile || "")}`;
 	}
 
-	return cmd;
+	return wrapBashPipefail(cmd);
 };

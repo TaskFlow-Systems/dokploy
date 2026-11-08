@@ -106,39 +106,68 @@ describe("Dockerfile", () => {
 	});
 });
 
-describe("CI workflow", () => {
-	const ci = read(".github/workflows/pull-request.yml");
+// The daily pins update pushes with the workflow token, which may not change
+// files under .github/workflows, so workflows read each version from a file
+// the update rewrites.
+describe("workflows hold no pinned version", () => {
+	const workflows = [
+		"pull-request.yml",
+		"dependency-audit.yml",
+		"deps-auto-update.yml",
+		"sync-openapi-docs.yml",
+		"dokploy.yml",
+		"image-audit.yml",
+	].map((file) => [file, read(`.github/workflows/${file}`)] as const);
 
-	it("pins Nixpacks", () => {
-		expect(pinIn(ci, /export NIXPACKS_VERSION=(\S+)/)).toBe(
-			PINNED_VERSIONS.nixpacks,
-		);
+	it.each(workflows)("%s sets up Bun and Node from files", (_, text) => {
+		expect(text).not.toMatch(/bun-version:/);
+		expect(text).not.toMatch(/node-version:/);
+		for (const match of text.matchAll(/oven-sh\/setup-bun@\S+\n\s+with:\n\s+(\S+)/g)) {
+			expect(match[1]).toBe("bun-version-file:");
+		}
 	});
-	it("pins Railpack", () => {
-		expect(pinIn(ci, /export RAILPACK_VERSION=(\S+)/)).toBe(
-			PINNED_VERSIONS.railpack,
-		);
+
+	it.each(workflows)("%s names no pinned version", (_, text) => {
+		for (const version of Object.values(PINNED_VERSIONS)) {
+			expect(text).not.toMatch(
+				new RegExp(`[:=v]${version.replaceAll(".", "\\.")}(?![\\w.])`),
+			);
+		}
 	});
-	it("places the same mise for Railpack as the Dockerfile", () => {
-		expect(pinIn(ci, /export MISE_VERSION=(\S+)/)).toBe(
-			pinIn(read("Dockerfile"), /ARG MISE_VERSION=(\S+)/),
-		);
+
+	it("pull-request.yml installs the Dockerfile's Nixpacks, Railpack and mise", () => {
+		const ci = read(".github/workflows/pull-request.yml");
+		for (const name of ["NIXPACKS", "RAILPACK", "MISE"]) {
+			expect(ci).toContain(
+				`${name}_VERSION="$(sed -n "s/^ARG ${name}_VERSION=//p" Dockerfile)"`,
+			);
+		}
 	});
 });
 
-describe("image audit workflow", () => {
-	const audit = read(".github/workflows/image-audit.yml");
-
-	it("scans the pinned Traefik", () => {
-		expect(pinIn(audit, /image: traefik:v(\S+)/)).toBe(PINNED_VERSIONS.traefik);
+describe("version files", () => {
+	it("Bun in packageManager matches the Dockerfiles", () => {
+		const bun = pinIn(read("Dockerfile"), /bun-v([\d.]+)/);
+		for (const file of [
+			"package.json",
+			"apps/api/package.json",
+			"apps/dokploy/package.json",
+			"apps/schedules/package.json",
+			"packages/server/package.json",
+		]) {
+			expect(JSON.parse(read(file)).packageManager).toBe(`bun@${bun}`);
+		}
+		for (const file of [
+			"Dockerfile.cloud",
+			"Dockerfile.schedule",
+			"Dockerfile.server",
+			".devcontainer/Dockerfile",
+		]) {
+			expect(pinIn(read(file), /bun-v([\d.]+)/)).toBe(bun);
+		}
 	});
-	it("scans the pinned Postgres", () => {
-		expect(pinIn(audit, /image: postgres:(\S+)/)).toBe(
-			PINNED_VERSIONS.postgres,
-		);
-	});
-	it("scans the pinned Redis", () => {
-		expect(pinIn(audit, /image: redis:(\S+)/)).toBe(PINNED_VERSIONS.redis);
+	it(".nvmrc holds the pinned Node", () => {
+		expect(read(".nvmrc").trim()).toBe(PINNED_VERSIONS.node);
 	});
 });
 
@@ -166,7 +195,7 @@ describe("panel Traefik default", () => {
 	});
 });
 
-describe("Node.js image and CI version", () => {
+describe("Node.js image", () => {
 	const dockerfiles = [
 		"Dockerfile",
 		"Dockerfile.cloud",
@@ -186,17 +215,8 @@ describe("Node.js image and CI version", () => {
 		expect(new Set(digests).size).toBe(1);
 	});
 
-	it.each([
-		".github/workflows/dokploy.yml",
-		".github/workflows/pull-request.yml",
-		".github/workflows/sync-openapi-docs.yml",
-	])("%s runs on the pinned Node version", (file) => {
-		const versions = [...read(file).matchAll(/node-version: (\S+)/g)].map(
-			(match) => match[1],
-		);
-		expect(versions.length).toBeGreaterThan(0);
-		expect(versions.every((version) => version === PINNED_VERSIONS.node)).toBe(
-			true,
-		);
+	it("dev container builds on the same image", () => {
+		const image = read("Dockerfile").match(nodeImage)?.slice(1, 3).join("-trixie-slim@");
+		expect(read(".devcontainer/Dockerfile")).toContain(`FROM node:${image}`);
 	});
 });

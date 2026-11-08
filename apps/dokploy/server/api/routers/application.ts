@@ -63,6 +63,7 @@ import {
 	protectedProcedure,
 	withPermission,
 } from "@/server/api/trpc";
+import { assertBrowserSession } from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
 import { assertDeploySourceCredentialAccess } from "@/server/api/utils/deploy-source-access";
 import { assertContainerMetricsServiceAccess } from "@/server/api/utils/monitoring-access";
@@ -1126,6 +1127,23 @@ export const applicationRouter = createTRPCRouter({
 			});
 			return true;
 		}),
+	revealWebhookToken: protectedProcedure
+		.input(apiFindOneApplication)
+		.mutation(async ({ input, ctx }) => {
+			assertBrowserSession(ctx);
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				deployment: ["create"],
+			});
+			const application = await findApplicationById(input.applicationId);
+			await audit(ctx, {
+				action: "reveal",
+				resourceType: "application",
+				resourceId: application.applicationId,
+				resourceName: `${application.appName} (webhook token)`,
+			});
+			return { refreshToken: application.refreshToken };
+		}),
+
 	refreshToken: protectedProcedure
 		.input(apiFindOneApplication)
 		.mutation(async ({ input, ctx }) => {

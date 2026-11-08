@@ -94,6 +94,7 @@ jobs:
             fi
             echo "EOF"
             echo "cache=${IMAGE}:buildcache"
+            echo "debian-day=$(date -u +%F)"
             echo "official-version=${OFFICIAL_VERSION}"
             echo "fork-version=${FORK_VERSION}"
           } >> "$GITHUB_OUTPUT"
@@ -132,3 +133,4 @@ jobs:
           build-args: |
             DOKPLOY_OFFICIAL_VERSION=${{ steps.tags.outputs.official-version }}
             DOKPLOY_FORK_VERSION=${{ steps.tags.outputs.fork-version }}
+            DEBIAN_UPDATES_DAY=${{ steps.tags.outputs.debian-day }}

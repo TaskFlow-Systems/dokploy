@@ -21,15 +21,20 @@ const assertSafeDatabaseIdentifier = (value: string) => {
 };
 
 export const buildPostgresPasswordChangeCommand = ({
+	databaseName,
 	databaseUser,
 	password,
 }: {
+	databaseName: string;
 	databaseUser: string;
 	password: string;
 }) => {
 	const safeDatabaseUser = assertSafeDatabaseIdentifier(databaseUser);
+	const safeDatabaseName = assertSafeDatabaseIdentifier(databaseName);
 	const sql = `ALTER USER ${quotePostgresIdentifier(safeDatabaseUser)} WITH PASSWORD ${quoteSqlLiteral(password)};`;
-	return `docker exec "$CONTAINER_ID" psql -U ${quoteShellArg(safeDatabaseUser)} -c ${quoteShellArg(sql)}`;
+	// psql connects to a database named like the user when `-d` is missing, and
+	// that one does not exist when the user is not called like the database.
+	return `docker exec "$CONTAINER_ID" psql -U ${quoteShellArg(safeDatabaseUser)} -d ${quoteShellArg(safeDatabaseName)} -c ${quoteShellArg(sql)}`;
 };
 
 export const buildMysqlPasswordChangeCommand = ({
