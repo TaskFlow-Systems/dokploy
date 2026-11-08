@@ -80,7 +80,12 @@ const getOrganizationId = (
 export const scheduleVolumeBackup = async (volumeBackupId: string) => {
 	const volumeBackup = await findVolumeBackupById(volumeBackupId);
 	scheduleJob(volumeBackupId, volumeBackup.cronExpression, async () => {
-		await runVolumeBackup(volumeBackupId);
+		try {
+			await runVolumeBackup(volumeBackupId);
+		} catch {
+			// runVolumeBackup has already marked the deployment and sent the
+			// notification; nobody awaits a scheduled run.
+		}
 	});
 };
 
@@ -188,10 +193,14 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 		);
 		// delete all the .tar files
 		const command = `rm -rf ${volumeBackupPath}/*.tar`;
-		if (serverId) {
-			await execAsyncRemote(serverId, command);
-		} else {
-			await execAsync(command);
+		try {
+			if (serverId) {
+				await execAsyncRemote(serverId, command);
+			} else {
+				await execAsync(command);
+			}
+		} catch (cleanupError) {
+			console.error("Failed to remove the partial volume backup", cleanupError);
 		}
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 
@@ -217,5 +226,9 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 				notificationError,
 			);
 		}
+
+		// The deployment and the notification carry the failure; the caller
+		// (a manual run) still has to learn about it.
+		throw error;
 	}
 };
