@@ -488,7 +488,19 @@ export const serverRouter = createTRPCRouter({
 				return observable<string>((emit) => {
 					serverSetup(input.serverId, (log) => {
 						emit.next(log);
-					});
+					})
+						.then(() => {
+							emit.complete();
+						})
+						.catch((error) => {
+							emit.error(
+								new TRPCError({
+									code: "INTERNAL_SERVER_ERROR",
+									message:
+										error instanceof Error ? error.message : String(error),
+								}),
+							);
+						});
 				});
 			} catch (error) {
 				throw error;
