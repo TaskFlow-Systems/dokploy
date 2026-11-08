@@ -21,6 +21,7 @@ export const createGitea = async (
 	userId: string,
 ) => {
 	return await db.transaction(async (tx) => {
+		const { webhookSecret, ...giteaInput } = input;
 		const newGitProvider = await tx
 			.insert(gitProvider)
 			.values({
@@ -42,8 +43,9 @@ export const createGitea = async (
 		const giteaProvider = await tx
 			.insert(gitea)
 			.values({
-				...input,
+				...giteaInput,
 				gitProviderId: newGitProvider?.gitProviderId,
+				webhookSecret: secretUpdateValue(webhookSecret),
 			})
 			.returning()
 			.then((response: (typeof gitea.$inferSelect)[]) => response[0]);
@@ -152,8 +154,9 @@ const bindStoredGiteaSecrets = async (
 
 export const updateGitea = async (giteaId: string, input: Partial<Gitea>) => {
 	try {
-		const { clientSecret, ...giteaInput } = input;
+		const { clientSecret, webhookSecret, ...giteaInput } = input;
 		const nextClientSecret = secretUpdateValue(clientSecret);
+		const nextWebhookSecret = secretUpdateValue(webhookSecret);
 		const tokenReset = await bindStoredGiteaSecrets(giteaId, input);
 		const updateResult = await db
 			.update(gitea)
@@ -162,6 +165,9 @@ export const updateGitea = async (giteaId: string, input: Partial<Gitea>) => {
 				...tokenReset,
 				...(nextClientSecret !== undefined && {
 					clientSecret: nextClientSecret,
+				}),
+				...(nextWebhookSecret !== undefined && {
+					webhookSecret: nextWebhookSecret,
 				}),
 			})
 			.where(eq(gitea.giteaId, giteaId))

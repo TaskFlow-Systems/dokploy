@@ -15,6 +15,7 @@ export const gitea = pgTable("gitea", {
 	redirectUri: text("redirect_uri"),
 	clientId: text("client_id"),
 	clientSecret: text("client_secret"),
+	webhookSecret: text("webhook_secret"),
 	organizationName: text("organization_name"),
 	gitProviderId: text("gitProviderId")
 		.notNull()
@@ -38,6 +39,7 @@ const createSchema = createInsertSchema(gitea);
 export const apiCreateGitea = createSchema.extend({
 	clientId: z.string().optional(),
 	clientSecret: z.string().optional(),
+	webhookSecret: z.string().optional(),
 	gitProviderId: z.string().optional(),
 	redirectUri: z.string().optional(),
 	name: z.string().min(1),
@@ -75,6 +77,7 @@ export const apiFindGiteaBranches = z.object({
 export const apiUpdateGitea = createSchema.extend({
 	clientId: z.string().optional(),
 	clientSecret: z.string().optional(),
+	webhookSecret: z.string().optional(),
 	redirectUri: z.string().optional(),
 	name: z.string().min(1),
 	giteaId: z.string().min(1),

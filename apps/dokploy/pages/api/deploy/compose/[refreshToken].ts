@@ -7,21 +7,21 @@ import type { DeploymentJob } from "@/server/queues/queue-types";
 import { myQueue } from "@/server/queues/queueSetup";
 import { deploy } from "@/server/utils/deploy";
 import {
+	branchNotMatchMessage,
 	extractBranchName,
 	extractCommitMessage,
 	extractCommittedPaths,
 	extractHash,
 	getProviderByHeader,
 	logWebhookError,
+	readDeployWebhookBody,
 	rejectNonPostDeployWebhook,
 	rejectUnauthenticatedProviderDeployWebhook,
 } from "../[refreshToken]";
 
 export const config = {
 	api: {
-		bodyParser: {
-			sizeLimit: "25mb",
-		},
+		bodyParser: false,
 	},
 };
 
@@ -32,6 +32,9 @@ export default async function handler(
 	const { refreshToken } = req.query;
 	try {
 		if (rejectNonPostDeployWebhook(req, res)) {
+			return;
+		}
+		if (await readDeployWebhookBody(req, res)) {
 			return;
 		}
 
@@ -99,7 +102,7 @@ export default async function handler(
 			}
 
 			if (!branchName || branchName !== composeResult.branch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 		} else if (sourceType === "gitlab") {
@@ -120,13 +123,13 @@ export default async function handler(
 				return;
 			}
 			if (!branchName || branchName !== composeResult.gitlabBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 		} else if (sourceType === "bitbucket") {
 			const branchName = extractBranchName(req.headers, req.body);
 			if (!branchName || branchName !== composeResult.bitbucketBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 
@@ -149,7 +152,7 @@ export default async function handler(
 		} else if (sourceType === "git") {
 			const branchName = extractBranchName(req.headers, req.body);
 			if (!branchName || branchName !== composeResult.customGitBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 			const provider = getProviderByHeader(req.headers);
@@ -204,7 +207,7 @@ export default async function handler(
 			}
 
 			if (!branchName || branchName !== composeResult.giteaBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 		}

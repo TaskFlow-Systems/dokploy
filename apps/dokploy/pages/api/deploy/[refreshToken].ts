@@ -1,4 +1,4 @@
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import {
 	type Bitbucket,
 	getBitbucketHeaders,
@@ -53,10 +53,82 @@ const constantTimeEquals = (actual: string | undefined, expected: string) => {
 
 type DeployWebhookProviderCredentials = {
 	github?: { githubWebhookSecret?: string | null } | null;
-	gitlab?: { secret?: string | null } | null;
+	gitlab?: { secret?: string | null; webhookSecret?: string | null } | null;
 	bitbucket?: object | null;
-	gitea?: object | null;
+	gitea?: { webhookSecret?: string | null } | null;
 };
+
+export const DEPLOY_WEBHOOK_BODY_LIMIT = 25 * 1024 * 1024;
+
+type RawBodyRequest = NextApiRequest & { rawBody?: Buffer };
+
+/**
+ * The deploy endpoints turn Next's body parser off so that a provider's
+ * signature can be checked against the bytes it signed: Gitea marshals its
+ * payload in Go, and JSON.stringify of the parsed body does not give the same
+ * text. This reads the body, keeps the bytes in `req.rawBody` and parses it as
+ * Next's parser would (JSON or form fields). It answers the request itself and
+ * returns true when the body cannot be read.
+ */
+export const readDeployWebhookBody = async (
+	req: NextApiRequest,
+	res: NextApiResponse,
+) => {
+	if (req.body !== undefined) {
+		return false;
+	}
+
+	const chunks: Buffer[] = [];
+	let size = 0;
+	try {
+		for await (const chunk of req) {
+			const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+			size += buffer.length;
+			if (size > DEPLOY_WEBHOOK_BODY_LIMIT) {
+				res.status(413).json({ message: "Request body too large" });
+				return true;
+			}
+			chunks.push(buffer);
+		}
+	} catch {
+		res.status(400).json({ message: "Invalid request body" });
+		return true;
+	}
+
+	const raw = Buffer.concat(chunks);
+	(req as RawBodyRequest).rawBody = raw;
+	const text = raw.toString("utf8");
+	const contentType = getHeaderValue(req.headers["content-type"]) ?? "";
+
+	if (/^application\/(.+\+)?json/i.test(contentType)) {
+		try {
+			req.body = text === "" ? {} : JSON.parse(text);
+		} catch {
+			res.status(400).json({ message: "Invalid JSON body" });
+			return true;
+		}
+	} else if (/^application\/x-www-form-urlencoded/i.test(contentType)) {
+		req.body = Object.fromEntries(new URLSearchParams(text));
+	} else {
+		req.body = text;
+	}
+	return false;
+};
+
+const signedBody = (req: NextApiRequest) =>
+	(req as RawBodyRequest).rawBody ?? JSON.stringify(req.body);
+
+const hmacSha256Hex = (secret: string, body: Buffer | string) =>
+	createHmac("sha256", secret).update(body).digest("hex");
+
+/**
+ * Names the missing piece when a push cannot be matched to a branch, so a
+ * request without a provider event header is not read as a wrong branch.
+ */
+export const branchNotMatchMessage = (headers: NextApiRequest["headers"]) =>
+	getProviderByHeader(headers)
+		? "Branch Not Match"
+		: "Branch Not Match: the request has no Git provider event header (X-GitHub-Event, X-Gitlab-Event, X-Gitea-Event or X-Event-Key), so the pushed branch cannot be read";
 
 export const isProviderDeployWebhookAuthenticated = async (
 	req: NextApiRequest,
@@ -75,11 +147,11 @@ export const isProviderDeployWebhookAuthenticated = async (
 		}
 
 		const webhooks = new Webhooks({ secret });
-		return webhooks.verify(JSON.stringify(req.body), signature);
+		return webhooks.verify(signedBody(req).toString(), signature);
 	}
 
 	if (provider === "gitlab") {
-		const secret = providers.gitlab?.secret;
+		const secret = providers.gitlab?.webhookSecret || providers.gitlab?.secret;
 		if (!secret) {
 			return false;
 		}
@@ -87,6 +159,19 @@ export const isProviderDeployWebhookAuthenticated = async (
 		return constantTimeEquals(
 			getHeaderValue(req.headers["x-gitlab-token"]),
 			secret,
+		);
+	}
+
+	if (provider === "gitea") {
+		const secret = providers.gitea?.webhookSecret;
+		const signature = getHeaderValue(req.headers["x-gitea-signature"]);
+		if (!secret || !signature) {
+			return false;
+		}
+
+		return constantTimeEquals(
+			signature.toLowerCase(),
+			hmacSha256Hex(secret, signedBody(req)),
 		);
 	}
 
@@ -119,9 +204,7 @@ const getPackageVersion = (headers: any, body: any) => {
 
 export const config = {
 	api: {
-		bodyParser: {
-			sizeLimit: "25mb",
-		},
+		bodyParser: false,
 	},
 };
 
@@ -132,6 +215,9 @@ export default async function handler(
 	const { refreshToken } = req.query;
 	try {
 		if (rejectNonPostDeployWebhook(req, res)) {
+			return;
+		}
+		if (await readDeployWebhookBody(req, res)) {
 			return;
 		}
 
@@ -255,14 +341,14 @@ export default async function handler(
 
 			const branchName = extractBranchName(req.headers, req.body);
 			if (!branchName || branchName !== application.branch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 		} else if (sourceType === "git") {
 			const branchName = extractBranchName(req.headers, req.body);
 
 			if (!branchName || branchName !== application.customGitBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 
@@ -324,14 +410,14 @@ export default async function handler(
 			}
 
 			if (!branchName || branchName !== application.gitlabBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 		} else if (sourceType === "bitbucket") {
 			const branchName = extractBranchName(req.headers, req.body);
 
 			if (!branchName || branchName !== application.bitbucketBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 
@@ -371,7 +457,7 @@ export default async function handler(
 			}
 
 			if (!branchName || branchName !== application.giteaBranch) {
-				res.status(301).json({ message: "Branch Not Match" });
+				res.status(301).json({ message: branchNotMatchMessage(req.headers) });
 				return;
 			}
 		}

@@ -54,6 +54,7 @@ const Schema = z.object({
 		message: "Redirect URI is required",
 	}),
 	organizationName: z.string().optional(),
+	webhookSecret: z.string().optional(),
 });
 
 type Schema = z.infer<typeof Schema>;
@@ -72,6 +73,7 @@ export const AddGiteaProvider = () => {
 		defaultValues: {
 			clientId: "",
 			clientSecret: "",
+			webhookSecret: "",
 			redirectUri: webhookUrl,
 			name: "",
 			giteaUrl: "https://gitea.com",
@@ -86,6 +88,7 @@ export const AddGiteaProvider = () => {
 		form.reset({
 			clientId: "",
 			clientSecret: "",
+			webhookSecret: "",
 			redirectUri: webhookUrl,
 			name: "",
 			giteaUrl: "https://gitea.com",
@@ -99,6 +102,7 @@ export const AddGiteaProvider = () => {
 			const result = (await mutateAsync({
 				clientId: data.clientId,
 				clientSecret: data.clientSecret,
+				webhookSecret: data.webhookSecret || undefined,
 				name: data.name,
 				redirectUri: data.redirectUri,
 				giteaUrl: data.giteaUrl,
@@ -299,6 +303,28 @@ export const AddGiteaProvider = () => {
 													{...field}
 												/>
 											</FormControl>
+											<FormMessage />
+										</FormItem>
+									)}
+								/>
+
+								<FormField
+									control={form.control}
+									name="webhookSecret"
+									render={({ field }) => (
+										<FormItem>
+											<FormLabel>Deploy Webhook Secret (Optional)</FormLabel>
+											<FormControl>
+												<Input
+													type="password"
+													placeholder="Gitea webhook secret"
+													{...field}
+												/>
+											</FormControl>
+											<FormDescription>
+												Set the same value in the Gitea webhook Secret field.
+												Without it, the panel refuses push events from Gitea.
+											</FormDescription>
 											<FormMessage />
 										</FormItem>
 									)}
