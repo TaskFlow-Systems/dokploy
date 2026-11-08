@@ -275,8 +275,16 @@ export const getMongoBackupCommand = (
 	const safeDatabase = normalizeRestoreDatabaseName(database);
 	// mongodump reads `-p -x` as a flag with no value followed by an option, and a
 	// password may start with `-`. Only the `=` form takes any value.
-	const innerCommand = `set -o pipefail; mongodump -d ${quoteRestoreShellArg(safeDatabase)} --username=${quoteRestoreShellArg(databaseUser)} --password="$DOKPLOY_DB_PASSWORD" --archive --authenticationDatabase admin --gzip`;
-	return `docker exec -e DOKPLOY_DB_PASSWORD=${quoteRestoreShellArg(databasePassword)} -i "$CONTAINER_ID" bash -c ${quoteRestoreShellArg(innerCommand)}`;
+	// `mongodump -d <name>` exits 0 and writes an empty archive for a database that
+	// does not exist, so the name is checked against the server's list first. The
+	// name travels in the environment, like the password. Images without `mongosh`
+	// (before MongoDB 5) skip the check; any other mongosh failure stops the backup.
+	const connection = `--username=${quoteRestoreShellArg(databaseUser)} --password="$DOKPLOY_DB_PASSWORD" --authenticationDatabase admin`;
+	const existsCheck = `if command -v mongosh >/dev/null 2>&1; then mongosh --quiet ${connection} --eval 'process.exit(db.getMongo().getDBNames().includes(process.env.DOKPLOY_DB_NAME) ? 0 : 3)' >/dev/null || { code=$?; if [ "$code" -eq 3 ]; then echo "Database $DOKPLOY_DB_NAME does not exist" >&2; fi; exit "$code"; }; fi`;
+	// mongodump reads `-p -x` as a flag with no value followed by an option, and a
+	// password may start with `-`. Only the `=` form takes any value.
+	const innerCommand = `set -o pipefail; ${existsCheck}; mongodump -d ${quoteRestoreShellArg(safeDatabase)} ${connection} --archive --gzip`;
+	return `docker exec -e DOKPLOY_DB_PASSWORD=${quoteRestoreShellArg(databasePassword)} -e DOKPLOY_DB_NAME=${quoteRestoreShellArg(safeDatabase)} -i "$CONTAINER_ID" bash -c ${quoteRestoreShellArg(innerCommand)}`;
 };
 
 export const getLibsqlBackupCommand = (database: string) => {
