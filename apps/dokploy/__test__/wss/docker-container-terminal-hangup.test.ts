@@ -62,6 +62,17 @@ vi.mock("node:child_process", async (importOriginal) => ({
 	execFile: mocks.execFile,
 }));
 
+// Real schedule is 0.5, 2 and 5 s; the same shape, faster.
+vi.mock("../../server/wss/hangup-scans", async (importOriginal) => {
+	const original =
+		await importOriginal<typeof import("../../server/wss/hangup-scans")>();
+	return {
+		...original,
+		runHangupScans: (scan: Parameters<typeof original.runHangupScans>[0]) =>
+			original.runHangupScans(scan, [20, 40, 60]),
+	};
+});
+
 vi.mock("node-pty", () => ({ spawn: mocks.spawn }));
 
 vi.mock("ssh2", async () => {
@@ -152,6 +163,18 @@ const deferred = <T>() => {
 		resolve = res;
 	});
 	return { promise, resolve };
+};
+
+// Closes the hangup channels (index `from` on) as the scans open them.
+const answerScans = async (connection: FakeConnection, from: number) => {
+	for (let next = from; next < from + 4; next++) {
+		await vi.waitFor(() =>
+			expect(connection.streams.length).toBeGreaterThan(next),
+		);
+		const stream = connection.streams[next] as FakeStream;
+		await vi.waitFor(() => expect(stream.resume).toHaveBeenCalled());
+		stream.emit("close", 0);
+	}
 };
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -289,8 +312,91 @@ describe("container terminal hangs up its shell when it closes", () => {
 		expect(shell.end).not.toHaveBeenCalled();
 
 		hangup.emit("close", 0);
-		expect(shell.end).toHaveBeenCalled();
+		await answerScans(connection, 1);
+		await vi.waitFor(() => expect(shell.end).toHaveBeenCalled());
 		expect(connection.end).toHaveBeenCalled();
+		expect(connection.commands).toHaveLength(5);
+	});
+
+	it("hangs up a local shell that the daemon starts after the first scan", async () => {
+		// The container: the shell appears 30 ms after the client left, i.e.
+		// after the first scan (at 0) and the second (20 ms later).
+		let shellStartsAt = Number.POSITIVE_INFINITY;
+		let shellAlive = false;
+		let hungUp = 0;
+		mocks.execFile.mockImplementation(
+			(_file: string, _args: string[], callback: () => void) => {
+				if (Date.now() >= shellStartsAt) shellAlive = true;
+				if (shellAlive) {
+					shellAlive = false;
+					hungUp++;
+				}
+				callback();
+			},
+		);
+		const ws = await openTerminal(port, "containerId=abc123def456");
+		await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+		const args = mocks.spawn.mock.calls[0]?.[1] as string[];
+
+		shellStartsAt = Date.now() + 30;
+		ws.close();
+
+		await vi.waitFor(() => expect(mocks.execFile).toHaveBeenCalledTimes(4));
+		expect(hungUp).toBe(1);
+		for (const call of mocks.execFile.mock.calls) {
+			expect(call[1]).toEqual(
+				getTerminalHangupArgs("abc123def456", "sh", markerIn(args)),
+			);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(mocks.execFile).toHaveBeenCalledTimes(4);
+	});
+
+	it("hangs up a remote shell that the daemon starts after the first scan, on one connection", async () => {
+		const ws = await openTerminal(
+			port,
+			"containerId=abc123def456&serverId=server-1&activeWay=bash",
+		);
+		await vi.waitFor(() =>
+			expect(mocks.connections[0]?.commands).toHaveLength(1),
+		);
+		const connection = mocks.connections[0] as FakeConnection;
+		const marker = markerIn((connection.commands[0] as string).split(" "));
+
+		ws.close();
+		await answerScans(connection, 1);
+
+		const expected = quoteShellArgs([
+			"docker",
+			...getTerminalHangupArgs("abc123def456", "bash", marker),
+		]);
+		expect(connection.commands.slice(1)).toEqual([
+			expected,
+			expected,
+			expected,
+			expected,
+		]);
+		await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+		expect(connection.end).toHaveBeenCalledTimes(1);
+	});
+
+	it("stops scanning and ends the connection when the SSH connection drops", async () => {
+		const ws = await openTerminal(
+			port,
+			"containerId=abc123def456&serverId=server-1&activeWay=bash",
+		);
+		await vi.waitFor(() =>
+			expect(mocks.connections[0]?.commands).toHaveLength(1),
+		);
+		const connection = mocks.connections[0] as FakeConnection;
+
+		ws.close();
+		await vi.waitFor(() => expect(connection.commands).toHaveLength(2));
+		connection.emit("close");
+
+		await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+		await new Promise((resolve) => setTimeout(resolve, 150));
+		expect(connection.commands).toHaveLength(2);
 	});
 
 	describe("closed before the shell has started", () => {
@@ -373,10 +479,9 @@ describe("container terminal hangs up its shell when it closes", () => {
 					...getTerminalHangupArgs("abc123def456", "sh", marker),
 				]),
 			);
-			const hangup = connection.streams[1] as FakeStream;
-			await vi.waitFor(() => expect(hangup.resume).toHaveBeenCalled());
-			hangup.emit("close", 0);
-			expect(connection.end).toHaveBeenCalled();
+			await answerScans(connection, 1);
+			await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+			expect(connection.commands).toHaveLength(5);
 		});
 	});
 

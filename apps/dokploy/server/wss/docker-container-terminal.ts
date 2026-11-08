@@ -10,6 +10,7 @@ import { canAccessDockerOverWss } from "./authorize";
 import { onWebSocketConnection, readUpgradePathname } from "./connection";
 import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
+import { runHangupScans } from "./hangup-scans";
 import { verifyWebSocketOrigin } from "./origin";
 import { spawnPty } from "./pty";
 import {
@@ -203,24 +204,42 @@ export const setupDockerContainerTerminalWebSocketServer = (
 									stream.end();
 									conn.end();
 								};
-								// Ending the connection first would kill the hangup with it.
-								const fallback = setTimeout(endConnection, 10_000);
-								conn.exec(
-									quoteShellArgs(["docker", ...hangupArgs]),
-									(hangupError, hangup) => {
-										if (hangupError) {
-											clearTimeout(fallback);
-											endConnection();
-											return;
+								// Ending the connection first would kill the hangup with it. The
+								// connection stays up for the repeated scans, and goes at the latest
+								// when the fallback fires.
+								const scan = () =>
+									new Promise<boolean>((resolve) => {
+										const limit = setTimeout(() => resolve(true), 10_000);
+										const settle = (usable = true) => {
+											clearTimeout(limit);
+											resolve(usable);
+										};
+										try {
+											conn.exec(
+												quoteShellArgs(["docker", ...hangupArgs]),
+												(hangupError, hangup) => {
+													if (hangupError) {
+														settle(false);
+														return;
+													}
+													hangup.on("close", () => settle());
+													hangup.resume();
+													hangup.stderr.resume();
+												},
+											);
+										} catch {
+											settle(false);
 										}
-										hangup.on("close", () => {
-											clearTimeout(fallback);
-											endConnection();
-										});
-										hangup.resume();
-										hangup.stderr.resume();
-									},
-								);
+									});
+								const scans = runHangupScans(scan);
+								const fallback = setTimeout(() => {
+									scans.cancel();
+								}, 30_000);
+								conn.once("close", scans.cancel);
+								void scans.done.then(() => {
+									clearTimeout(fallback);
+									endConnection();
+								});
 							};
 
 							// The shell is already running if the client left while it was opening.
@@ -256,6 +275,13 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					return;
 				}
 
+				const hangUpLocal = () =>
+					runHangupScans(
+						() =>
+							new Promise<void>((resolve) => {
+								execFile("docker", hangupArgs, () => resolve());
+							}),
+					);
 				const ptyProcess = await spawnPty(
 					"docker",
 					["exec", "-it", "-e", sessionMarker, "-w", "/", containerId, shell],
@@ -263,7 +289,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				);
 				if (ws.readyState !== ws.OPEN) {
 					ptyProcess.kill();
-					execFile("docker", hangupArgs, () => {});
+					hangUpLocal();
 					return;
 				}
 
@@ -276,7 +302,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				});
 				ws.on("close", () => {
 					ptyProcess.kill();
-					execFile("docker", hangupArgs, () => {});
+					hangUpLocal();
 				});
 				ws.on("message", (message) => {
 					try {
