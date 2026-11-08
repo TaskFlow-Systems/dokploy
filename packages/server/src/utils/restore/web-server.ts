@@ -9,6 +9,7 @@ import {
 	getRcloneS3Destination,
 } from "../backups/utils";
 import { execAsync } from "../process/execAsync";
+import { formatRestoreError } from "./failure";
 import { normalizeRestoreBackupFile, quoteRestoreShellArg } from "./safe-input";
 
 const WEB_SERVER_ARCHIVE_ROOT = "filesystem";
@@ -252,13 +253,7 @@ export const restoreWebServerBackup = async (
 		}
 	} catch (error) {
 		console.error(error);
-		emit(
-			`Error: ${
-				error instanceof Error
-					? error.message
-					: "Error restoring web server backup"
-			}`,
-		);
+		emit(`Error: ${formatRestoreError(error)}`);
 		throw error;
 	}
 };

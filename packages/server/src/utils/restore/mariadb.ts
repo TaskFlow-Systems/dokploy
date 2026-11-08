@@ -9,6 +9,7 @@ import {
 } from "../backups/utils";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
 import { normalizeRestoreBackupFile } from "./safe-input";
+import { formatRestoreError } from "./failure";
 import { getRestoreCommand } from "./utils";
 
 export const restoreMariadbBackup = async (
@@ -53,15 +54,7 @@ export const restoreMariadbBackup = async (
 		emit("Restore completed successfully!");
 	} catch (error) {
 		console.error(error);
-		emit(
-			`Error: ${
-				error instanceof Error
-					? error.message
-					: "Error restoring mariadb backup"
-			}`,
-		);
-		throw new Error(
-			error instanceof Error ? error.message : "Error restoring mariadb backup",
-		);
+		emit(`Error: ${formatRestoreError(error)}`);
+		throw error;
 	}
 };

@@ -10,6 +10,7 @@ import {
 	getServiceContainerCommand,
 } from "../backups/utils";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
+import { formatRestoreError } from "./failure";
 import {
 	normalizeRestoreBackupFile,
 	quoteRestoreShellArg,
@@ -94,11 +95,7 @@ rm -rf ${quotedTempDir}
 
 		emit("Restore completed successfully!");
 	} catch (error) {
-		emit(
-			`Error: ${
-				error instanceof Error ? error.message : "Error restoring libsql backup"
-			}`,
-		);
+		emit(`Error: ${formatRestoreError(error)}`);
 		throw error;
 	}
 };

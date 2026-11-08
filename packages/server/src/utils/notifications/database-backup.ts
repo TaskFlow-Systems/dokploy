@@ -8,21 +8,54 @@ import { and, eq } from "drizzle-orm";
 import {
 	escapeHtml,
 	formatTelegramErrorMessage,
-	sendCustomNotification,
-	sendDiscordNotification,
-	sendEmailNotification,
-	sendGotifyNotification,
-	sendLarkNotification,
-	sendMattermostNotification,
-	sendNtfyNotification,
-	sendPushoverNotification,
-	sendResendNotification,
-	sendSlackNotification,
-	sendTeamsNotification,
-	sendTelegramNotification,
+	sendCustomNotification as rawSendCustomNotification,
+	sendDiscordNotification as rawSendDiscordNotification,
+	sendEmailNotification as rawSendEmailNotification,
+	sendGotifyNotification as rawSendGotifyNotification,
+	sendLarkNotification as rawSendLarkNotification,
+	sendMattermostNotification as rawSendMattermostNotification,
+	sendNtfyNotification as rawSendNtfyNotification,
+	sendPushoverNotification as rawSendPushoverNotification,
+	sendResendNotification as rawSendResendNotification,
+	sendSlackNotification as rawSendSlackNotification,
+	sendTeamsNotification as rawSendTeamsNotification,
+	sendTelegramNotification as rawSendTelegramNotification,
 } from "./utils";
 
+const relabelForRestore = (text: string) =>
+	text
+		.replace(/Database Backup/g, "Database Restore")
+		.replace(/Database backup/g, "Database restore")
+		.replace(/database backup/g, "database restore");
+
+const relabelDeep = <T>(value: T): T => {
+	if (typeof value === "string") {
+		return relabelForRestore(value) as T;
+	}
+	if (Array.isArray(value)) {
+		return value.map(relabelDeep) as T;
+	}
+	if (value && typeof value === "object") {
+		return Object.fromEntries(
+			Object.entries(value).map(([key, item]) => [key, relabelDeep(item)]),
+		) as T;
+	}
+	return value;
+};
+
+// The restore failure reuses the backup messages; only the wording changes.
+// The first argument is the channel's own settings and stays as it is.
+const forOperation = <F extends (channel: never, ...rest: never[]) => unknown>(
+	fn: F,
+	operation: "backup" | "restore",
+): F =>
+	operation === "backup"
+		? fn
+		: (((channel: never, ...rest: never[]) =>
+				fn(channel, ...(rest.map(relabelDeep) as never[]))) as F);
+
 export const sendDatabaseBackupNotifications = async (input: {
+	operation?: "backup" | "restore";
 	projectName: string;
 	applicationName: string;
 	databaseType: "postgres" | "mysql" | "mongodb" | "mariadb" | "libsql";
@@ -32,6 +65,7 @@ export const sendDatabaseBackupNotifications = async (input: {
 	databaseName: string;
 }) => {
 	const {
+		operation = "backup",
 		projectName,
 		applicationName,
 		databaseType,
@@ -40,6 +74,18 @@ export const sendDatabaseBackupNotifications = async (input: {
 		organizationId,
 		databaseName,
 	} = input;
+	const sendCustomNotification = forOperation(rawSendCustomNotification, operation);
+	const sendDiscordNotification = forOperation(rawSendDiscordNotification, operation);
+	const sendEmailNotification = forOperation(rawSendEmailNotification, operation);
+	const sendGotifyNotification = forOperation(rawSendGotifyNotification, operation);
+	const sendLarkNotification = forOperation(rawSendLarkNotification, operation);
+	const sendMattermostNotification = forOperation(rawSendMattermostNotification, operation);
+	const sendNtfyNotification = forOperation(rawSendNtfyNotification, operation);
+	const sendPushoverNotification = forOperation(rawSendPushoverNotification, operation);
+	const sendResendNotification = forOperation(rawSendResendNotification, operation);
+	const sendSlackNotification = forOperation(rawSendSlackNotification, operation);
+	const sendTeamsNotification = forOperation(rawSendTeamsNotification, operation);
+	const sendTelegramNotification = forOperation(rawSendTelegramNotification, operation);
 	const errorMessage = redactSensitiveText(rawErrorMessage);
 	const date = new Date();
 	const unixDate = ~~(Number(date) / 1000);

@@ -5,3 +5,4 @@ export { restoreMongoBackup } from "./mongo";
 export { restoreMySqlBackup } from "./mysql";
 export { restorePostgresBackup } from "./postgres";
 export { restoreWebServerBackup } from "./web-server";
+export { formatRestoreError, reportRestoreFailure } from "./failure";

@@ -58,6 +58,10 @@ import {
 	restorePostgresBackup,
 	restoreWebServerBackup,
 } from "@dokploy/server/utils/restore";
+import {
+	formatRestoreError,
+	reportRestoreFailure,
+} from "@dokploy/server/utils/restore/failure";
 import { normalizeRestoreBackupFile } from "@dokploy/server/utils/restore/safe-input";
 import { signScheduledQueueJob } from "@dokploy/server/utils/schedules/signed-job";
 import {
@@ -1201,37 +1205,58 @@ export const backupRouter = createTRPCRouter({
 			await assertRestoreBackupObjectBound(input, databaseId);
 			const queue: string[] = [];
 			let done = false;
-			const onLog = (log: string) => queue.push(log);
+			let failure: string | undefined;
+			let failureLogged = false;
+			let service: { name: string; environmentId: string } | undefined;
+			const onLog = (log: string) => {
+				if (log.startsWith("Error: ")) {
+					failureLogged = true;
+				}
+				queue.push(log);
+			};
 			const runRestore = async () => {
 				if (input.backupType === "database") {
 					if (input.databaseType === "postgres") {
 						const postgres = await findPostgresById(databaseId);
+						service = postgres;
 						await restorePostgresBackup(postgres, destination, input, onLog);
 					} else if (input.databaseType === "mysql") {
 						const mysql = await findMySqlById(databaseId);
+						service = mysql;
 						await restoreMySqlBackup(mysql, destination, input, onLog);
 					} else if (input.databaseType === "mariadb") {
 						const mariadb = await findMariadbById(databaseId);
+						service = mariadb;
 						await restoreMariadbBackup(mariadb, destination, input, onLog);
 					} else if (input.databaseType === "mongo") {
 						const mongo = await findMongoById(databaseId);
+						service = mongo;
 						await restoreMongoBackup(mongo, destination, input, onLog);
 					} else if (input.databaseType === "libsql") {
 						const libsql = await findLibsqlById(databaseId);
+						service = libsql;
 						await restoreLibsqlBackup(libsql, destination, input, onLog);
 					} else if (input.databaseType === "web-server") {
 						await restoreWebServerBackup(destination, input.backupFile, onLog);
 					}
 				} else if (input.backupType === "compose") {
 					const compose = await findComposeById(databaseId);
+						service = compose;
 					await restoreComposeBackup(compose, destination, input, onLog);
 				}
 			};
 			runRestore()
 				.catch((error) => {
-					onLog(
-						`Error: ${error instanceof Error ? error.message : String(error)}`,
-					);
+					failure = formatRestoreError(error);
+					if (!failureLogged) {
+						onLog(`Error: ${failure}`);
+					}
+					void reportRestoreFailure({
+						service,
+						databaseType: input.databaseType,
+						databaseName: input.databaseName,
+						message: failure,
+					});
 				})
 				.finally(() => {
 					done = true;
@@ -1246,6 +1271,12 @@ export const backupRouter = createTRPCRouter({
 				if (signal?.aborted) {
 					return;
 				}
+			}
+			if (failure !== undefined) {
+				throw new TRPCError({
+					code: "INTERNAL_SERVER_ERROR",
+					message: failure,
+				});
 			}
 		}),
 });
