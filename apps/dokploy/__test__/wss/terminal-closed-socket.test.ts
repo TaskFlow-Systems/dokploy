@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 
 type FakeConnection = EventEmitter & {
+	destroy: ReturnType<typeof vi.fn>;
 	end: ReturnType<typeof vi.fn>;
 	shell: ReturnType<typeof vi.fn>;
 };
@@ -53,6 +54,7 @@ vi.mock("../../server/wss/utils", async (importOriginal) => ({
 vi.mock("ssh2", async () => {
 	const { EventEmitter } = await import("node:events");
 	class Client extends EventEmitter {
+		destroy = vi.fn();
 		end = vi.fn();
 		shell = vi.fn();
 		constructor() {
@@ -194,20 +196,21 @@ describe("server terminal socket", () => {
 		expect(connection.end).toHaveBeenCalled();
 	});
 
-	it("ends the connection when the socket closes before the shell opens", async () => {
+	it("ends the connection at once when the socket closes before the shell opens", async () => {
 		const ws = await open(REMOTE);
 		const connection = await connectionOf();
 		connection.emit("ready");
 		expect(connection.shell).toHaveBeenCalledTimes(1);
 
 		await closeClient(ws);
-		expect(connection.end).not.toHaveBeenCalled();
-		connection.shell.mock.calls[0]?.[1](undefined, makeStream());
+		await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+		const stream = makeStream();
+		connection.shell.mock.calls[0]?.[1](undefined, stream);
 
-		expect(connection.end).toHaveBeenCalled();
+		expect(stream.end).toHaveBeenCalled();
 	});
 
-	it("still closes the shell when the socket closes later", async () => {
+	it("ends the shell and the connection when the socket closes later", async () => {
 		const ws = await open(REMOTE);
 		const connection = await connectionOf();
 		connection.emit("ready");
@@ -218,8 +221,7 @@ describe("server terminal socket", () => {
 
 		await closeClient(ws);
 
-		await vi.waitFor(() => expect(stream.end).toHaveBeenCalled());
-		stream.emit("close", 0, "");
-		expect(connection.end).toHaveBeenCalled();
+		await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+		expect(stream.end).toHaveBeenCalled();
 	});
 });

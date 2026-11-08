@@ -5,14 +5,19 @@ import {
 	IS_CLOUD,
 	validateRequest,
 } from "@dokploy/server";
+import { SSH_KEEPALIVE } from "@dokploy/server/utils/process/ssh-keepalive";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
 import { publicIpv4, publicIpv6 } from "public-ip";
-import { Client, type ConnectConfig } from "ssh2";
+import { Client, type ClientChannel, type ConnectConfig } from "ssh2";
 import { WebSocketServer } from "ws";
 import { getDockerHost } from "../utils/docker";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessTerminalOverWss } from "./authorize";
-import { onWebSocketConnection, readUpgradePathname } from "./connection";
+import {
+	onWebSocketConnection,
+	readUpgradePathname,
+	stopWhenClientIsSilent,
+} from "./connection";
 import { verifyWebSocketOrigin } from "./origin";
 import { canAccessServerTerminalWebSocket } from "./server-permission";
 import {
@@ -20,6 +25,8 @@ import {
 	parseTerminalSize,
 	setupLocalServerSSHKey,
 } from "./utils";
+
+const FORCE_CLOSE_MS = 3000;
 
 const COMMAND_TO_ALLOW_LOCAL_ACCESS = `
 # ----------------------------------------
@@ -212,14 +219,33 @@ export const setupTerminalWebSocketServer = (
 		}
 
 		const conn = new Client();
-		let _stdout = "";
-		let _stderr = "";
+		let shell: ClientChannel | undefined;
+		let released = false;
+
+		// Ending only the shell channel leaves the ssh connection, the remote
+		// session and everything typed in it alive, so the connection goes too.
+		// The sshd then hangs the shell up, and a command running in it with it.
+		const release = () => {
+			if (released) {
+				return;
+			}
+			released = true;
+			shell?.end();
+			conn.end();
+			// end() does nothing useful while still connecting or on a dead network.
+			const forceClose = setTimeout(() => conn.destroy(), FORCE_CLOSE_MS);
+			forceClose.unref();
+			conn.once("close", () => clearTimeout(forceClose));
+		};
+
+		ws.once("close", release);
+		stopWhenClientIsSilent(ws);
 
 		ws.send("Connecting...\n");
 
 		conn
 			.once("ready", () => {
-				if (ws.readyState !== ws.OPEN) {
+				if (released) {
 					conn.end();
 					return;
 				}
@@ -232,9 +258,16 @@ export const setupTerminalWebSocketServer = (
 						console.error("SSH shell error:", err);
 						ws.send(`SSH connection error: ${err.message} ❌ `);
 						ws.close();
-						conn.end();
+						release();
 						return;
 					}
+
+					// The client may have left while the shell was opening.
+					if (released) {
+						stream.end();
+						return;
+					}
+					shell = stream;
 
 					stream
 						.on("close", (code: number, _signal: string) => {
@@ -242,11 +275,9 @@ export const setupTerminalWebSocketServer = (
 							conn.end();
 						})
 						.on("data", (data: string) => {
-							_stdout += data.toString();
 							ws.send(data.toString());
 						})
 						.stderr.on("data", (data) => {
-							_stderr += data.toString();
 							ws.send(data.toString());
 							console.error("Error: ", data.toString());
 						});
@@ -272,16 +303,6 @@ export const setupTerminalWebSocketServer = (
 							ws.send(errorMessage);
 						}
 					});
-
-					// The shell is already running if the client left while it was opening.
-					if (ws.readyState !== ws.OPEN) {
-						conn.end();
-						return;
-					}
-
-					ws.on("close", () => {
-						stream.end();
-					});
 				});
 			})
 			.on("error", (err) => {
@@ -299,8 +320,8 @@ export const setupTerminalWebSocketServer = (
 					ws.send(`SSH connection error: ${err.message} ❌ `);
 				}
 				ws.close();
-				conn.end();
+				release();
 			})
-			.connect(connectionDetails);
+			.connect({ ...connectionDetails, ...SSH_KEEPALIVE });
 	});
 };

@@ -105,3 +105,28 @@ export const onJsonWebSocketConnection = (
 	wss: WebSocketServer,
 	handler: ConnectionHandler,
 ) => handleConnections(wss, handler, false);
+
+const CLIENT_PING_INTERVAL_MS = 30_000;
+
+// A client that vanished without closing (a dropped network, a sleeping laptop)
+// leaves no close event for a long time, and whatever the socket holds open
+// stays until then. Terminates the socket when a ping goes unanswered.
+export const stopWhenClientIsSilent = (
+	ws: WebSocket,
+	intervalMs = CLIENT_PING_INTERVAL_MS,
+) => {
+	let answered = true;
+	ws.on("pong", () => {
+		answered = true;
+	});
+	const timer = setInterval(() => {
+		if (!answered) {
+			ws.terminate();
+			return;
+		}
+		answered = false;
+		ws.ping();
+	}, intervalMs);
+	timer.unref();
+	ws.once("close", () => clearInterval(timer));
+};
