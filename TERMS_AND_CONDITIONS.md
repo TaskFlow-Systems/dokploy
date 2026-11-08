@@ -4,7 +4,6 @@
 
 The Dokploy team endeavors to mitigate potential defects and issues through stringent testing and adherence to principles of clean coding. Dokploy is provided "AS IS" without any warranties, express or implied. Refer to the [License](https://github.com/Dokploy/Dokploy/blob/main/LICENSE) for details on permissions and restrictions.
 
-
 ### Description of Service:
 
 **Dokploy core** is an open-source tool designed to simplify the deployment of applications for both personal and business use. Users are permitted to install, modify, and operate Dokploy independently or within their organizations to improve their development and deployment operations. It is important to note that any commercial resale or redistribution of Dokploy as a service is strictly forbidden without explicit consent. This prohibition ensures the preservation of Dokploy's open-source character for the benefit of the entire community.
