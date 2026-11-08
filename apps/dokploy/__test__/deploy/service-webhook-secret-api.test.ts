@@ -13,7 +13,10 @@ describe("secret handling", () => {
 			const source = read(`server/api/routers/${router}.ts`);
 			for (const name of ["revealWebhookSecret", "regenerateWebhookSecret"]) {
 				const start = source.indexOf(`${name}:`);
-				const procedure = source.slice(start, source.indexOf("Procedure", start + 40));
+				const procedure = source.slice(
+					start,
+					source.indexOf("Procedure", start + 40),
+				);
 				expect(procedure).toContain("assertBrowserSession(ctx)");
 				expect(isProcedureDeniedForApiKey(`${router}.${name}`)).toBe(true);
 			}
@@ -26,14 +29,20 @@ describe("secret handling", () => {
 	it("is encrypted, redacted on reads and not accepted by update schemas", () => {
 		for (const schema of ["application", "compose"]) {
 			const source = readFileSync(
-				join(__dirname, `../../../../packages/server/src/db/schema/${schema}.ts`),
+				join(
+					__dirname,
+					`../../../../packages/server/src/db/schema/${schema}.ts`,
+				),
 				"utf8",
 			);
 			expect(source).toContain('webhookSecret: encryptedText("webhookSecret")');
 			expect(source).toMatch(/refreshToken: true,\s*webhookSecret: true/);
 		}
 		const redaction = readFileSync(
-			join(__dirname, "../../../../packages/server/src/utils/security/redaction.ts"),
+			join(
+				__dirname,
+				"../../../../packages/server/src/utils/security/redaction.ts",
+			),
 			"utf8",
 		);
 		expect(redaction).toContain('"webhookSecret"');

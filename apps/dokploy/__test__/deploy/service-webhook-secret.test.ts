@@ -79,7 +79,11 @@ const bitbucketCloud = (branch: string | null) =>
 				changes: [
 					{
 						new: branch
-							? { type: "branch", name: branch, target: { hash: "h1", message: "m" } }
+							? {
+									type: "branch",
+									name: branch,
+									target: { hash: "h1", message: "m" },
+								}
 							: null,
 						old: { type: "branch", name: "main" },
 					},
@@ -95,7 +99,11 @@ const bitbucketDataCenter = (branch: string) =>
 			eventKey: "repo:refs_changed",
 			changes: [
 				{
-					ref: { id: `refs/heads/${branch}`, displayId: branch, type: "BRANCH" },
+					ref: {
+						id: `refs/heads/${branch}`,
+						displayId: branch,
+						type: "BRANCH",
+					},
 					type: "UPDATE",
 					toHash: "h2",
 				},
@@ -216,116 +224,123 @@ const targets = [
 	},
 ];
 
-describe.each(targets)("per-service deploy webhook secret ($name)", (target) => {
-	beforeEach(() => {
-		vi.clearAllMocks();
-		queueMocks.add.mockResolvedValue(undefined);
-		target.mock.mockResolvedValue(target.service({}));
-	});
+describe.each(targets)(
+	"per-service deploy webhook secret ($name)",
+	(target) => {
+		beforeEach(() => {
+			vi.clearAllMocks();
+			queueMocks.add.mockResolvedValue(undefined);
+			target.mock.mockResolvedValue(target.service({}));
+		});
 
-	describe.each(formats)("$name on Custom Git", (format) => {
-		const send = async (raw: string, headers: Record<string, string>) => {
+		describe.each(formats)("$name on Custom Git", (format) => {
+			const send = async (raw: string, headers: Record<string, string>) => {
+				const response = createResponse();
+				await target.handler(streamRequest(raw, headers), response);
+				return response;
+			};
+
+			it("deploys a correctly signed push to the tracked branch", async () => {
+				const raw = format.body("main");
+				const response = await send(raw, format.headers(raw));
+				expect(response.status).toHaveBeenCalledWith(200);
+				expect(queueMocks.add).toHaveBeenCalledTimes(1);
+			});
+
+			it("answers 301 for another branch, signed", async () => {
+				const raw = format.body("feature");
+				const response = await send(raw, format.headers(raw));
+				expect(response.status).toHaveBeenCalledWith(301);
+				expect(queueMocks.add).not.toHaveBeenCalled();
+			});
+
+			it("refuses a wrong signature with 401", async () => {
+				const raw = format.body("main");
+				const response = await send(raw, format.headers(raw, "other-secret"));
+				expect(response.status).toHaveBeenCalledWith(401);
+				expect(queueMocks.add).not.toHaveBeenCalled();
+			});
+
+			it("refuses a body changed after signing", async () => {
+				const raw = format.body("main");
+				const headers = format.headers(raw);
+				const response = await send(
+					format.name === "GitLab-style" ? raw : raw.replace("main", "feature"),
+					format.name === "GitLab-style"
+						? { ...headers, "x-gitlab-token": "x" }
+						: headers,
+				);
+				expect(response.status).toHaveBeenCalledWith(401);
+			});
+
+			it("refuses an unsigned request with 401", async () => {
+				const raw = format.body("main");
+				const headers = format.headers(raw);
+				for (const key of Object.keys(headers)) {
+					if (/signature|token/.test(key)) delete headers[key];
+				}
+				const response = await send(raw, headers);
+				expect(response.status).toHaveBeenCalledWith(401);
+				expect(queueMocks.add).not.toHaveBeenCalled();
+			});
+
+			it("keeps refusing with 401 while the service has no secret", async () => {
+				target.mock.mockResolvedValue(target.service({ webhookSecret: null }));
+				const raw = format.body("main");
+				const response = await send(raw, format.headers(raw));
+				expect(response.status).toHaveBeenCalledWith(401);
+				expect(queueMocks.add).not.toHaveBeenCalled();
+			});
+		});
+
+		it("does not accept another format's proof for the header it carries", async () => {
+			const raw = pushBody("main");
 			const response = createResponse();
-			await target.handler(streamRequest(raw, headers), response);
-			return response;
-		};
-
-		it("deploys a correctly signed push to the tracked branch", async () => {
-			const raw = format.body("main");
-			const response = await send(raw, format.headers(raw));
-			expect(response.status).toHaveBeenCalledWith(200);
-			expect(queueMocks.add).toHaveBeenCalledTimes(1);
-		});
-
-		it("answers 301 for another branch, signed", async () => {
-			const raw = format.body("feature");
-			const response = await send(raw, format.headers(raw));
-			expect(response.status).toHaveBeenCalledWith(301);
-			expect(queueMocks.add).not.toHaveBeenCalled();
-		});
-
-		it("refuses a wrong signature with 401", async () => {
-			const raw = format.body("main");
-			const response = await send(raw, format.headers(raw, "other-secret"));
-			expect(response.status).toHaveBeenCalledWith(401);
-			expect(queueMocks.add).not.toHaveBeenCalled();
-		});
-
-		it("refuses a body changed after signing", async () => {
-			const raw = format.body("main");
-			const headers = format.headers(raw);
-			const response = await send(
-				format.name === "GitLab-style" ? raw : raw.replace("main", "feature"),
-				format.name === "GitLab-style" ? { ...headers, "x-gitlab-token": "x" } : headers,
+			// GitLab event, but only a GitHub-style signature
+			await target.handler(
+				streamRequest(raw, {
+					"x-gitlab-event": "Push Hook",
+					"x-hub-signature-256": `sha256=${hmac(raw)}`,
+				}),
+				response,
 			);
 			expect(response.status).toHaveBeenCalledWith(401);
 		});
 
-		it("refuses an unsigned request with 401", async () => {
-			const raw = format.body("main");
-			const headers = format.headers(raw);
-			for (const key of Object.keys(headers)) {
-				if (/signature|token/.test(key)) delete headers[key];
-			}
-			const response = await send(raw, headers);
-			expect(response.status).toHaveBeenCalledWith(401);
-			expect(queueMocks.add).not.toHaveBeenCalled();
+		it("checks a Bitbucket source with the service secret too", async () => {
+			target.mock.mockResolvedValue(
+				target.service({ sourceType: "bitbucket" }),
+			);
+			const raw = bitbucketCloud("main");
+			const ok = createResponse();
+			await target.handler(streamRequest(raw, formats[0].headers(raw)), ok);
+			expect(ok.status).not.toHaveBeenCalledWith(401);
+			const bad = createResponse();
+			await target.handler(
+				streamRequest(raw, formats[0].headers(raw, "nope")),
+				bad,
+			);
+			expect(bad.status).toHaveBeenCalledWith(401);
 		});
 
-		it("keeps refusing with 401 while the service has no secret", async () => {
-			target.mock.mockResolvedValue(target.service({ webhookSecret: null }));
-			const raw = format.body("main");
-			const response = await send(raw, format.headers(raw));
+		it("leaves provider-backed GitHub sources on their provider secret", async () => {
+			target.mock.mockResolvedValue(
+				target.service({ sourceType: "github", github: null }),
+			);
+			const raw = pushBody("main");
+			const response = createResponse();
+			await target.handler(
+				streamRequest(raw, {
+					"x-github-event": "push",
+					"x-hub-signature-256": `sha256=${hmac(raw)}`,
+				}),
+				response,
+			);
+			// the service secret is not a GitHub App secret
 			expect(response.status).toHaveBeenCalledWith(401);
-			expect(queueMocks.add).not.toHaveBeenCalled();
 		});
-	});
-
-	it("does not accept another format's proof for the header it carries", async () => {
-		const raw = pushBody("main");
-		const response = createResponse();
-		// GitLab event, but only a GitHub-style signature
-		await target.handler(
-			streamRequest(raw, {
-				"x-gitlab-event": "Push Hook",
-				"x-hub-signature-256": `sha256=${hmac(raw)}`,
-			}),
-			response,
-		);
-		expect(response.status).toHaveBeenCalledWith(401);
-	});
-
-	it("checks a Bitbucket source with the service secret too", async () => {
-		target.mock.mockResolvedValue(target.service({ sourceType: "bitbucket" }));
-		const raw = bitbucketCloud("main");
-		const ok = createResponse();
-		await target.handler(streamRequest(raw, formats[0].headers(raw)), ok);
-		expect(ok.status).not.toHaveBeenCalledWith(401);
-		const bad = createResponse();
-		await target.handler(
-			streamRequest(raw, formats[0].headers(raw, "nope")),
-			bad,
-		);
-		expect(bad.status).toHaveBeenCalledWith(401);
-	});
-
-	it("leaves provider-backed GitHub sources on their provider secret", async () => {
-		target.mock.mockResolvedValue(
-			target.service({ sourceType: "github", github: null }),
-		);
-		const raw = pushBody("main");
-		const response = createResponse();
-		await target.handler(
-			streamRequest(raw, {
-				"x-github-event": "push",
-				"x-hub-signature-256": `sha256=${hmac(raw)}`,
-			}),
-			response,
-		);
-		// the service secret is not a GitHub App secret
-		expect(response.status).toHaveBeenCalledWith(401);
-	});
-});
+	},
+);
 
 describe("branch extraction", () => {
 	it("reads Bitbucket Cloud, Data Center and Soft Serve pushes", () => {
@@ -366,7 +381,11 @@ describe("branch extraction", () => {
 		expect(
 			extractBranchName(
 				{ "x-event-key": "repo:refs_changed" },
-				{ changes: [{ ref: { displayId: "x", type: "BRANCH" }, type: "DELETE" }] },
+				{
+					changes: [
+						{ ref: { displayId: "x", type: "BRANCH" }, type: "DELETE" },
+					],
+				},
 			),
 		).toBeNull();
 	});
