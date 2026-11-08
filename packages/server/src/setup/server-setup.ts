@@ -117,6 +117,7 @@ export const serverSetup = async (
 
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		onData?.(`${err} ❌\n`);
+		throw err;
 	}
 };
 
