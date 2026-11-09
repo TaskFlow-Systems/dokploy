@@ -125,7 +125,7 @@
         "octokit": "^5.0.5",
         "pino": "^10.4.0",
         "pino-pretty": "^13.2.0",
-        "postgres": "^3.4.9",
+        "postgres": "^4.1.0",
         "posthog-js": "^1.447.3",
         "public-ip": "^8.0.0",
         "qrcode": "^1.5.4",
@@ -261,7 +261,7 @@
         "octokit": "^5.0.5",
         "pino": "^10.4.0",
         "pino-pretty": "^13.2.0",
-        "postgres": "^3.4.9",
+        "postgres": "^4.1.0",
         "public-ip": "^8.0.0",
         "qrcode": "^1.5.4",
         "react": "^19.3.1",
@@ -341,7 +341,7 @@
     "minimatch": ">=11.0.1 <12.0.0",
     "next": ">=16.4.3 <17.0.0",
     "postcss": ">=8.5.28 <9.0.0",
-    "postgres": ">=3.4.9 <4.0.0",
+    "postgres": ">=4.1.0 <5.0.0",
     "protobufjs": ">=7.5.5 <8.0.0",
     "proxy-addr": ">=2.0.8 <3.0.0",
     "qs": ">=6.16.0 <7.0.0",
@@ -2653,7 +2653,7 @@
 
     "postcss-selector-parser": ["postcss-selector-parser@7.2.0", "", { "dependencies": { "util-deprecate": "^1.0.2" } }, "sha512-Khh/tERVBn0I1499dvBSHY0pWJloMJWUxDsOBM0CCDPAcVZ10Jl2L1qy1f19uEX22spa8Mv7DCdEQJc0cGwBhQ=="],
 
-    "postgres": ["postgres@3.4.9", "", {}, "sha512-GD3qdB0x1z9xgFI6cdRD6xu2Sp2WCOEoe3mtnyB5Ee0XrrL5Pe+e4CCnJrRMnL1zYtRDZmQQVbvOttLnKDLnaw=="],
+    "postgres": ["postgres@4.1.0", "", {}, "sha512-s+0WH67YAyLdBQUb6XczbziBhY+C9uiQsg9S8R5RHdZhk6sdyK6202E+T2tXpiInSEEjDLRSJ3OpYBe3PN6MsQ=="],
 
     "postgres-array": ["postgres-array@2.0.0", "", {}, "sha512-VpZrUqU5A69eQyW2c5CA1jtLecCsN2U/bD6VilrFDWq5+5UIEVO7nazS3TEcHf1zuPYO/sqGvUvW62g86RXZuA=="],
 
