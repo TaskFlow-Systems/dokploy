@@ -23,14 +23,14 @@ import { ProjectStep } from "./steps/project-step";
 import { ServerStep } from "./steps/server-step";
 import { WelcomeStep } from "./steps/welcome-step";
 
-const { useStepper, steps, Scoped } = defineStepper(
+const { useStepper, steps } = defineStepper([
 	{ id: "welcome", title: "Welcome" },
 	{ id: "plan", title: "Pick a plan" },
 	{ id: "project", title: "New project" },
 	{ id: "server", title: "Connect server" },
 	{ id: "deploy", title: "Ship something" },
 	{ id: "complete", title: "You're live" },
-);
+]);
 
 type StepId = (typeof steps)[number]["id"];
 const isStepId = (id: string | undefined): id is StepId =>
@@ -43,9 +43,9 @@ interface Props {
 export const OnboardingWizard = ({ onClose }: Props) => {
 	const router = useRouter();
 	const persisted = getOnboardingState();
-	const stepper = useStepper(
-		isStepId(persisted.stepId) ? persisted.stepId : undefined,
-	);
+	const stepper = useStepper({
+		defaultStep: isStepId(persisted.stepId) ? persisted.stepId : undefined,
+	});
 	const [projectId, setProjectId] = useState<string | undefined>(
 		persisted.projectId,
 	);
@@ -125,7 +125,7 @@ export const OnboardingWizard = ({ onClose }: Props) => {
 							)}
 						</div>
 
-						<Scoped>
+						<>
 							<ol className="hidden md:flex flex-col gap-0.5 mt-12">
 								{visibleStepIds.map((id, index) => {
 									const step = steps.find((s) => s.id === id)!;
@@ -178,7 +178,7 @@ export const OnboardingWizard = ({ onClose }: Props) => {
 									);
 								})}
 							</ol>
-						</Scoped>
+						</>
 
 						<div className="hidden md:flex flex-col gap-4 mt-auto pt-8 border-t border-zinc-800">
 							{!isLastVisible && (
@@ -237,7 +237,7 @@ export const OnboardingWizard = ({ onClose }: Props) => {
 
 				<div className="flex-1 overflow-y-auto">
 					<div className="mx-auto w-full max-w-2xl px-6 py-14 lg:py-20">
-						{stepper.switch({
+						{stepper.match({
 							welcome: () => <WelcomeStep onNext={goToNextVisible} />,
 							plan: () => <PlanStep onNext={goToNextVisible} />,
 							project: () => (
