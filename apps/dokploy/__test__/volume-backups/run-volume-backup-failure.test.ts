@@ -1,3 +1,4 @@
+import { ExecError } from "@dokploy/server/utils/process/ExecError";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -111,5 +112,28 @@ describe("runVolumeBackup", () => {
 
 		await expect(runVolumeBackup("vb-1")).resolves.toBeUndefined();
 		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("d-1", "done");
+	});
+
+	it("sends the redacted stderr tail in the failure notification", async () => {
+		mocks.backupVolume.mockResolvedValue("true");
+		mocks.execAsync.mockRejectedValueOnce(
+			new ExecError(
+				"Command execution failed: Command failed: [command omitted]",
+				{
+					command: "rclone --s3-secret-access-key=cmd-secret rcat x",
+					stderr:
+						"NoSuchBucket: status code: 404\nRCLONE_CONFIG_DOKPLOYS3_SECRET_ACCESS_KEY=err-secret",
+					exitCode: 1,
+				},
+			),
+		);
+
+		await expect(runVolumeBackup("vb-1")).rejects.toThrow();
+
+		const { errorMessage } =
+			mocks.sendVolumeBackupNotifications.mock.calls[0]![0];
+		expect(errorMessage).toContain("NoSuchBucket");
+		expect(errorMessage).not.toContain("err-secret");
+		expect(errorMessage).not.toContain("cmd-secret");
 	});
 });

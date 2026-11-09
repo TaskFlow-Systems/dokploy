@@ -1,3 +1,4 @@
+import { ExecError } from "@dokploy/server/utils/process/ExecError";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -111,4 +112,44 @@ describe("volumeBackups.runManually reports the outcome of the run", () => {
 			message: expect.stringContaining("NoSuchBucket"),
 		});
 	});
+
+	it.each([
+		[
+			"local",
+			{
+				message: "Command execution failed: Command failed: [command omitted]",
+				serverId: undefined,
+			},
+		],
+		[
+			"remote",
+			{
+				message: "Remote command failed with exit code 1",
+				serverId: "server-1",
+			},
+		],
+	])(
+		"puts the redacted stderr tail of a failed %s run in the error",
+		async (_name, { message, serverId }) => {
+			mocks.runVolumeBackup.mockRejectedValue(
+				new ExecError(message, {
+					command: "rclone --s3-secret-access-key=cmd-secret rcat x",
+					stderr:
+						'NOTICE: Config file "/x/rclone.conf" not found - using defaults\nNoSuchBucket: status code: 404\nRCLONE_CONFIG_DOKPLOYS3_SECRET_ACCESS_KEY=err-secret',
+					exitCode: 1,
+					serverId,
+				}),
+			);
+
+			const error = await caller
+				.runManually({ volumeBackupId: "vb-1" })
+				.catch((e) => e);
+
+			expect(error.message).toContain(message);
+			expect(error.message).toContain("NoSuchBucket");
+			expect(error.message).not.toContain("Config file");
+			expect(error.message).not.toContain("err-secret");
+			expect(error.message).not.toContain("cmd-secret");
+		},
+	);
 });

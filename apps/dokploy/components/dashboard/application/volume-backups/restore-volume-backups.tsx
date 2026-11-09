@@ -139,6 +139,7 @@ export const RestoreVolumeBackups = ({
 			},
 			onError(error) {
 				console.error("Restore logs error:", error);
+				toast.error(error.message || "Volume restore failed");
 				setIsDeploying(false);
 			},
 		},
