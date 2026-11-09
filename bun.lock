@@ -75,7 +75,7 @@
         "@octokit/webhooks": "^14.2.0",
         "@openpanel/nextjs": "^1.5.4",
         "@react-email/components": "^1.0.12",
-        "@stepperize/react": "4.0.1",
+        "@stepperize/react": "8.0.1",
         "@stripe/stripe-js": "^4.10.0",
         "@tailwindcss/typography": "^0.5.20",
         "@tanstack/react-query": "^5.107.1",
@@ -1363,7 +1363,9 @@
 
     "@standard-schema/utils": ["@standard-schema/utils@0.3.0", "", {}, "sha512-e7Mew686owMaPJVNNLs55PUvgz371nKgwsc4vxE49zsODpJEnxgxRo2y/OKrqueavXgZNMDVj3DdHFlaSAeU8g=="],
 
-    "@stepperize/react": ["@stepperize/react@4.0.1", "", { "peerDependencies": { "react": "^17.0.0 || ^18.0.0 || ^19.0.0", "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0" } }, "sha512-LAOcfi3d2mM/Jn740Xy35qsuTwmoLIuitvWZTZRURYeGsc7a6sIKAkk3+L1joZGkLFvf5q4I6V7LxWWfB5hDvg=="],
+    "@stepperize/core": ["@stepperize/core@4.0.0", "", { "peerDependencies": { "typescript": ">=5.0.2" }, "optionalPeers": ["typescript"] }, "sha512-ciSSDJnylQNAZIudFJHXsDG3sPlYEA3XAmRrogeJTdxGwM7R/HnH3aNoWoPn7+hstHpHuzMx6xN9GVWyAnvXAQ=="],
+
+    "@stepperize/react": ["@stepperize/react@8.0.1", "", { "dependencies": { "@stepperize/core": "4.0.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-/Sz9QXzRblvqUlmQfKsMzzjH1TCGruip0DHlLRzYSoHL1XAUFhtVYnytGH2Gf7esNjyfPEQJoFcm+mO69bVx3Q=="],
 
     "@stripe/stripe-js": ["@stripe/stripe-js@4.10.0", "", {}, "sha512-KrMOL+sH69htCIXCaZ4JluJ35bchuCCznyPyrbN8JXSGQfwBI1SuIEMZNwvy8L8ykj29t6sa5BAAiL7fNoLZ8A=="],
 

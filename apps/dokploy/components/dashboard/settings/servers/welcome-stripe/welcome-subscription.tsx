@@ -18,13 +18,13 @@ import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { api } from "@/utils/api";
 
-const { useStepper, steps, Scoped } = defineStepper(
+const { useStepper, steps } = defineStepper([
 	{ id: "welcome", title: "Welcome" },
 	{ id: "project", title: "New project" },
 	{ id: "server", title: "Connect server" },
 	{ id: "deploy", title: "Ship something" },
 	{ id: "complete", title: "You're live" },
-);
+]);
 
 const features = [
 	{
@@ -182,7 +182,7 @@ export const WelcomeSubscription = () => {
 			}}
 		>
 			<DialogContent className="sm:max-w-2xl">
-				<Scoped>
+				<>
 					<nav aria-label="Steps" className="flex items-center gap-2 pt-2">
 						{visibleStepIds.map((id, index) => {
 							const isDone = index < visibleIndex;
@@ -217,10 +217,10 @@ export const WelcomeSubscription = () => {
 							);
 						})}
 					</nav>
-				</Scoped>
+				</>
 
 				<div className="py-2">
-					{stepper.switch({
+					{stepper.match({
 						welcome: () => <WelcomeIntro onNext={goToNextVisible} />,
 						project: () => (
 							<ProjectStep
