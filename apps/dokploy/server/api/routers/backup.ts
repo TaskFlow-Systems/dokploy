@@ -49,6 +49,7 @@ import {
 	execAsync,
 	execAsyncRemote,
 } from "@dokploy/server/utils/process/execAsync";
+import { formatCommandFailure } from "@dokploy/server/utils/process/failure-message";
 import {
 	restoreComposeBackup,
 	restoreLibsqlBackup,
@@ -859,13 +860,9 @@ export const backupRouter = createTRPCRouter({
 				});
 				return true;
 			} catch (error) {
-				const message =
-					error instanceof Error
-						? error.message
-						: "Error running manual Postgres backup ";
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message,
+					message: formatCommandFailure(error),
 				});
 			}
 		}),
@@ -896,7 +893,7 @@ export const backupRouter = createTRPCRouter({
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Error running manual MySQL backup ",
+					message: formatCommandFailure(error),
 					cause: error,
 				});
 			}
@@ -927,7 +924,7 @@ export const backupRouter = createTRPCRouter({
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Error running manual Mariadb backup ",
+					message: formatCommandFailure(error),
 					cause: error,
 				});
 			}
@@ -958,7 +955,7 @@ export const backupRouter = createTRPCRouter({
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Error running manual Compose backup ",
+					message: formatCommandFailure(error),
 					cause: error,
 				});
 			}
@@ -989,7 +986,7 @@ export const backupRouter = createTRPCRouter({
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Error running manual Mongo backup ",
+					message: formatCommandFailure(error),
 					cause: error,
 				});
 			}
@@ -1020,7 +1017,7 @@ export const backupRouter = createTRPCRouter({
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
-					message: "Error running manual Libsql backup ",
+					message: formatCommandFailure(error),
 					cause: error,
 				});
 			}
@@ -1241,7 +1238,7 @@ export const backupRouter = createTRPCRouter({
 					}
 				} else if (input.backupType === "compose") {
 					const compose = await findComposeById(databaseId);
-						service = compose;
+					service = compose;
 					await restoreComposeBackup(compose, destination, input, onLog);
 				}
 			};

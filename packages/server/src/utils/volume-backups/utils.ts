@@ -15,6 +15,7 @@ import {
 	execAsync,
 	execAsyncRemote,
 } from "@dokploy/server/utils/process/execAsync";
+import { formatCommandFailure } from "@dokploy/server/utils/process/failure-message";
 import { quoteShellArgument } from "@dokploy/server/utils/shell";
 import { scheduledJobs, scheduleJob } from "node-schedule";
 import {
@@ -214,7 +215,7 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 				serviceType: mappedServiceType,
 				type: "error",
 				organizationId,
-				errorMessage: error instanceof Error ? error.message : String(error),
+				errorMessage: formatCommandFailure(error),
 			}),
 		);
 

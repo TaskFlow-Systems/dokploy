@@ -25,6 +25,7 @@ import {
 	execAsyncRemote,
 	execAsyncStream,
 } from "@dokploy/server/utils/process/execAsync";
+import { formatCommandFailure } from "@dokploy/server/utils/process/failure-message";
 import { signScheduledQueueJob } from "@dokploy/server/utils/schedules/signed-job";
 import { redactServiceRelationSecrets } from "@dokploy/server/utils/security/redaction";
 import {
@@ -554,7 +555,7 @@ export const volumeBackupsRouter = createTRPCRouter({
 				console.error(error);
 				throw new TRPCError({
 					code: "INTERNAL_SERVER_ERROR",
-					message: `Volume backup failed: ${error instanceof Error ? error.message : String(error)}`,
+					message: `Volume backup failed: ${formatCommandFailure(error)}`,
 				});
 			}
 			await audit(ctx, {
@@ -601,6 +602,7 @@ export const volumeBackupsRouter = createTRPCRouter({
 			await assertVolumeRestoreObjectBound(input);
 			return observable<string>((emit) => {
 				const runRestore = async () => {
+					let failed = false;
 					try {
 						emit.next("🚀 Starting volume restore process...");
 						emit.next(`📂 Backup File: ${input.backupFileName}`);
@@ -640,11 +642,22 @@ export const volumeBackupsRouter = createTRPCRouter({
 						emit.next(
 							"🎉 All containers/services have been restarted with the restored volume.",
 						);
-					} catch {
+					} catch (error) {
+						const failure = formatCommandFailure(error);
 						emit.next("");
 						emit.next("❌ Volume restore failed!");
+						// The client ends its "restoring" state and shows the cause.
+						failed = true;
+						emit.error(
+							new TRPCError({
+								code: "INTERNAL_SERVER_ERROR",
+								message: failure,
+							}),
+						);
 					} finally {
-						emit.complete();
+						if (!failed) {
+							emit.complete();
+						}
 					}
 				};
 

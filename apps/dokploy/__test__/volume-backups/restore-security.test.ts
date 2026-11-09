@@ -1,3 +1,4 @@
+import { ExecError } from "@dokploy/server/utils/process/ExecError";
 import { REDACTED_SECRET_VALUE } from "@dokploy/server/utils/security/redaction";
 import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -871,6 +872,48 @@ describe("volume backup restore access boundary", () => {
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 		expect(mocks.execAsyncStream).not.toHaveBeenCalled();
 	});
+
+	it.each([
+		["local", undefined, "execAsyncStream"],
+		["remote", "server-1", "execAsyncRemote"],
+	])(
+		"ends a failed %s volume restore with an error carrying the redacted cause",
+		async (_name, serverId, mockName) => {
+			mocks.findApplicationById.mockResolvedValue(
+				applicationService("app-1", "org-1", serverId ?? null),
+			);
+			mocks.restoreVolume.mockResolvedValue(
+				"echo restore --secret-access-key=cmd-secret",
+			);
+			const failure = new ExecError("Remote command failed with exit code 1", {
+				command: "echo restore --secret-access-key=cmd-secret",
+				stderr:
+					'NOTICE: Config file "/x/rclone.conf" not found - using defaults\nvolume is in use\nRCLONE_CONFIG_DOKPLOYS3_SECRET_ACCESS_KEY=err-secret',
+				exitCode: 1,
+			});
+			mocks[
+				mockName as "execAsyncStream" | "execAsyncRemote"
+			].mockRejectedValue(failure);
+
+			const error = await runVolumeRestoreSubscription({
+				backupFileName: "app-one/prefix/data_volume-2026-06-22.tar",
+				destinationId: "destination-1",
+				volumeName: "data_volume",
+				id: "app-1",
+				serviceType: "application",
+				...(serverId ? { serverId } : {}),
+			}).then(
+				() => undefined,
+				(e) => e,
+			);
+
+			expect(error).toMatchObject({ code: "INTERNAL_SERVER_ERROR" });
+			expect(error.message).toContain("volume is in use");
+			expect(error.message).not.toContain("Config file");
+			expect(error.message).not.toContain("err-secret");
+			expect(error.message).not.toContain("cmd-secret");
+		},
+	);
 
 	it("keeps the restore schedule lookup within the Postgres function argument limit", async () => {
 		let compiledSql = "";
