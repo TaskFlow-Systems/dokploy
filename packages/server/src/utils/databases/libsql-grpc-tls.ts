@@ -1,3 +1,5 @@
+// @peculiar/x509 2+ resolves its ASN.1 handlers through tsyringe, which throws at load without a Reflect metadata polyfill.
+import "reflect-metadata";
 import { webcrypto } from "node:crypto";
 import * as x509 from "@peculiar/x509";
 
