@@ -150,12 +150,19 @@ const isHighSurrogate = (code: number) => code >= 0xd800 && code <= 0xdbff;
 // From some networks a new connection to api.telegram.org fails at random, 6 to 9
 // of 20 in one measurement, while one that gets through answers in about 40 ms. A
 // short connect timeout and several attempts deliver what one try with the default
-// 10 s timeout lost.
+// 10 s timeout lost. A failed connect says nothing about the next one, so the
+// wait between such attempts is short; the wait after a 5xx grows. Everything,
+// waits included, has to fit the budget, so a Telegram that is down for good
+// ends a send in about 22 s instead of holding a Test button or a task for
+// minutes.
 export const TELEGRAM_SEND_ATTEMPTS = 6;
+export const TELEGRAM_SEND_BUDGET_MS = 30_000;
 const TELEGRAM_CONNECT_TIMEOUT_MS = 3_000;
 const TELEGRAM_RESPONSE_TIMEOUT_MS = 15_000;
-const TELEGRAM_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000];
-const TELEGRAM_MAX_RETRY_AFTER_MS = 30_000;
+const TELEGRAM_CONNECT_RETRY_DELAYS_MS = [250, 500, 1_000, 1_000, 1_000];
+const TELEGRAM_SERVER_RETRY_DELAYS_MS = [500, 1_000, 2_000, 4_000, 8_000];
+// A random share of the wait, so many sends that failed together do not return together.
+const TELEGRAM_RETRY_JITTER = 0.25;
 // Only failures before the request left: a retry then cannot post the message twice.
 const TELEGRAM_CONNECT_ERROR_CODES = new Set([
 	"UND_ERR_CONNECT_TIMEOUT",
@@ -165,6 +172,7 @@ const TELEGRAM_CONNECT_ERROR_CODES = new Set([
 	"EAI_AGAIN",
 	"ENOTFOUND",
 ]);
+// Any other 4xx (400, 401, 403, 404) is permanent: the token, chat or text is wrong.
 const TELEGRAM_RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
 
 const connectErrorCode = (error: unknown) => {
@@ -184,6 +192,16 @@ const telegramRetryAfterMs = (body: string) => {
 	}
 };
 
+const withJitter = (ms: number) =>
+	Math.round(ms * (1 + (Math.random() * 2 - 1) * TELEGRAM_RETRY_JITTER));
+
+// Not for callers: lets a test point the sender at a local server.
+export interface TelegramTransport {
+	baseUrl?: string;
+	connect?: Record<string, unknown>;
+	budgetMs?: number;
+}
+
 export const sendTelegramNotification = async (
 	connection: typeof telegram.$inferInsert,
 	messageText: string,
@@ -191,8 +209,9 @@ export const sendTelegramNotification = async (
 		text: string;
 		url: string;
 	}[][],
+	transport: TelegramTransport = {},
 ) => {
-	const url = `https://api.telegram.org/bot${connection.botToken}/sendMessage`;
+	const url = `${transport.baseUrl ?? "https://api.telegram.org"}/bot${connection.botToken}/sendMessage`;
 	const body = JSON.stringify({
 		chat_id: connection.chatId,
 		message_thread_id: connection.messageThreadId,
@@ -204,20 +223,28 @@ export const sendTelegramNotification = async (
 		},
 	});
 	const dispatcher = new Agent({
-		connect: { timeout: TELEGRAM_CONNECT_TIMEOUT_MS },
+		connect: { timeout: TELEGRAM_CONNECT_TIMEOUT_MS, ...transport.connect },
 		headersTimeout: TELEGRAM_RESPONSE_TIMEOUT_MS,
 		bodyTimeout: TELEGRAM_RESPONSE_TIMEOUT_MS,
 	});
+	const budgetMs = transport.budgetMs ?? TELEGRAM_SEND_BUDGET_MS;
+	const startedAt = Date.now();
+	const remainingMs = () => budgetMs - (Date.now() - startedAt);
 	let lastError = "Unknown error";
+	let attempts = 0;
 	try {
 		for (let attempt = 1; attempt <= TELEGRAM_SEND_ATTEMPTS; attempt++) {
-			let waitMs = TELEGRAM_RETRY_DELAYS_MS[attempt - 1] ?? 0;
+			attempts = attempt;
+			let waitMs = withJitter(
+				TELEGRAM_CONNECT_RETRY_DELAYS_MS[attempt - 1] ?? 0,
+			);
 			try {
 				const response = await undiciFetch(url, {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
 					body,
 					dispatcher,
+					signal: AbortSignal.timeout(Math.max(remainingMs(), 1)),
 				});
 				if (response.ok) {
 					return;
@@ -229,10 +256,15 @@ export const sendTelegramNotification = async (
 				}
 				const retryAfterMs = telegramRetryAfterMs(responseBody);
 				if (retryAfterMs !== undefined) {
-					if (retryAfterMs > TELEGRAM_MAX_RETRY_AFTER_MS) {
+					if (retryAfterMs > remainingMs()) {
+						lastError += ` (Telegram asks to wait ${Math.ceil(retryAfterMs / 1000)} s, more than the ${Math.round(budgetMs / 1000)} s allowed)`;
 						break;
 					}
-					waitMs = Math.max(waitMs, retryAfterMs);
+					waitMs = retryAfterMs;
+				} else {
+					waitMs = withJitter(
+						TELEGRAM_SERVER_RETRY_DELAYS_MS[attempt - 1] ?? 0,
+					);
 				}
 			} catch (error) {
 				const code = connectErrorCode(error);
@@ -242,14 +274,19 @@ export const sendTelegramNotification = async (
 				}
 			}
 			if (attempt < TELEGRAM_SEND_ATTEMPTS) {
+				if (waitMs >= remainingMs()) {
+					break;
+				}
 				await new Promise((resolve) => setTimeout(resolve, waitMs));
 			}
 		}
 	} finally {
 		await dispatcher.close().catch(() => undefined);
 	}
-	console.log(`Failed to send telegram notification: ${lastError}`);
-	throw new Error(`Failed to send telegram notification: ${lastError}`);
+	const seconds = Math.round((Date.now() - startedAt) / 1000);
+	const message = `Failed to send telegram notification: ${lastError} (${attempts} ${attempts === 1 ? "attempt" : "attempts"}, ${seconds} s)`;
+	console.log(message);
+	throw new Error(message);
 };
 
 export const sendSlackNotification = async (

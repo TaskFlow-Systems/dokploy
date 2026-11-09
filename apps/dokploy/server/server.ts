@@ -20,6 +20,7 @@ import {
 	startDiskHistorySampler,
 } from "@dokploy/server";
 import { warnAboutInterruptedTraefikDeletion } from "@dokploy/server/services/domain-overview";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { config } from "dotenv";
 import type { NextApiRequest, NextApiResponse } from "next";
 import next from "next";
@@ -147,7 +148,7 @@ void app.prepare().then(async () => {
 			await encryptStoredNotificationSecrets().catch((error) => {
 				console.error("Failed to encrypt notification secrets:", error);
 			});
-			await sendDokployRestartNotifications();
+			notifyInBackground("restart", () => sendDokployRestartNotifications());
 			void cleanupOldDokployImages();
 			startDiskHistorySampler();
 			void warnAboutInterruptedTraefikDeletion();

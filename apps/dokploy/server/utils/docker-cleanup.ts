@@ -5,6 +5,7 @@ import {
 	sendDockerCleanupNotifications,
 } from "@dokploy/server";
 import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { scheduledJobs, scheduleJob } from "node-schedule";
 import { removeJob, schedule } from "./backup";
 
@@ -26,7 +27,9 @@ export const applyDockerCleanupSchedule = async (
 				CLEANUP_CRON_JOB,
 				guardScheduledRun(serverId, async () => {
 					await cleanupAll(serverId);
-					await sendDockerCleanupNotifications(organizationId);
+					notifyInBackground("docker cleanup", () =>
+						sendDockerCleanupNotifications(organizationId),
+					);
 				}),
 			);
 		}

@@ -94,6 +94,17 @@ describe("runVolumeBackup", () => {
 		expect(mocks.sendVolumeBackupNotifications).toHaveBeenCalledTimes(1);
 	});
 
+	it("finishes the status update and the run while the notification hangs", async () => {
+		mocks.backupVolume.mockResolvedValue("true");
+		mocks.execAsync.mockResolvedValue({ stdout: "", stderr: "" });
+		mocks.sendVolumeBackupNotifications.mockReturnValue(new Promise(() => {}));
+
+		await runVolumeBackup("vb-1");
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("d-1", "done");
+		expect(mocks.sendVolumeBackupNotifications).toHaveBeenCalledTimes(1);
+	});
+
 	it("does not throw when the run succeeds", async () => {
 		mocks.backupVolume.mockResolvedValue("true");
 		mocks.execAsync.mockResolvedValue({ stdout: "", stderr: "" });

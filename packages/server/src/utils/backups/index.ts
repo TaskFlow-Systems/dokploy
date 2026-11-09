@@ -4,6 +4,7 @@ import type { BackupSchedule } from "@dokploy/server/services/backup";
 import { findDestinationById } from "@dokploy/server/services/destination";
 import { getAllServers } from "@dokploy/server/services/server";
 import { getWebServerSettings } from "@dokploy/server/services/web-server-settings";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { eq } from "drizzle-orm";
 import { scheduleJob } from "node-schedule";
 import { db } from "../../db/index";
@@ -45,7 +46,9 @@ export const initCronJobs = async () => {
 						where: eq(member.role, "owner"),
 					});
 					if (owner) {
-						await sendDockerCleanupNotifications(owner.organizationId);
+						notifyInBackground("docker cleanup", () =>
+							sendDockerCleanupNotifications(owner.organizationId),
+						);
 					}
 				}),
 			);
@@ -70,9 +73,11 @@ export const initCronJobs = async () => {
 
 						await cleanupAll(serverId);
 
-						await sendDockerCleanupNotifications(
-							organizationId,
-							`Docker cleanup for Server ${name} (${serverId})`,
+						notifyInBackground("docker cleanup", () =>
+							sendDockerCleanupNotifications(
+								organizationId,
+								`Docker cleanup for Server ${name} (${serverId})`,
+							),
 						);
 					}),
 				);

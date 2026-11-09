@@ -1,6 +1,7 @@
 import {
 	sendTelegramNotification,
 	TELEGRAM_SEND_ATTEMPTS,
+	TELEGRAM_SEND_BUDGET_MS,
 } from "@dokploy/server/utils/notifications/utils";
 import { Agent } from "@dokploy/server/utils/undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -36,7 +37,8 @@ const send = async () => {
 
 beforeEach(() => {
 	fetchMock.mockReset();
-	vi.useFakeTimers({ toFake: ["setTimeout"] });
+	vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+	vi.spyOn(Math, "random").mockReturnValue(0.5);
 	vi.spyOn(console, "log").mockImplementation(() => {});
 });
 
@@ -74,8 +76,29 @@ describe("sendTelegramNotification", () => {
 		);
 	});
 
-	it("waits longer before each new attempt", async () => {
+	it("waits briefly after a failed connect, since the next one is independent", async () => {
 		fetchMock.mockRejectedValue(connectFailure());
+		const result = sendTelegramNotification(connection, "x").catch(() => "");
+
+		const callsAfter = async (ms: number) => {
+			await vi.advanceTimersByTimeAsync(ms);
+			return fetchMock.mock.calls.length;
+		};
+		expect(await callsAfter(0)).toBe(1);
+		expect(await callsAfter(249)).toBe(1);
+		expect(await callsAfter(1)).toBe(2);
+		expect(await callsAfter(499)).toBe(2);
+		expect(await callsAfter(1)).toBe(3);
+		expect(await callsAfter(1_000)).toBe(4);
+		expect(await callsAfter(1_000)).toBe(5);
+		expect(await callsAfter(1_000)).toBe(6);
+		await vi.runAllTimersAsync();
+		await result;
+		expect(fetchMock).toHaveBeenCalledTimes(TELEGRAM_SEND_ATTEMPTS);
+	});
+
+	it("waits longer before each new attempt after a server error", async () => {
+		fetchMock.mockImplementation(async () => reply(503, { ok: false }));
 		const result = sendTelegramNotification(connection, "x").catch(() => "");
 
 		const callsAfter = async (ms: number) => {
@@ -89,17 +112,31 @@ describe("sendTelegramNotification", () => {
 		expect(await callsAfter(1)).toBe(3);
 		expect(await callsAfter(2_000)).toBe(4);
 		expect(await callsAfter(4_000)).toBe(5);
-		expect(await callsAfter(8_000)).toBe(6);
 		await vi.runAllTimersAsync();
 		await result;
-		expect(fetchMock).toHaveBeenCalledTimes(TELEGRAM_SEND_ATTEMPTS);
+		expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(
+			TELEGRAM_SEND_ATTEMPTS,
+		);
+	});
+
+	it("spreads the waits so that sends that failed together do not return together", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		fetchMock.mockRejectedValue(connectFailure());
+		const result = sendTelegramNotification(connection, "x").catch(() => "");
+		await vi.advanceTimersByTimeAsync(0);
+		await vi.advanceTimersByTimeAsync(187);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fetchMock).toHaveBeenCalledTimes(2);
+		await vi.runAllTimersAsync();
+		await result;
 	});
 
 	it("gives up after the last attempt and names the last error", async () => {
 		fetchMock.mockRejectedValue(connectFailure());
 
 		expect(await send()).toBe(
-			"Failed to send telegram notification: fetch failed (UND_ERR_CONNECT_TIMEOUT)",
+			"Failed to send telegram notification: fetch failed (UND_ERR_CONNECT_TIMEOUT) (6 attempts, 4 s)",
 		);
 		expect(fetchMock).toHaveBeenCalledTimes(TELEGRAM_SEND_ATTEMPTS);
 	});
@@ -110,8 +147,15 @@ describe("sendTelegramNotification", () => {
 		);
 
 		expect(await send()).toBe(
-			'Failed to send telegram notification: 401 {"ok":false,"error_code":401,"description":"Unauthorized"}',
+			'Failed to send telegram notification: 401 {"ok":false,"error_code":401,"description":"Unauthorized"} (1 attempt, 0 s)',
 		);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it.each([400, 403, 404])("does not try again after a %i", async (status) => {
+		fetchMock.mockResolvedValueOnce(reply(status, { ok: false }));
+
+		expect(await send()).toContain(String(status));
 		expect(fetchMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -137,13 +181,58 @@ describe("sendTelegramNotification", () => {
 		await expect(result).resolves.toBeUndefined();
 	});
 
-	it("gives up at once when Telegram asks to wait longer than 30 s", async () => {
+	it("gives up at once when Telegram asks to wait longer than the budget allows", async () => {
 		fetchMock.mockResolvedValueOnce(
 			reply(429, { ok: false, parameters: { retry_after: 31 } }),
 		);
 
-		expect(await send()).toContain("429");
+		const message = await send();
+
+		expect(message).toContain("429");
+		expect(message).toContain("Telegram asks to wait 31 s");
 		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("counts the time already spent against a long retry_after", async () => {
+		fetchMock
+			.mockRejectedValueOnce(connectFailure())
+			.mockRejectedValueOnce(connectFailure())
+			.mockResolvedValueOnce(
+				reply(429, { ok: false, parameters: { retry_after: 30 } }),
+			);
+
+		const message = await send();
+
+		expect(message).toContain("Telegram asks to wait 30 s");
+		expect(fetchMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("ends a Telegram that is down for good well inside the budget", async () => {
+		fetchMock.mockImplementation(
+			() =>
+				new Promise((_resolve, reject) => {
+					setTimeout(() => reject(connectFailure()), 3_000);
+				}),
+		);
+		const startedAt = Date.now();
+
+		const message = await send();
+
+		const elapsed = Date.now() - startedAt;
+		expect(message).toContain("6 attempts");
+		expect(fetchMock).toHaveBeenCalledTimes(TELEGRAM_SEND_ATTEMPTS);
+		expect(elapsed).toBeGreaterThan(18_000);
+		expect(elapsed).toBeLessThan(24_000);
+		expect(elapsed).toBeLessThan(TELEGRAM_SEND_BUDGET_MS);
+	});
+
+	it("passes the rest of the budget to every request", async () => {
+		fetchMock.mockResolvedValueOnce(reply(200));
+
+		await send();
+
+		const signal = fetchMock.mock.calls[0]?.[1].signal as AbortSignal;
+		expect(signal).toBeInstanceOf(AbortSignal);
 	});
 
 	it("tries again after a server error", async () => {

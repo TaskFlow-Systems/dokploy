@@ -26,6 +26,7 @@ import {
 	normalizeRelativeFilePath,
 	quoteShellArg,
 } from "@dokploy/server/utils/filesystem/safe-path";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications/build-error";
 import { getBuildErrorMessage } from "@dokploy/server/utils/notifications/build-error-message";
 import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
@@ -68,7 +69,6 @@ import {
 } from "./deployment";
 import { generateApplyPatchesCommand } from "./patch";
 import { validUniqueServerAppName } from "./project";
-
 export type Compose = typeof compose.$inferSelect;
 
 export class ExactDeploymentFinalizationError extends Error {
@@ -642,12 +642,8 @@ export const deployCompose = async ({
 			} catch (error) {
 				throw new ExactDeploymentFinalizationError(operationId, error);
 			}
-			await sendSuccessNotification().catch((error) => {
-				console.error("Exact deployment success notification failed:", error);
-			});
-		} else {
-			await sendSuccessNotification();
 		}
+		notifyInBackground("build success", sendSuccessNotification);
 	} catch (error) {
 		if (error instanceof ExactDeploymentFinalizationError) {
 			throw error;
@@ -671,14 +667,16 @@ export const deployCompose = async ({
 		if (operationId) {
 			await finalizeDeploymentOperation(operationId, "failed");
 		}
-		await sendBuildErrorNotifications({
-			projectName: compose.environment.project.name,
-			applicationName: compose.name,
-			applicationType: "compose",
-			errorMessage,
-			buildLink,
-			organizationId: compose.environment.project.organizationId,
-		});
+		notifyInBackground("build error", () =>
+			sendBuildErrorNotifications({
+				projectName: compose.environment.project.name,
+				applicationName: compose.name,
+				applicationType: "compose",
+				errorMessage,
+				buildLink,
+				organizationId: compose.environment.project.organizationId,
+			}),
+		);
 		throw error;
 	} finally {
 		if (deployment && compose.sourceType !== "raw") {

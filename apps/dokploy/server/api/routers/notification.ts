@@ -47,6 +47,7 @@ import {
 	checkPermission,
 	type PermissionCtx,
 } from "@dokploy/server/services/permission";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import {
 	type NotificationSecretProvider,
 	redactNotificationSecrets,
@@ -630,10 +631,12 @@ export const notificationRouter = createTRPCRouter({
 					ServerName = result?.[0]?.name ?? "Remote";
 				}
 
-				await sendServerThresholdNotifications(organizationId, {
-					...input,
-					ServerName,
-				});
+				notifyInBackground("server threshold", () =>
+					sendServerThresholdNotifications(organizationId, {
+						...input,
+						ServerName,
+					}),
+				);
 			} catch (error) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",

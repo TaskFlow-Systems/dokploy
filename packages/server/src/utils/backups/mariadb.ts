@@ -7,6 +7,7 @@ import { findDestinationByIdForOrganization } from "@dokploy/server/services/des
 import { findEnvironmentById } from "@dokploy/server/services/environment";
 import type { Mariadb } from "@dokploy/server/services/mariadb";
 import { findProjectById } from "@dokploy/server/services/project";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { sendDatabaseBackupNotifications } from "../notifications/database-backup";
 import {
 	assertRcloneS3DestinationAllowed,
@@ -60,27 +61,31 @@ export const runMariadbBackup = async (
 		);
 		await runBackupCommand(backupCommand, deployment.logPath, mariadb.serverId);
 
-		await sendDatabaseBackupNotifications({
-			applicationName: name,
-			projectName: project.name,
-			databaseType: "mariadb",
-			type: "success",
-			organizationId: project.organizationId,
-			databaseName: backup.database,
-		});
+		notifyInBackground("database backup", () =>
+			sendDatabaseBackupNotifications({
+				applicationName: name,
+				projectName: project.name,
+				databaseType: "mariadb",
+				type: "success",
+				organizationId: project.organizationId,
+				databaseName: backup.database,
+			}),
+		);
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 	} catch (error) {
 		console.log(error);
-		await sendDatabaseBackupNotifications({
-			applicationName: name,
-			projectName: project.name,
-			databaseType: "mariadb",
-			type: "error",
-			// @ts-expect-error
-			errorMessage: error?.message || "Error message not provided",
-			organizationId: project.organizationId,
-			databaseName: backup.database,
-		});
+		notifyInBackground("database backup", () =>
+			sendDatabaseBackupNotifications({
+				applicationName: name,
+				projectName: project.name,
+				databaseType: "mariadb",
+				type: "error",
+				// @ts-expect-error
+				errorMessage: error?.message || "Error message not provided",
+				organizationId: project.organizationId,
+				databaseName: backup.database,
+			}),
+		);
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		throw error;
 	}
