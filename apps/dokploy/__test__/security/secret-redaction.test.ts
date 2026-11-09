@@ -181,6 +181,13 @@ describe("shared secret redaction helpers", () => {
 
 		expect(redacted).toEqual({
 			customGitUrl: `https://${REDACTED_SECRET_VALUE}@example.com/org/repo.git`,
+			customGitRemote: {
+				scheme: "https",
+				host: "example.com",
+				webPort: null,
+				sshPort: null,
+				path: "org/repo",
+			},
 			environment: {
 				env: REDACTED_SECRET_VALUE,
 				project: { env: REDACTED_SECRET_VALUE, organizationId: "org-1" },

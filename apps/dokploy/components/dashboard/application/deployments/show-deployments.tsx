@@ -292,7 +292,11 @@ export const ShowDeployments = ({
 							</div>
 						</div>
 						{(type === "application" || type === "compose") && (
-							<WebhookSecret id={id} type={type} />
+							<WebhookSecret
+								id={id}
+								type={type}
+								webhookUrl={isTokenHidden ? null : webhookUrl}
+							/>
 						)}
 					</div>
 				)}
