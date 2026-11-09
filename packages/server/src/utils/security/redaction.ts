@@ -1,4 +1,5 @@
 import { TRPCError } from "@trpc/server";
+import { type GitRemote, parseGitRemote } from "../providers/git-remote";
 
 export const REDACTED_SECRET_VALUE = "__DOKPLOY_REDACTED_SECRET__";
 const MCP_REDACTED_SECRET_VALUE = "[REDACTED]";
@@ -220,6 +221,11 @@ export const redactDeployableServiceSecretsFor = <
 
 	const withRelations = { ...redacted };
 	if ("customGitUrl" in withRelations) {
+		// The URL itself may carry credentials, so the browser gets only the
+		// parsed host and path (no user, password, token, query or fragment).
+		withRelations.customGitRemote = parseGitRemote(
+			withRelations.customGitUrl as string | null | undefined,
+		);
 		withRelations.customGitUrl = redactSensitiveText(
 			withRelations.customGitUrl as string | null | undefined,
 		);
@@ -234,7 +240,9 @@ export const redactDeployableServiceSecretsFor = <
 			withRelations[key] = redactNestedServerSecrets(withRelations[key]);
 		}
 	}
-	return redactServiceSharedEnv(withRelations as T, sharedEnvAccess);
+	return redactServiceSharedEnv(withRelations as T, sharedEnvAccess) as T & {
+		customGitRemote?: GitRemote | null;
+	};
 };
 
 export const redactDatabaseServiceSecrets = <
