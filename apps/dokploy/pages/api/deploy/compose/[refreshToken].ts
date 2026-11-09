@@ -74,6 +74,10 @@ export default async function handler(
 				gitlab: composeResult.gitlab,
 				bitbucket: composeResult.bitbucket,
 				gitea: composeResult.gitea,
+				service: {
+					sourceType: composeResult.sourceType,
+					webhookSecret: composeResult.webhookSecret,
+				},
 			})
 		) {
 			return;

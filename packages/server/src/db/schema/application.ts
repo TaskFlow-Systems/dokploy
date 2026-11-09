@@ -173,6 +173,9 @@ export const applications = pgTable("application", {
 	args: text("args").array(),
 	icon: text("icon"),
 	refreshToken: text("refreshToken").$defaultFn(() => nanoid()),
+	// Deploy webhook secret for sources without a provider row (Custom Git,
+	// Bitbucket, Soft Serve); encrypted at rest, unset means no check is possible.
+	webhookSecret: encryptedText("webhookSecret"),
 	sourceType: sourceType("sourceType").notNull().default("github"),
 	cleanCache: boolean("cleanCache").default(false),
 	// Github
@@ -643,4 +646,9 @@ export const apiUpdateApplication = createSchema
 	.extend({
 		applicationId: z.string().min(1),
 	})
-	.omit({ serverId: true, environmentId: true, refreshToken: true });
+	.omit({
+		serverId: true,
+		environmentId: true,
+		refreshToken: true,
+		webhookSecret: true,
+	});

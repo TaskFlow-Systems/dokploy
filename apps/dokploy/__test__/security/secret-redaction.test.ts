@@ -89,6 +89,7 @@ describe("shared secret redaction helpers", () => {
 		const redacted = redactDeployableServiceSecrets({
 			env: "TOKEN=secret",
 			refreshToken: "refresh-token",
+			webhookSecret: "hook-secret",
 			buildSecrets: "NPM_TOKEN=secret",
 			password: "docker-password",
 			security: {
@@ -100,6 +101,7 @@ describe("shared secret redaction helpers", () => {
 		expect(redacted).toMatchObject({
 			env: REDACTED_SECRET_VALUE,
 			refreshToken: REDACTED_SECRET_VALUE,
+			webhookSecret: REDACTED_SECRET_VALUE,
 			buildSecrets: REDACTED_SECRET_VALUE,
 			password: REDACTED_SECRET_VALUE,
 			security: {

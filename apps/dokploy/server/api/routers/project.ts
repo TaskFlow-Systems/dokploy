@@ -952,6 +952,7 @@ export const projectRouter = createTRPCRouter({
 									mounts,
 									appName,
 									refreshToken,
+									webhookSecret,
 									...application
 								} = await findApplicationById(id);
 								const newAppName = appName.substring(
@@ -1028,6 +1029,7 @@ export const projectRouter = createTRPCRouter({
 									domains,
 									appName,
 									refreshToken,
+									webhookSecret,
 									...compose
 								} = await findComposeById(id);
 

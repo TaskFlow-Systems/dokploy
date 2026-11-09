@@ -56,6 +56,9 @@ export const compose = pgTable("compose", {
 	env: encryptedText("env"),
 	composeFile: text("composeFile").notNull().default(""),
 	refreshToken: text("refreshToken").$defaultFn(() => nanoid()),
+	// Deploy webhook secret for sources without a provider row (Custom Git,
+	// Bitbucket, Soft Serve); encrypted at rest, unset means no check is possible.
+	webhookSecret: encryptedText("webhookSecret"),
 	sourceType: sourceTypeCompose("sourceType").notNull().default("github"),
 	composeType: composeType("composeType").notNull().default("docker-compose"),
 	// Github
@@ -308,7 +311,12 @@ export const apiUpdateCompose = createSchema
 		composeFile: z.string().optional(),
 		command: z.string().optional(),
 	})
-	.omit({ serverId: true, environmentId: true, refreshToken: true });
+	.omit({
+		serverId: true,
+		environmentId: true,
+		refreshToken: true,
+		webhookSecret: true,
+	});
 
 export const apiSaveEnvironmentVariablesCompose = createSchema
 	.pick({
