@@ -121,6 +121,7 @@ import {
 	issueCommentExists,
 	updateIssueComment,
 } from "@dokploy/server/services/github";
+import { settleBackgroundNotifications } from "@dokploy/server/utils/notifications/background";
 import { ExecError } from "@dokploy/server/utils/process/ExecError";
 
 const LOST_CONNECTION = "SSH connection error: Keepalive timeout";
@@ -578,6 +579,39 @@ describe("a build that succeeds", () => {
 
 		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
 		expect(mocks.sendBuildSuccessNotifications).toHaveBeenCalled();
+	});
+
+	it("finishes while the success notification is still being sent", async () => {
+		let release = () => {};
+		mocks.sendBuildSuccessNotifications.mockReturnValueOnce(
+			new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+		);
+
+		await deployApplication(applicationRequest);
+
+		expect(mocks.updateDeploymentStatus).toHaveBeenCalledWith("dep-1", "done");
+		expect(mocks.sendBuildSuccessNotifications).toHaveBeenCalledTimes(1);
+		release();
+		await settleBackgroundNotifications();
+	});
+
+	it("keeps the done status when the success notification fails", async () => {
+		mocks.sendBuildSuccessNotifications.mockRejectedValueOnce(
+			new Error("database down"),
+		);
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await deployApplication(applicationRequest);
+		await settleBackgroundNotifications();
+
+		expect(mocks.updateDeploymentStatus).not.toHaveBeenCalledWith(
+			"dep-1",
+			"error",
+		);
+		expect(log).toHaveBeenCalled();
+		log.mockRestore();
 	});
 
 	it("runs every compose step under a timeout", async () => {

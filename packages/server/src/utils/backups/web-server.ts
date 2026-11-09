@@ -13,6 +13,7 @@ import {
 	updateDeploymentStatus,
 } from "@dokploy/server/services/deployment";
 import { findDestinationById } from "@dokploy/server/services/destination";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { sendDokployBackupNotifications } from "../notifications/dokploy-backup";
 import { execAsync } from "../process/execAsync";
 import { buildFilesystemCopyCommand } from "./filesystem-copy";
@@ -137,10 +138,12 @@ export const runWebServerBackup = async (backup: BackupSchedule) => {
 			await execAsync(uploadCommand);
 			writeStream.write("Uploaded backup to S3 ✅\n");
 			writeStream.end();
-			await sendDokployBackupNotifications({
-				type: "success",
-				backupSize: formatBytes(computedBackupSize),
-			});
+			notifyInBackground("Dokploy backup", () =>
+				sendDokployBackupNotifications({
+					type: "success",
+					backupSize: formatBytes(computedBackupSize),
+				}),
+			);
 			await updateDeploymentStatus(deployment.deploymentId, "done");
 			return true;
 		} finally {
@@ -161,11 +164,13 @@ export const runWebServerBackup = async (backup: BackupSchedule) => {
 		writeStream.write("Backup error❌\n");
 		writeStream.write(`${safeErrorMessage}\n`);
 		writeStream.end();
-		await sendDokployBackupNotifications({
-			type: "error",
-			errorMessage: safeErrorMessage || "Error message not provided",
-			backupSize: formatBytes(computedBackupSize),
-		});
+		notifyInBackground("Dokploy backup", () =>
+			sendDokployBackupNotifications({
+				type: "error",
+				errorMessage: safeErrorMessage || "Error message not provided",
+				backupSize: formatBytes(computedBackupSize),
+			}),
+		);
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		throw error;
 	}

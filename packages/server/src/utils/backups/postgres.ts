@@ -7,6 +7,7 @@ import { findDestinationByIdForOrganization } from "@dokploy/server/services/des
 import { findEnvironmentById } from "@dokploy/server/services/environment";
 import type { Postgres } from "@dokploy/server/services/postgres";
 import { findProjectById } from "@dokploy/server/services/project";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { sendDatabaseBackupNotifications } from "../notifications/database-backup";
 import {
 	assertRcloneS3DestinationAllowed,
@@ -65,27 +66,31 @@ export const runPostgresBackup = async (
 			postgres.serverId,
 		);
 
-		await sendDatabaseBackupNotifications({
-			applicationName: name,
-			projectName: project.name,
-			databaseType: "postgres",
-			type: "success",
-			organizationId: project.organizationId,
-			databaseName: backup.database,
-		});
+		notifyInBackground("database backup", () =>
+			sendDatabaseBackupNotifications({
+				applicationName: name,
+				projectName: project.name,
+				databaseType: "postgres",
+				type: "success",
+				organizationId: project.organizationId,
+				databaseName: backup.database,
+			}),
+		);
 
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 	} catch (error) {
-		await sendDatabaseBackupNotifications({
-			applicationName: name,
-			projectName: project.name,
-			databaseType: "postgres",
-			type: "error",
-			// @ts-expect-error
-			errorMessage: error?.message || "Error message not provided",
-			organizationId: project.organizationId,
-			databaseName: backup.database,
-		});
+		notifyInBackground("database backup", () =>
+			sendDatabaseBackupNotifications({
+				applicationName: name,
+				projectName: project.name,
+				databaseType: "postgres",
+				type: "error",
+				// @ts-expect-error
+				errorMessage: error?.message || "Error message not provided",
+				organizationId: project.organizationId,
+				databaseName: backup.database,
+			}),
+		);
 
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 

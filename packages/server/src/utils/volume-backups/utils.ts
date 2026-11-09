@@ -10,6 +10,7 @@ import {
 } from "@dokploy/server/services/destination";
 import { findVolumeBackupById } from "@dokploy/server/services/volume-backups";
 import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import {
 	execAsync,
 	execAsyncRemote,
@@ -170,21 +171,16 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 				? "mongodb"
 				: volumeBackup.serviceType;
 
-		try {
-			await sendVolumeBackupNotifications({
+		notifyInBackground("volume backup", () =>
+			sendVolumeBackupNotifications({
 				projectName,
 				applicationName: volumeBackup.name,
 				volumeName: volumeBackup.volumeName,
 				serviceType: mappedServiceType,
 				type: "success",
 				organizationId,
-			});
-		} catch (notificationError) {
-			console.error(
-				"Failed to send volume backup success notification",
-				notificationError,
-			);
-		}
+			}),
+		);
 	} catch (error) {
 		const { VOLUME_BACKUPS_PATH } = paths(!!serverId);
 		const volumeBackupPath = path.join(
@@ -210,8 +206,8 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 				? "mongodb"
 				: volumeBackup.serviceType;
 
-		try {
-			await sendVolumeBackupNotifications({
+		notifyInBackground("volume backup", () =>
+			sendVolumeBackupNotifications({
 				projectName,
 				applicationName: volumeBackup.name,
 				volumeName: volumeBackup.volumeName,
@@ -219,13 +215,8 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 				type: "error",
 				organizationId,
 				errorMessage: error instanceof Error ? error.message : String(error),
-			});
-		} catch (notificationError) {
-			console.error(
-				"Failed to send volume backup error notification",
-				notificationError,
-			);
-		}
+			}),
+		);
 
 		// The deployment and the notification carry the failure; the caller
 		// (a manual run) still has to learn about it.

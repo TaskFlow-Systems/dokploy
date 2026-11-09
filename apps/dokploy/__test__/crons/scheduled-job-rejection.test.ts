@@ -64,6 +64,7 @@ vi.mock("@dokploy/server/constants", async (importOriginal) => ({
 import { initCronJobs } from "@dokploy/server/utils/backups";
 import { initEnterpriseBackupCronJobs } from "@dokploy/server/utils/crons/enterprise";
 import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
+import { settleBackgroundNotifications } from "@dokploy/server/utils/notifications/background";
 import { scheduleVolumeBackup } from "@dokploy/server/utils/volume-backups/utils";
 
 type Callback = () => Promise<void>;
@@ -121,13 +122,38 @@ describe("scheduled jobs never reject", () => {
 				organizationId: "org",
 			},
 		]);
+		mocks.cleanupAll.mockRejectedValue(new Error("docker is gone"));
+		await initCronJobs();
+
+		await expectGuarded(callbackOf("srv-1"), "srv-1");
+	});
+
+	it("a remote server's docker cleanup finishes when its notification fails", async () => {
+		mocks.getAllServers.mockResolvedValue([
+			{
+				serverId: "srv-1",
+				enableDockerCleanup: true,
+				name: "s",
+				organizationId: "org",
+			},
+		]);
 		mocks.cleanupAll.mockResolvedValue(undefined);
 		mocks.sendDockerCleanupNotifications.mockRejectedValue(
 			new Error("channel down"),
 		);
+		const log = vi.spyOn(console, "error").mockImplementation(() => {});
 		await initCronJobs();
 
-		await expectGuarded(callbackOf("srv-1"), "srv-1");
+		await expect(callbackOf("srv-1")()).resolves.toBeUndefined();
+		await settleBackgroundNotifications();
+
+		expect(rejections).toEqual([]);
+		expect(mocks.loggerError).not.toHaveBeenCalled();
+		expect(log).toHaveBeenCalledWith(
+			"Failed to send the docker cleanup notification:",
+			expect.any(Error),
+		);
+		log.mockRestore();
 	});
 
 	it("the enterprise license check", async () => {

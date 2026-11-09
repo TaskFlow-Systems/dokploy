@@ -97,6 +97,7 @@ import {
 	runningTraefikOperation,
 } from "@dokploy/server/setup/traefik-operation-lock";
 import { guardScheduledRun } from "@dokploy/server/utils/crons/guard";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { isProtectedTraefikPath } from "@dokploy/server/utils/traefik/application";
 import { generateOpenApiDocument } from "@dokploy/trpc-openapi";
 import { TRPCError } from "@trpc/server";
@@ -684,7 +685,9 @@ export const settingsRouter = createTRPCRouter({
 
 								await cleanupAll(server.serverId);
 
-								await sendDockerCleanupNotifications(server.organizationId);
+								notifyInBackground("docker cleanup", () =>
+									sendDockerCleanupNotifications(server.organizationId),
+								);
 							}),
 						);
 					}
@@ -716,8 +719,10 @@ export const settingsRouter = createTRPCRouter({
 
 							await cleanupAll();
 
-							await sendDockerCleanupNotifications(
-								ctx.session.activeOrganizationId,
+							notifyInBackground("docker cleanup", () =>
+								sendDockerCleanupNotifications(
+									ctx.session.activeOrganizationId,
+								),
 							);
 						}),
 					);

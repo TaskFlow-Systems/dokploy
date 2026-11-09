@@ -1,8 +1,9 @@
 import { findEnvironmentById } from "@dokploy/server/services/environment";
 import { findProjectById } from "@dokploy/server/services/project";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
+import { sendDatabaseBackupNotifications } from "../notifications/database-backup";
 import { ExecError } from "../process/ExecError";
 import { redactSensitiveText } from "../security/redaction";
-import { sendDatabaseBackupNotifications } from "../notifications/database-backup";
 
 const MAX_STDERR_CHARS = 2000;
 const RCLONE_NO_CONFIG_NOTICE = /^.*NOTICE: Config file .* not found.*$/gim;
@@ -45,21 +46,23 @@ export const reportRestoreFailure = async (input: {
 	try {
 		const environment = await findEnvironmentById(service.environmentId);
 		const project = await findProjectById(environment.projectId);
-		await sendDatabaseBackupNotifications({
-			operation: "restore",
-			applicationName: service.name,
-			projectName: project.name,
-			databaseType: notificationDatabaseType(input.databaseType) as
-				| "postgres"
-				| "mysql"
-				| "mongodb"
-				| "mariadb"
-				| "libsql",
-			type: "error",
-			errorMessage: input.message,
-			organizationId: project.organizationId,
-			databaseName: input.databaseName,
-		});
+		notifyInBackground("database backup", () =>
+			sendDatabaseBackupNotifications({
+				operation: "restore",
+				applicationName: service.name,
+				projectName: project.name,
+				databaseType: notificationDatabaseType(input.databaseType) as
+					| "postgres"
+					| "mysql"
+					| "mongodb"
+					| "mariadb"
+					| "libsql",
+				type: "error",
+				errorMessage: input.message,
+				organizationId: project.organizationId,
+				databaseName: input.databaseName,
+			}),
+		);
 	} catch (notificationError) {
 		console.error("Failed to send the restore failure notification", {
 			error: formatRestoreError(notificationError),

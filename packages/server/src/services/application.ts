@@ -13,6 +13,7 @@ import {
 	mechanizeDockerContainer,
 	waitForApplicationRollout,
 } from "@dokploy/server/utils/builders";
+import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
 import { sendBuildErrorNotifications } from "@dokploy/server/utils/notifications/build-error";
 import { getBuildErrorMessage } from "@dokploy/server/utils/notifications/build-error-message";
 import { sendBuildSuccessNotifications } from "@dokploy/server/utils/notifications/build-success";
@@ -329,15 +330,17 @@ export const deployApplication = async ({
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
 
-		await sendBuildSuccessNotifications({
-			projectName: application.environment.project.name,
-			applicationName: application.name,
-			applicationType: "application",
-			buildLink,
-			organizationId: application.environment.project.organizationId,
-			domains: application.domains,
-			environmentName: application.environment.name,
-		});
+		notifyInBackground("build success", () =>
+			sendBuildSuccessNotifications({
+				projectName: application.environment.project.name,
+				applicationName: application.name,
+				applicationType: "application",
+				buildLink,
+				organizationId: application.environment.project.organizationId,
+				domains: application.domains,
+				environmentName: application.environment.name,
+			}),
+		);
 	} catch (error) {
 		const errorMessage = await getBuildErrorMessage(
 			error,
@@ -353,14 +356,16 @@ export const deployApplication = async ({
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updateApplicationStatus(applicationId, "error");
 
-		await sendBuildErrorNotifications({
-			projectName: application.environment.project.name,
-			applicationName: application.name,
-			applicationType: "application",
-			errorMessage,
-			buildLink,
-			organizationId: application.environment.project.organizationId,
-		});
+		notifyInBackground("build error", () =>
+			sendBuildErrorNotifications({
+				projectName: application.environment.project.name,
+				applicationName: application.name,
+				applicationType: "application",
+				errorMessage,
+				buildLink,
+				organizationId: application.environment.project.organizationId,
+			}),
+		);
 
 		throw error;
 	} finally {
@@ -416,15 +421,17 @@ export const rebuildApplication = async ({
 		await updateDeploymentStatus(deployment.deploymentId, "done");
 		await updateApplicationStatus(applicationId, "done");
 
-		await sendBuildSuccessNotifications({
-			projectName: application.environment.project.name,
-			applicationName: application.name,
-			applicationType: "application",
-			buildLink,
-			organizationId: application.environment.project.organizationId,
-			domains: application.domains,
-			environmentName: application.environment.name,
-		});
+		notifyInBackground("build success", () =>
+			sendBuildSuccessNotifications({
+				projectName: application.environment.project.name,
+				applicationName: application.name,
+				applicationType: "application",
+				buildLink,
+				organizationId: application.environment.project.organizationId,
+				domains: application.domains,
+				environmentName: application.environment.name,
+			}),
+		);
 	} catch (error) {
 		const errorMessage = await getBuildErrorMessage(
 			error,
@@ -440,14 +447,16 @@ export const rebuildApplication = async ({
 		await updateDeploymentStatus(deployment.deploymentId, "error");
 		await updateApplicationStatus(applicationId, "error");
 
-		await sendBuildErrorNotifications({
-			projectName: application.environment.project.name,
-			applicationName: application.name,
-			applicationType: "application",
-			errorMessage,
-			buildLink,
-			organizationId: application.environment.project.organizationId,
-		});
+		notifyInBackground("build error", () =>
+			sendBuildErrorNotifications({
+				projectName: application.environment.project.name,
+				applicationName: application.name,
+				applicationType: "application",
+				errorMessage,
+				buildLink,
+				organizationId: application.environment.project.organizationId,
+			}),
+		);
 
 		throw error;
 	}
