@@ -1,4 +1,5 @@
 import { VALID_BRANCH_REGEX } from "@dokploy/server/utils/git-branch-validation";
+import { watchPathsSchema } from "@dokploy/server/utils/watch-paths/limits";
 import { relations } from "drizzle-orm";
 import {
 	boolean,
@@ -206,7 +207,7 @@ const createSchema = createInsertSchema(compose, {
 	createEnvFile: z.boolean().optional(),
 	composePath: z.string().min(1).optional(),
 	composeType: z.enum(["docker-compose", "stack"]).optional(),
-	watchPaths: z.array(z.string()).nullable().optional(),
+	watchPaths: watchPathsSchema.nullable().optional(),
 	sourceType: z
 		.enum(["git", "github", "gitlab", "bitbucket", "gitea", "raw"])
 		.optional(),
