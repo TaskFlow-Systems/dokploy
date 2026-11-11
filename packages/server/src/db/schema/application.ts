@@ -1,5 +1,6 @@
 import { normalizeRelativeFilePath } from "@dokploy/server/utils/filesystem/safe-path";
 import { VALID_BRANCH_REGEX } from "@dokploy/server/utils/git-branch-validation";
+import { watchPathsSchema } from "@dokploy/server/utils/watch-paths/limits";
 import { relations } from "drizzle-orm";
 import {
 	bigint,
@@ -436,7 +437,7 @@ const createSchema = createInsertSchema(applications, {
 	previewPath: z.string().nullable().optional(),
 	previewCertificateType: z.enum(["letsencrypt", "none", "custom"]).optional(),
 	previewRequireCollaboratorPermissions: z.boolean().nullable().optional(),
-	watchPaths: z.array(z.string()).nullable().optional(),
+	watchPaths: watchPathsSchema.nullable().optional(),
 	previewLabels: z.array(z.string()).nullable().optional(),
 	networkIds: z.array(z.string()).nullable().optional(),
 	detachDokployNetwork: z.boolean().optional(),
