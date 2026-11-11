@@ -76,7 +76,6 @@
         "@openpanel/nextjs": "^1.5.4",
         "@react-email/components": "^1.0.12",
         "@stepperize/react": "8.0.1",
-        "@stripe/stripe-js": "^4.10.0",
         "@tailwindcss/typography": "^0.5.20",
         "@tanstack/react-query": "^5.107.1",
         "@tanstack/react-table": "^9.3.1",
@@ -1366,8 +1365,6 @@
     "@stepperize/core": ["@stepperize/core@4.0.0", "", { "peerDependencies": { "typescript": ">=5.0.2" }, "optionalPeers": ["typescript"] }, "sha512-ciSSDJnylQNAZIudFJHXsDG3sPlYEA3XAmRrogeJTdxGwM7R/HnH3aNoWoPn7+hstHpHuzMx6xN9GVWyAnvXAQ=="],
 
     "@stepperize/react": ["@stepperize/react@8.0.1", "", { "dependencies": { "@stepperize/core": "4.0.0" }, "peerDependencies": { "react": "^18.0.0 || ^19.0.0" } }, "sha512-/Sz9QXzRblvqUlmQfKsMzzjH1TCGruip0DHlLRzYSoHL1XAUFhtVYnytGH2Gf7esNjyfPEQJoFcm+mO69bVx3Q=="],
-
-    "@stripe/stripe-js": ["@stripe/stripe-js@4.10.0", "", {}, "sha512-KrMOL+sH69htCIXCaZ4JluJ35bchuCCznyPyrbN8JXSGQfwBI1SuIEMZNwvy8L8ykj29t6sa5BAAiL7fNoLZ8A=="],
 
     "@swagger-api/apidom-ast": ["@swagger-api/apidom-ast@1.14.0", "", { "dependencies": { "@babel/runtime-corejs3": "^7.26.10", "@swagger-api/apidom-error": "^1.14.0", "@types/ramda": "~0.30.0", "ramda": "~0.30.0", "ramda-adjunct": "^5.0.0", "unraw": "^3.0.0" } }, "sha512-yzKA1z63/YL/bT50axexISPwQpQC7Vtl+OBVGMktz9lQgKpQTudKEp/k4c3D61jOS5YWKtu2UzcB65l/AY+0mQ=="],
 

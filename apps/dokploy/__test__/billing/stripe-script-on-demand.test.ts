@@ -12,15 +12,20 @@ const clientSources = ["components", "hooks", "lib", "pages", "utils"].flatMap(
 			.map((file) => path.join(dir, file)),
 );
 
-describe("Stripe's browser script", () => {
-	it("is reached only through the entry that waits for loadStripe", () => {
+describe("Stripe in the browser", () => {
+	it("is never loaded: checkout redirects to the session URL", () => {
 		const planStep = "components/dashboard/onboarding/steps/plan-step.tsx";
 		expect(clientSources).toContain(planStep);
-		expect(read(planStep)).toContain('from "@stripe/stripe-js/pure"');
+		expect(read(planStep)).toContain("window.location.href = session.url");
 
-		const importsMainEntry = clientSources.filter((file) =>
-			/["']@stripe\/stripe-js["']/.test(read(file)),
+		const importsStripeJs = clientSources.filter((file) =>
+			/["']@stripe\/stripe-js(\/[a-z]+)?["']/.test(read(file)),
 		);
-		expect(importsMainEntry).toEqual([]);
+		expect(importsStripeJs).toEqual([]);
+	});
+
+	it("does not declare the browser SDK", () => {
+		const manifest = JSON.parse(read("package.json"));
+		expect(manifest.dependencies["@stripe/stripe-js"]).toBeUndefined();
 	});
 });
