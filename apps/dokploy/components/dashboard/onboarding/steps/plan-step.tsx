@@ -1,6 +1,5 @@
 // Not the main entry: it injects Stripe's script as soon as this module runs, and the
 // sidebar's prefetch of the home page runs it on every panel, self-hosted ones included.
-import { loadStripe } from "@stripe/stripe-js/pure";
 import { ArrowRightIcon, CheckIcon } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -72,15 +71,14 @@ export const PlanStep = ({ onNext }: Props) => {
 		if (!productId) return;
 		setLoading(`checkout:${tier}`);
 		try {
-			const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
-			const stripe = publishableKey ? await loadStripe(publishableKey) : null;
 			const session = await createCheckoutSession({
 				tier,
 				productId,
 				serverQuantity: tier === "startup" ? STARTUP_SERVERS_INCLUDED : 1,
 				isAnnual: false,
 			});
-			await stripe?.redirectToCheckout({ sessionId: session.sessionId });
+			if (!session.url) throw new Error("Checkout session has no URL");
+			window.location.href = session.url;
 		} catch {
 			toast.error("Error starting checkout");
 			setLoading(null);
