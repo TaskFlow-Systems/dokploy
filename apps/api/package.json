@@ -13,7 +13,7 @@
 		"@dokploy/server": "workspace:*",
 		"@hono/node-server": "^2.1.6",
 		"@hono/zod-validator": "^0.9.1",
-		"dotenv": "^18.0.9",
+		"dotenv": "^18.0.10",
 		"hono": "^4.13.17",
 		"inngest": "4.26.1",
 		"pino": "^10.4.0",
