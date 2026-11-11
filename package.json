@@ -44,7 +44,7 @@
 		]
 	},
 	"overrides": {
-		"better-auth": "1.7.18",
+		"better-auth": "1.7.20",
 		"next": ">=16.4.3 <17.0.0",
 		"better-call": "1.4.5",
 		"@better-auth/utils": "0.5.1",
