@@ -63,13 +63,15 @@ jobs:
           .github/scripts/trivy-image-scan.sh "$image" \
             --image-src remote --platform linux/amd64
       # Only the scheduled scan: a build that still has the finding right after
-      # it was made would start the next build in a loop.
+      # it was made would start the next build in a loop. The build skips the
+      # layer cache: with it, apt layers come from the cache and keep the old
+      # packages, so the rebuild would push the same image.
       - name: Rebuild for Debian fixes
         if: failure() && github.event_name == 'schedule' && steps.scan.outputs.os-fixable > 0
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh workflow run agenthits-image.yml --repo "$GITHUB_REPOSITORY" --ref AgentHits-Dev
+          gh workflow run agenthits-image.yml --repo "$GITHUB_REPOSITORY" --ref AgentHits-Dev -f no-cache=true
           echo "Debian packages with a fix: ${{ steps.scan.outputs.os-fixable }}; started a build of AgentHits-Dev." >> "$GITHUB_STEP_SUMMARY"
 
   pinned:

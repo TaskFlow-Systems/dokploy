@@ -17,6 +17,10 @@ on:
         description: "Existing agenthits-vX.Y.Z tag to rebuild (empty: dev build of the selected branch)"
         type: string
         default: ""
+      no-cache:
+        description: "Build without the layer cache, so apt takes the Debian updates published since the cached layers"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -126,6 +130,10 @@ jobs:
           platforms: linux/amd64
           tags: ${{ steps.tags.outputs.tags }}
           outputs: type=registry,compression=zstd,compression-level=3
+          # The cached apt layers keep the Debian packages of the build that made
+          # them, so a rebuild for a Debian fix (image-audit.yml) skips the cache
+          # and writes fresh layers to it for the next builds.
+          no-cache: ${{ inputs.no-cache == true }}
           cache-from: type=registry,ref=${{ steps.tags.outputs.cache }}
           cache-to: type=registry,ref=${{ steps.tags.outputs.cache }},mode=max,compression=zstd,compression-level=3
           provenance: false
