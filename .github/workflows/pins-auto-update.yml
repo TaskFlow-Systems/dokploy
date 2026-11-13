@@ -6,12 +6,15 @@ name: Pins auto-update
 # Nixpacks, pack, Traefik, Postgres and Redis. .github/scripts/pins-update.sh
 # decides the range: patch and minor releases in the same major, patches only
 # for Traefik, Redis and 0.x tools. Releases outside it, and Railpack, are
-# listed in the PR for a manual one. Every day it keeps one PR from
-# deps/pins-auto-update into AgentHits-Dev and starts the checks on it; the
-# image build and Trivy scan in bun-migration-docker-check.yml show whether
-# the new pins carry a fix. It never merges. A commit of anyone else in the
-# branch stops the daily rebuild until the PR is merged or closed.
+# listed in the PR for a manual one. On every push to AgentHits-Dev and every
+# day it keeps one PR from deps/pins-auto-update into AgentHits-Dev and starts
+# the checks on it; the image build and Trivy scan in
+# bun-migration-docker-check.yml show whether the new pins carry a fix. It
+# never merges. A commit of anyone else in the
+# branch stops the rebuild until the PR is merged or closed.
 on:
+  push:
+    branches: [AgentHits-Dev]
   schedule:
     - cron: "30 3 * * *"
   workflow_dispatch:
@@ -19,9 +22,13 @@ on:
 permissions:
   contents: read
 
+# Rebuilt from the latest AgentHits-Dev commit after every push, so the checks
+# of the PR never run on an outdated base; a new push cancels the run on the
+# older one. Cancelling mid-publish is safe: the next run builds on a newer
+# base, gets a different tree, pushes and starts the checks.
 concurrency:
   group: pins-auto-update
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 env:
   BRANCH: deps/pins-auto-update
