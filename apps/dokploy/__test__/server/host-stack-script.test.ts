@@ -8,7 +8,10 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { PINNED_VERSIONS } from "@dokploy/server/setup/component-versions";
+import {
+	PINNED_VERSIONS,
+	REDIS_IMAGE,
+} from "@dokploy/server/setup/component-versions";
 import { buildHostStackUpdateScript } from "@dokploy/server/setup/host-stack";
 import type { HostStackUiComponent } from "@dokploy/server/setup/host-stack-rows";
 import {
@@ -123,7 +126,7 @@ const runHostScript = (
 	}
 };
 
-const REDIS_UPDATE_CALL = `docker service update --detach --update-order stop-first --update-failure-action rollback --image redis:${PINNED_VERSIONS.redis} dokploy-redis`;
+const REDIS_UPDATE_CALL = `docker service update --detach --update-order stop-first --update-failure-action rollback --image ${REDIS_IMAGE} dokploy-redis`;
 
 describe("buildHostStackUpdateScript", () => {
 	it("reuses the component update steps for Traefik unchanged", () => {
@@ -163,7 +166,7 @@ describe("buildHostStackUpdateScript", () => {
 	it("pins Redis to the pinned image and waits for PONG within a timeout", () => {
 		const script = buildHostStackUpdateScript(["redis"]);
 
-		expect(script).toContain(`redis_image="redis:${PINNED_VERSIONS.redis}"`);
+		expect(script).toContain(`redis_image="${REDIS_IMAGE}"`);
 		expect(script).toContain(
 			'docker service update --detach --update-order stop-first --update-failure-action rollback --image "$redis_image" dokploy-redis',
 		);
@@ -233,7 +236,7 @@ describe("Redis update run", () => {
 			const run = runHostScript(["redis"]);
 
 			expect(run.status).toBe(0);
-			expect(run.calls).toContain(`docker pull redis:${PINNED_VERSIONS.redis}`);
+			expect(run.calls).toContain(`docker pull ${REDIS_IMAGE}`);
 			expect(run.calls).toContain(REDIS_UPDATE_CALL);
 			expect(run.stdout).toContain(
 				`Redis version ${PINNED_VERSIONS.redis} installed`,
@@ -247,7 +250,7 @@ describe("Redis update run", () => {
 		"leaves Redis alone when it already runs the pinned image",
 		() => {
 			const run = runHostScript(["redis"], {
-				image: `redis:${PINNED_VERSIONS.redis}`,
+				image: REDIS_IMAGE,
 			});
 
 			expect(run.status).toBe(0);
@@ -269,7 +272,7 @@ describe("Redis update run", () => {
 
 			expect(run.status).toBe(1);
 			expect(run.stderr).toContain(
-				`dokploy-redis did not start on redis:${PINNED_VERSIONS.redis}`,
+				`dokploy-redis did not start on ${REDIS_IMAGE}`,
 			);
 			expect(run.stdout).not.toContain(COMPONENTS_UPDATE_DONE);
 		},
@@ -325,7 +328,7 @@ describe("Redis update run", () => {
 
 			expect(run.status).toBe(1);
 			expect(run.stderr).toContain(
-				`Pre-download failed: redis:${PINNED_VERSIONS.redis}. Nothing was changed.`,
+				`Pre-download failed: ${REDIS_IMAGE}. Nothing was changed.`,
 			);
 			expect(run.calls.some((call) => call.includes("service update"))).toBe(
 				false,

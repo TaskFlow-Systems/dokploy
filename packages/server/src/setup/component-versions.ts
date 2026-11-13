@@ -14,6 +14,11 @@ export const PINNED_VERSIONS = {
 	rclone: "1.76.0",
 } as const;
 
+// The panel's Redis runs the Alpine variant: on 2026-11-13 the Debian tags of
+// redis 8.x had not been rebuilt for a week and still shipped zlib1g with two
+// fixed high CVEs, while redis:8.10.3-alpine scanned clean.
+export const REDIS_IMAGE = `redis:${PINNED_VERSIONS.redis}-alpine`;
+
 export const NIXPACKS_VERSION = PINNED_VERSIONS.nixpacks;
 export const RAILPACK_VERSION = PINNED_VERSIONS.railpack;
 export const BUILDPACKS_VERSION = PINNED_VERSIONS.buildpacks;

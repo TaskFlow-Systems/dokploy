@@ -19,7 +19,7 @@
 | Docker Engine | 29.9.3 | docker-ce для noble и resolute, amd64 и arm64; в образе панели только docker-ce-cli для trixie |
 | Traefik | 3.7.17 | последний стабильный релиз (GitHub), образ `traefik:v3.7.17`; с этой версии собран на Go 1.27 |
 | Postgres (база панели) | 18.6 | `postgres:18.6`, более новых тегов 18.x нет |
-| Redis (база панели) | 8.10.3 | `redis:8.10.3`, более новых тегов 8.10.x нет |
+| Redis (база панели) | 8.10.3 | `redis:8.10.3-alpine`: Debian-теги redis 8.x на 2026-11-13 неделю не пересобирались и несли старый zlib1g, Alpine-вариант чистый; бот версий берёт только версии с тегом `-alpine` |
 | Nixpacks | 1.41.0 | последний релиз |
 | Railpack | 0.43.0 | образ фронтенда `railpack-frontend:v0.43.0`; с этой версии проекты без `.dockerignore` и своих исключений не кладут в контекст сборки `node_modules` (Node, Deno) и `venv`/`.venv` (Python) |
 | Buildpacks (pack) | 0.40.10 | последний релиз |

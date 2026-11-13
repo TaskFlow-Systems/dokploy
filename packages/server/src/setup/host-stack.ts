@@ -1,7 +1,7 @@
 import { getDokployVersionData, getUpdateData } from "../services/settings";
 import { execAsync } from "../utils/process/execAsync";
 import { spawnAsync } from "../utils/process/spawnAsync";
-import { PINNED_VERSIONS } from "./component-versions";
+import { PINNED_VERSIONS, REDIS_IMAGE } from "./component-versions";
 import {
 	buildHostStackRows,
 	HOST_STACK_UI_COMPONENTS,
@@ -12,8 +12,6 @@ import {
 	buildComponentUpdateSteps,
 	wrapComponentUpdateSteps,
 } from "./server-components";
-
-const REDIS_IMAGE = `redis:${PINNED_VERSIONS.redis}`;
 
 const UPDATE_CHECK_TIMEOUT_MS = 15_000;
 
