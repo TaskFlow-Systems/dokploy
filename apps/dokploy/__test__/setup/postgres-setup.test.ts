@@ -1,5 +1,8 @@
+import { PINNED_VERSIONS } from "@dokploy/server/setup/component-versions";
 import { initializePostgres } from "@dokploy/server/setup/postgres-setup";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const image = `postgres:${PINNED_VERSIONS.postgres}`;
 
 type ServiceOptions = {
 	version?: number;
@@ -61,16 +64,16 @@ describe("initializePostgres", () => {
 		inspectMock.mockRejectedValue(serviceNotFound());
 	});
 
-	it("pulls postgres 18.6 and creates the service with PGDATA when none exists", async () => {
+	it("pulls the pinned postgres and creates the service with PGDATA when none exists", async () => {
 		await initializePostgres();
 
-		expect(pullImageMock).toHaveBeenCalledWith("postgres:18.6");
+		expect(pullImageMock).toHaveBeenCalledWith(image);
 		expect(updateMock).not.toHaveBeenCalled();
 		expect(createServiceMock).toHaveBeenCalledTimes(1);
 
 		const options = createServiceMock.mock.calls[0]?.[0];
 		const spec = options?.TaskTemplate?.ContainerSpec;
-		expect(spec?.Image).toBe("postgres:18.6");
+		expect(spec?.Image).toBe(image);
 		expect(spec?.Env).toContain("PGDATA=/var/lib/postgresql/data");
 		expect(spec?.Mounts).toEqual([
 			expect.objectContaining({ Target: "/var/lib/postgresql/data" }),
@@ -86,12 +89,12 @@ describe("initializePostgres", () => {
 
 		await expect(initializePostgres()).resolves.toBeUndefined();
 
-		expect(pullImageMock).toHaveBeenCalledWith("postgres:18.6");
+		expect(pullImageMock).toHaveBeenCalledWith(image);
 		expect(createServiceMock).toHaveBeenCalledTimes(1);
 
 		const options = createServiceMock.mock.calls[0]?.[0];
 		const spec = options?.TaskTemplate?.ContainerSpec;
-		expect(spec?.Image).toBe("postgres:18.6");
+		expect(spec?.Image).toBe(image);
 		expect(spec?.Env).toContain("PGDATA=/var/lib/postgresql/data");
 	});
 
@@ -141,7 +144,7 @@ describe("initializePostgres", () => {
 
 		await expect(initializePostgres()).resolves.toBeUndefined();
 
-		expect(pullImageMock).toHaveBeenCalledWith("postgres:18.6");
+		expect(pullImageMock).toHaveBeenCalledWith(image);
 		expect(createServiceMock).toHaveBeenCalledTimes(1);
 	});
 });

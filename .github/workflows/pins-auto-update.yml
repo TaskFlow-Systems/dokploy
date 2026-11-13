@@ -116,6 +116,9 @@ jobs:
         with:
           name: pins-auto-update
           path: ${{ runner.temp }}/pins
+          # .nvmrc and .devcontainer/Dockerfile are pin files too; without this
+          # upload-artifact drops dot files and the branch keeps the old Node.
+          include-hidden-files: true
           retention-days: 3
 
   publish:
