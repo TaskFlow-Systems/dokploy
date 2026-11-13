@@ -2,7 +2,7 @@
 # Debian 13: Debian 12 leaves the critical zlib1g CVE-2023-45853 and dozens of
 # high findings unfixed. The tag is pinned to its multi-arch index digest, the
 # same in every Dockerfile (component-versions-sync.test.ts).
-FROM node:26.13.0-trixie-slim@sha256:5adad64f9a1fca2d51972caa65983634c8a774eb300d72b20f7f2a0f60368072 AS base
+FROM node:26.13.1-trixie-slim@sha256:e6bedef217677b276c591795e169840edd9096dbf13f29df8ef8d1856b8820bc AS base
 ENV BUN_INSTALL="/root/.bun"
 ENV PATH="$BUN_INSTALL/bin:$PATH"
 # Bun, Nixpacks and Railpack come from GitHub releases; the script falls back to
@@ -163,7 +163,7 @@ RUN mise_arch="$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')" \
     && rm /tmp/mise.tar.gz
 
 # Install buildpacks
-COPY --from=buildpacksio/pack:0.40.10 /usr/local/bin/pack /usr/local/bin/pack
+COPY --from=buildpacksio/pack:0.40.11 /usr/local/bin/pack /usr/local/bin/pack
 
 EXPOSE 3000
 
