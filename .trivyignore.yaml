@@ -32,3 +32,13 @@ vulnerabilities:
       - usr/local/bin/railpack
     statement: The fix is golang.org/x/net 0.62.0. buildx 0.38.2, compose 5.7.0, pack 0.40.10 and Railpack 0.43.0, the latest releases, use older versions.
     expired_at: 2026-11-27
+  - id: CVE-2026-76844
+    purls:
+      - pkg:deb/debian/zlib1g@1.3.dfsg%2Breally1.3.1-1%2Bb1
+    statement: postgres 18.7 and redis 8.10.3, the latest official images, ship zlib1g 1:1.3.dfsg+really1.3.1-1+b1; Debian's fix 1-1+deb13u1 (DSA-6613-1) waits for their rebuild. Images built here take it through apt-get upgrade, so the entry matches only the old version.
+    expired_at: 2026-11-20
+  - id: CVE-2026-85091
+    purls:
+      - pkg:deb/debian/zlib1g@1.3.dfsg%2Breally1.3.1-1%2Bb1
+    statement: postgres 18.7 and redis 8.10.3, the latest official images, ship zlib1g 1:1.3.dfsg+really1.3.1-1+b1; Debian's fix 1-1+deb13u1 (DSA-6613-1) waits for their rebuild. Images built here take it through apt-get upgrade, so the entry matches only the old version.
+    expired_at: 2026-11-20
