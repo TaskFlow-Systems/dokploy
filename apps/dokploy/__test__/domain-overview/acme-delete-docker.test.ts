@@ -1,5 +1,11 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
@@ -11,6 +17,7 @@ import {
 	firstShellOnly,
 	lockFile,
 	MODES,
+	markerFile,
 	markerText,
 	REAL_JQ,
 	resultOf,
@@ -93,6 +100,66 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 
 				const signalled = Date.now();
 				hung.kill("SIGTERM");
+				await exited;
+
+				expect(Date.now() - signalled).toBeLessThan(8_000);
+				expect(output).toContain("DOKPLOY_RESULT interrupted");
+				expect(running()).toBe("true");
+				expect(existsSync(lockFile)).toBe(false);
+			});
+
+			// CI saw the TERM test above take 20 s once: the signal came between
+			// the fork of docker and CHILD=$!, so cleanup neither waited for nor
+			// killed the hung docker, whose subshell kept stdout open until its
+			// sleep ended. Once the marker says stopping, this date waits for the
+			// stop to show and sends TERM from the first call that sees it, so the
+			// signal lands at the first date after that fork.
+			it("reacts to TERM that comes right after docker starts", async () => {
+				const realDate = path.join(binDir, "date.real");
+				renameSync(path.join(binDir, "date"), realDate);
+				writeFileSync(
+					path.join(binDir, "date"),
+					`#!/bin/sh
+if [ ! -e "$FAKE_STATE/termed" ] && grep -q '^phase=stopping' ${JSON.stringify(markerFile)} 2>/dev/null; then
+	n=0
+	while ! grep -q '^stop ' "$FAKE_STATE/calls" 2>/dev/null && [ "$n" -lt 30 ]; do
+		sleep 0.01
+		n=$((n + 1))
+	done
+	if grep -q '^stop ' "$FAKE_STATE/calls" 2>/dev/null; then
+		: > "$FAKE_STATE/termed"
+		kill -TERM "$(cat "$FAKE_STATE/main.pid")"
+	fi
+fi
+exec ${JSON.stringify(realDate)} "$@"
+`,
+					{ mode: 0o755 },
+				);
+				const hung = spawn(
+					shell,
+					[
+						"-c",
+						fastScript(targets("one.example.com"), {
+							stopSeconds: 30,
+							cleanupWaitSeconds: 2,
+						}),
+					],
+					{
+						env: baseEnv({ FAKE_HANG: "stop" }),
+						stdio: ["ignore", "pipe", "ignore"],
+					},
+				);
+				writeFileSync(path.join(stateDir, "main.pid"), String(hung.pid));
+				let output = "";
+				hung.stdout?.on("data", (chunk) => {
+					output += chunk.toString();
+				});
+				const exited = new Promise<void>((resolve) =>
+					hung.on("close", () => resolve()),
+				);
+				await waitFor(() => existsSync(path.join(stateDir, "termed")));
+
+				const signalled = Date.now();
 				await exited;
 
 				expect(Date.now() - signalled).toBeLessThan(8_000);
