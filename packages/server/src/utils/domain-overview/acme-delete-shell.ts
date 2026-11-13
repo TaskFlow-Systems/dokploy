@@ -144,12 +144,19 @@ dk_launch() {
 	DK_SECS="$1"
 	shift
 	rm -f "$OUT.rc" "$OUT.pid" 2>/dev/null
+	# A trap runs between any two commands, so a signal right after the fork
+	# would find CHILD empty: cleanup would not wait for or kill the child,
+	# and the child would keep the caller's output open until docker ends.
+	# DK_LAST and "launching" let dk_settle find it through $! instead.
+	DK_LAST="$!"
 	if [ -n "$TO" ]; then
-		( $TO "$DK_SECS" $SUDO docker "$@" >"$OUT" 2>/dev/null & echo $! >"$OUT.pid"; wait $!; echo $? >"$OUT.rc" ) &
 		DK_END=$(($(date +%s) + DK_SECS + 4))
+		CHILD=launching
+		( $TO "$DK_SECS" $SUDO docker "$@" >"$OUT" 2>/dev/null & echo $! >"$OUT.pid"; wait $!; echo $? >"$OUT.rc" ) &
 	else
-		( $SUDO docker "$@" >"$OUT" 2>/dev/null & echo $! >"$OUT.pid"; wait $!; echo $? >"$OUT.rc" ) &
 		DK_END=$(($(date +%s) + DK_SECS + 1))
+		CHILD=launching
+		( $SUDO docker "$@" >"$OUT" 2>/dev/null & echo $! >"$OUT.pid"; wait $!; echo $? >"$OUT.rc" ) &
 	fi
 	CHILD=$!
 }
@@ -187,6 +194,9 @@ dk() {
 }
 
 dk_settle() {
+	if [ "$CHILD" = launching ]; then
+		if [ "$!" != "$DK_LAST" ]; then CHILD="$!"; else CHILD=""; fi
+	fi
 	[ -n "$CHILD" ] || return 0
 	c_end=$(($(date +%s) + CLEANUP_WAIT))
 	[ "$DK_END" -le "$c_end" ] || DK_END="$c_end"
