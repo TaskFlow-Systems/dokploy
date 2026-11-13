@@ -222,7 +222,9 @@ const redisRow = (image: string | null): HostStackRow => {
 	if (installed === null) {
 		return unknownRow("redis", target, "ui");
 	}
-	const outdated = compareVersions(installed, target) < 0;
+	const outdated =
+		compareVersions(installed, target) < 0 ||
+		!imageTag(image ?? "")?.endsWith("-alpine");
 	return {
 		name: "redis",
 		installed,

@@ -1,6 +1,9 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { PINNED_VERSIONS } from "@dokploy/server/setup/component-versions";
+import {
+	PINNED_VERSIONS,
+	REDIS_IMAGE,
+} from "@dokploy/server/setup/component-versions";
 import { TRAEFIK_VERSION } from "@dokploy/server/setup/traefik-setup";
 import { describe, expect, it } from "vitest";
 
@@ -37,9 +40,9 @@ describe("install-agenthits.sh defaults", () => {
 		).toBe(PINNED_VERSIONS.postgres);
 	});
 	it("pins Redis", () => {
-		expect(
-			pinIn(installer, /REDIS_IMAGE="\$\{REDIS_IMAGE:-redis:([^}]+)\}"/),
-		).toBe(PINNED_VERSIONS.redis);
+		expect(pinIn(installer, /REDIS_IMAGE="\$\{REDIS_IMAGE:-([^}]+)\}"/)).toBe(
+			REDIS_IMAGE,
+		);
 	});
 	it("pins Nixpacks", () => {
 		expect(
@@ -122,7 +125,9 @@ describe("workflows hold no pinned version", () => {
 	it.each(workflows)("%s sets up Bun and Node from files", (_, text) => {
 		expect(text).not.toMatch(/bun-version:/);
 		expect(text).not.toMatch(/node-version:/);
-		for (const match of text.matchAll(/oven-sh\/setup-bun@\S+\n\s+with:\n\s+(\S+)/g)) {
+		for (const match of text.matchAll(
+			/oven-sh\/setup-bun@\S+\n\s+with:\n\s+(\S+)/g,
+		)) {
 			expect(match[1]).toBe("bun-version-file:");
 		}
 	});
@@ -216,7 +221,10 @@ describe("Node.js image", () => {
 	});
 
 	it("dev container builds on the same image", () => {
-		const image = read("Dockerfile").match(nodeImage)?.slice(1, 3).join("-trixie-slim@");
+		const image = read("Dockerfile")
+			.match(nodeImage)
+			?.slice(1, 3)
+			.join("-trixie-slim@");
 		expect(read(".devcontainer/Dockerfile")).toContain(`FROM node:${image}`);
 	});
 });

@@ -211,7 +211,8 @@ if hub_tags library/postgres "$((${postgres_cur%%.*} + 1))." | stable | grep -q 
 fi
 
 redis_cur="$(current_pin redis)"
-redis_new="$(hub_tags library/redis "${redis_cur%%.*}." | pick redis patch "$redis_cur")"
+# The panel runs redis:<version>-alpine, so only versions with that tag count.
+redis_new="$(hub_tags library/redis "${redis_cur%%.*}." | sed -n 's/^\([0-9.]*\)-alpine$/\1/p' | pick redis patch "$redis_cur")"
 if [ "$redis_new" != "$redis_cur" ]; then
 	replace "$redis_cur" "$redis_new" 'REDIS_IMAGE:-redis:' install-agenthits.sh
 	replace "$redis_cur" "$redis_new" 'redis: "' "$pins"

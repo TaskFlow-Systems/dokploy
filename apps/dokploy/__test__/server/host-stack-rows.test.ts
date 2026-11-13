@@ -1,4 +1,7 @@
-import { PINNED_VERSIONS } from "@dokploy/server/setup/component-versions";
+import {
+	PINNED_VERSIONS,
+	REDIS_IMAGE,
+} from "@dokploy/server/setup/component-versions";
 import {
 	buildHostStackRows,
 	HOST_STACK_COMPONENTS,
@@ -16,7 +19,7 @@ const upToDate: HostStackReadings = {
 	docker: PINNED_VERSIONS.docker,
 	traefikImage: `traefik:v${TRAEFIK_VERSION}`,
 	postgresImage: `postgres:${PINNED_VERSIONS.postgres}`,
-	redisImage: `redis:${PINNED_VERSIONS.redis}`,
+	redisImage: REDIS_IMAGE,
 	panel: {
 		installed: "agenthits-dev",
 		latest: "agenthits-dev",
@@ -210,8 +213,17 @@ describe("buildHostStackRows", () => {
 			rowNamed(rowsFor({ redisImage: "redis:8.9.9" }), "redis").outdated,
 		).toBe(true);
 		expect(
-			rowNamed(rowsFor({ redisImage: "redis:8.10.3" }), "redis").outdated,
+			rowNamed(rowsFor({ redisImage: REDIS_IMAGE }), "redis").outdated,
 		).toBe(false);
+	});
+
+	it("marks the Debian variant of the pinned Redis as updatable, since the panel runs the Alpine one", () => {
+		expect(
+			rowNamed(
+				rowsFor({ redisImage: `redis:${PINNED_VERSIONS.redis}` }),
+				"redis",
+			),
+		).toMatchObject({ installed: PINNED_VERSIONS.redis, outdated: true });
 	});
 
 	it("reports components whose version cannot be read as unknown rather than outdated", () => {
