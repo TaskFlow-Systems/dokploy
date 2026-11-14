@@ -5,7 +5,7 @@
 export const PINNED_VERSIONS = {
 	node: "26.13.1",
 	docker: "29.9.3",
-	traefik: "3.7.18",
+	traefik: "3.7.19",
 	postgres: "18.7",
 	redis: "8.10.3",
 	nixpacks: "1.41.0",
