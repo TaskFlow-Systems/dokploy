@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import packageInfo from "../../package.json";
 
 const mocks = vi.hoisted(() => ({
 	assertNoTraefikDeletion: vi.fn(),
@@ -527,7 +528,7 @@ describe("settings Docker server boundary", () => {
 		await expect(createCaller().updateServer()).resolves.toBe(true);
 
 		expect(mocks.getAgentHitsUpdateCommand).toHaveBeenCalledWith(
-			"v0.31.0",
+			packageInfo.version,
 			"off_v0.29.8/Fork_159+next",
 			"v0.30.0",
 			undefined,
@@ -587,7 +588,7 @@ describe("settings Docker server boundary", () => {
 		expect(mocks.reloadDockerResource).toHaveBeenCalledWith(
 			"dokploy",
 			undefined,
-			"v0.31.0",
+			packageInfo.version,
 		);
 		log.mockRestore();
 	});
@@ -606,7 +607,7 @@ describe("settings Docker server boundary", () => {
 		);
 
 		expect(mocks.getAgentHitsUpdateCommand).toHaveBeenCalledWith(
-			"v0.31.0",
+			packageInfo.version,
 			"off_v0.29.8/Fork_159+next",
 			"v0.30.0",
 			4,

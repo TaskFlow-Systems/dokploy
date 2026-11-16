@@ -121,11 +121,14 @@ const { organization } = await import("better-auth/plugins");
 const drizzleAdapterOptions = vi.mocked(drizzleAdapter).mock.calls[0]?.[1];
 const organizationOptions = vi.mocked(organization).mock.calls[0]?.[0];
 
-const apiKeyRequest = {
-	headers: {
-		"x-api-key": "dokploy-test-key",
-	},
-} as unknown as IncomingMessage;
+// validateRequest keeps its answer per request object, so every case needs
+// its own request.
+const apiKeyRequest = () =>
+	({
+		headers: {
+			"x-api-key": "dokploy-test-key",
+		},
+	}) as unknown as IncomingMessage;
 
 const userRecord = {
 	id: "user-1",
@@ -180,7 +183,7 @@ describe("validateRequest API key sessions", () => {
 		});
 		mocks.checkPermission.mockRejectedValue(new Error("Permission denied"));
 
-		await expect(validateRequest(apiKeyRequest)).resolves.toEqual({
+		await expect(validateRequest(apiKeyRequest())).resolves.toEqual({
 			session: null,
 			user: null,
 		});
@@ -189,7 +192,7 @@ describe("validateRequest API key sessions", () => {
 	it("rejects API key metadata for an organization the key owner is not a member of", async () => {
 		mocks.memberFindFirst.mockResolvedValue(undefined);
 
-		await expect(validateRequest(apiKeyRequest)).resolves.toEqual({
+		await expect(validateRequest(apiKeyRequest())).resolves.toEqual({
 			session: null,
 			user: null,
 		});
@@ -203,7 +206,7 @@ describe("validateRequest API key sessions", () => {
 			},
 		});
 
-		await expect(validateRequest(apiKeyRequest)).resolves.toMatchObject({
+		await expect(validateRequest(apiKeyRequest())).resolves.toMatchObject({
 			session: {
 				userId: "user-1",
 				activeOrganizationId: "org-1",
@@ -222,12 +225,35 @@ describe("validateRequest API key sessions", () => {
 			{ api: ["read"] },
 		);
 	});
+
+	it("verifies the API key once when the same request is validated twice", async () => {
+		mocks.memberFindFirst.mockResolvedValue({
+			role: "owner",
+			organization: {
+				ownerId: "user-1",
+			},
+		});
+		const request = apiKeyRequest();
+
+		const first = await validateRequest(request);
+		const second = await validateRequest(request);
+
+		expect(second).toBe(first);
+		expect(first).toMatchObject({
+			session: { userId: "user-1", activeOrganizationId: "org-1" },
+		});
+		expect(mocks.verifyApiKey).toHaveBeenCalledTimes(1);
+
+		await validateRequest(apiKeyRequest());
+		expect(mocks.verifyApiKey).toHaveBeenCalledTimes(2);
+	});
 });
 
 describe("validateRequest cookie sessions", () => {
-	const cookieRequest = {
-		headers: { cookie: "better-auth.session_token=token" },
-	} as unknown as IncomingMessage;
+	const cookieRequest = () =>
+		({
+			headers: { cookie: "better-auth.session_token=token" },
+		}) as unknown as IncomingMessage;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -248,7 +274,7 @@ describe("validateRequest cookie sessions", () => {
 			user: { enableEnterpriseFeatures: true, isValidEnterpriseLicense: true },
 		});
 
-		await expect(validateRequest(cookieRequest)).resolves.toMatchObject({
+		await expect(validateRequest(cookieRequest())).resolves.toMatchObject({
 			session: { id: "session-1", activeOrganizationId: "org-1" },
 			user: {
 				id: "user-1",
@@ -263,7 +289,7 @@ describe("validateRequest cookie sessions", () => {
 	it("falls back to the user itself when there is no membership", async () => {
 		mocks.memberFindFirst.mockResolvedValue(undefined);
 
-		await expect(validateRequest(cookieRequest)).resolves.toMatchObject({
+		await expect(validateRequest(cookieRequest())).resolves.toMatchObject({
 			session: { activeOrganizationId: "" },
 			user: {
 				id: "user-1",

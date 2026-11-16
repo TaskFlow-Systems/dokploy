@@ -1,3 +1,4 @@
+import { File as NodeFile } from "node:buffer";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,9 +23,8 @@ vi.mock("@dokploy/server/constants", async (importOriginal) => {
 });
 
 if (typeof window === "undefined") {
-	const undici = require("undici");
-	globalThis.File = undici.File as any;
-	globalThis.FileList = undici.FileList as any;
+	globalThis.File = NodeFile as unknown as typeof globalThis.File;
+	globalThis.FileList = class FileList {} as typeof globalThis.FileList;
 }
 
 const app = { appName: "attacker", serverId: null, buildServerId: null } as any;

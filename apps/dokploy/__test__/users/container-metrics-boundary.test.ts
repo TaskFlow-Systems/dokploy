@@ -106,8 +106,8 @@ vi.mock("@/server/api/utils/monitoring-access", () => ({
 		mocks.assertContainerMetricsServiceAccess,
 }));
 
-vi.mock("@dokploy/server/utils/url/network", () => ({
-	fetchWithPublicEgress: mocks.fetch,
+vi.mock("@dokploy/server/services/logs-and-metrics/provider-fetch", () => ({
+	providerFetch: mocks.fetch,
 }));
 
 const { userRouter } = await import("../../server/api/routers/user");
@@ -198,10 +198,6 @@ describe("user.getContainerMetrics target boundary", () => {
 					Authorization: "Bearer stored-remote-token",
 				},
 			},
-			{
-				allowPrivateNetwork: true,
-				fieldName: "Monitoring metrics URL",
-			},
 		);
 		expect(mocks.assertContainerMetricsServiceAccess).toHaveBeenCalledWith(
 			expect.anything(),
@@ -256,10 +252,6 @@ describe("user.getContainerMetrics target boundary", () => {
 				headers: {
 					Authorization: "Bearer stored-local-token",
 				},
-			},
-			{
-				allowPrivateNetwork: true,
-				fieldName: "Monitoring metrics URL",
 			},
 		);
 	});

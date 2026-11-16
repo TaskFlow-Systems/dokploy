@@ -89,18 +89,56 @@ describe("vault provider stored secret binding", () => {
 				message: "Re-enter the vault provider credentials to change url",
 			}),
 		);
+	});
 
-		expect(
+	it("rejects reading another HashiCorp mount with a kept token", () => {
+		expect(() =>
 			mergeVaultProviderConfig(
 				{ ...storedHashicorp, token: VAULT_SECRET_MASK, mount: "kv" },
 				storedHashicorp,
 			),
-		).toEqual({ ...storedHashicorp, mount: "kv" });
+		).toThrow(
+			expect.objectContaining({
+				code: "BAD_REQUEST",
+				message: "Re-enter the vault provider credentials to change mount",
+			}),
+		);
+	});
 
+	it("names every changed HashiCorp field when a kept token would follow them", () => {
+		expect(() =>
+			mergeVaultProviderConfig(
+				{
+					...storedHashicorp,
+					url: "https://collector.example.net",
+					token: VAULT_SECRET_MASK,
+					mount: "kv",
+				},
+				storedHashicorp,
+			),
+		).toThrow(
+			expect.objectContaining({
+				code: "BAD_REQUEST",
+				message: "Re-enter the vault provider credentials to change url, mount",
+			}),
+		);
+	});
+
+	it("keeps the stored HashiCorp token when nothing else changes", () => {
+		expect(
+			mergeVaultProviderConfig(
+				{ ...storedHashicorp, token: VAULT_SECRET_MASK },
+				storedHashicorp,
+			),
+		).toEqual(storedHashicorp);
+	});
+
+	it("accepts a new HashiCorp URL and mount with a re-entered token", () => {
 		const reentered = {
 			...storedHashicorp,
 			url: "https://vault-new.example.com",
 			token: "new-token",
+			mount: "kv",
 		};
 		expect(mergeVaultProviderConfig(reentered, storedHashicorp)).toEqual(
 			reentered,

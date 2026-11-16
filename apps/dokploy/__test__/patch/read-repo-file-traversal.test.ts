@@ -49,7 +49,9 @@ describe("patch.readRepoFile path traversal", () => {
 		const command = execMocks.execAsync.mock.calls[0]?.[0] ?? "";
 		const { PATCH_REPOS_PATH } = paths(false);
 		expect(command).toContain(join(PATCH_REPOS_PATH, "application", "app1"));
-		expect(command).toMatch(/--filters HEAD\\?:Dockerfile/);
+		// `git cat-file --filters` could run the repo's filters (LFS and others) on the host.
+		expect(command).toMatch(/git show HEAD\\?:Dockerfile/);
+		expect(command).not.toContain("--filters");
 		expect(out).toBe("ROOT:x:0:0");
 	});
 });

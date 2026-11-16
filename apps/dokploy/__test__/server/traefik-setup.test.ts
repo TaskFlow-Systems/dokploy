@@ -40,10 +40,13 @@ const createStandaloneContainer = async (
 	additionalPorts: TraefikOptions["additionalPorts"],
 ) => {
 	const created = {
-		start: vi.fn().mockResolvedValue(undefined),
+		id: "created-traefik",
 		inspect: vi.fn().mockResolvedValue({
 			State: { Running: true, StartedAt: "2026-10-26T00:00:00Z" },
 		}),
+		remove: vi.fn().mockResolvedValue(undefined),
+		rename: vi.fn().mockResolvedValue(undefined),
+		start: vi.fn().mockResolvedValue(undefined),
 	};
 	const createContainer = vi.fn().mockResolvedValue(created);
 	mocks.getRemoteDocker.mockResolvedValue({
@@ -57,6 +60,13 @@ const createStandaloneContainer = async (
 	const started = initializeStandaloneTraefik({ additionalPorts });
 	await vi.runAllTimersAsync();
 	await started;
+
+	// A first start that fails is only logged, so make sure these settings are
+	// the ones that became dokploy-traefik and kept running.
+	expect(createContainer).toHaveBeenCalledTimes(1);
+	expect(created.rename).toHaveBeenCalledWith({ name: "dokploy-traefik" });
+	expect(created.start).toHaveBeenCalledTimes(1);
+	expect(created.remove).not.toHaveBeenCalled();
 
 	return createContainer.mock.calls[0]?.[0];
 };
@@ -93,6 +103,9 @@ describe("initializeStandaloneTraefik", () => {
 		expect(settings.HostConfig.PortBindings["443/udp"]).toEqual([
 			{ HostPort: "443" },
 		]);
+		expect(Object.keys(settings.ExposedPorts)).toEqual(
+			expect.arrayContaining(["443/tcp", "443/udp"]),
+		);
 	});
 });
 

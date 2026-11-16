@@ -38,6 +38,8 @@ interface FakeOptions {
 	backupRenameError?: Error;
 	oldNetworks?: Record<string, { NetworkID: string; Aliases?: string[] }>;
 	connectError?: Error;
+	// Holds the rename with this log entry until `until` settles.
+	holdRename?: { entry: string; until: Promise<void> };
 }
 
 const fakeDocker = ({
@@ -52,6 +54,7 @@ const fakeDocker = ({
 	backupRenameError,
 	oldNetworks = {},
 	connectError,
+	holdRename,
 }: FakeOptions = {}) => {
 	const log: string[] = [];
 	const containers: { id: string; name: string; running: boolean }[] = [];
@@ -106,6 +109,9 @@ const fakeDocker = ({
 			};
 		},
 		rename: async ({ name }: { name: string }) => {
+			if (holdRename?.entry === `rename ${ref} -> ${name}`) {
+				await holdRename.until;
+			}
 			const c = find(ref);
 			if (containers.some((other) => other !== c && other.name === name)) {
 				throw new Error(`Conflict: ${name} is already in use`);
@@ -242,13 +248,20 @@ describe("initializeStandaloneTraefik", () => {
 		await vi.advanceTimersByTimeAsync(0);
 
 		expect(fake.log).toEqual([
-			"rename old -> dokploy-traefik-previous",
-			"stop old",
 			"create new",
+			"stop old",
+			"rename old -> dokploy-traefik-previous",
+			"rename new -> dokploy-traefik",
 			"start new",
 		]);
+		expect(fake.containers).toContainEqual({
+			id: "old",
+			name: "dokploy-traefik-previous",
+			running: false,
+		});
 		await vi.runAllTimersAsync();
 		await result;
+		expect(fake.log.at(-1)).toBe("remove old");
 	});
 
 	it("keeps the old container until the new one stays up, then removes it", async () => {
@@ -681,23 +694,48 @@ describe("restoreInterruptedTraefik", () => {
 	});
 
 	it("waits for a running update instead of restoring its backup mid-way", async () => {
-		const fake = fakeDocker();
+		let resume!: () => void;
+		const fake = fakeDocker({
+			holdRename: {
+				entry: "rename new -> dokploy-traefik",
+				until: new Promise<void>((resolve) => {
+					resume = resolve;
+				}),
+			},
+		});
 		mocks.getRemoteDocker.mockResolvedValue(fake.docker);
 
 		const update = initializeStandaloneTraefik().then(
 			() => null,
 			(error: Error) => error,
 		);
-		await vi.advanceTimersByTimeAsync(1000);
+		await vi.advanceTimersByTimeAsync(0);
+		// What a restore after a Dokploy restart would undo: a backup, a new
+		// container and no dokploy-traefik.
 		expect(fake.containers.map((c) => c.name)).toEqual([
 			"dokploy-traefik-previous",
 			"dokploy-traefik-next",
 		]);
 		const restore = restoreInterruptedTraefik();
+		await vi.advanceTimersByTimeAsync(0);
+		expect(fake.log).toEqual([
+			"create new",
+			"stop old",
+			"rename old -> dokploy-traefik-previous",
+		]);
+		resume();
 		await vi.runAllTimersAsync();
 
 		expect(await update).toBeNull();
 		await expect(restore).resolves.toBeUndefined();
+		expect(fake.log).toEqual([
+			"create new",
+			"stop old",
+			"rename old -> dokploy-traefik-previous",
+			"rename new -> dokploy-traefik",
+			"start new",
+			"remove old",
+		]);
 		expect(fake.containers).toEqual([
 			{ id: "new", name: "dokploy-traefik", running: true },
 		]);

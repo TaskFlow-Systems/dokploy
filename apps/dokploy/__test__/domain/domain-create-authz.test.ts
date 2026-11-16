@@ -6,7 +6,8 @@ const mocks = vi.hoisted(() => ({
 	checkServiceAccess: vi.fn(),
 }));
 
-vi.mock("@dokploy/server", () => ({
+vi.mock("@dokploy/server", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server")>()),
 	createDomain: mocks.createDomain,
 	findPreviewDeploymentById: mocks.findPreviewDeploymentById,
 }));
