@@ -1,4 +1,5 @@
 import http from "node:http";
+import { createRequire } from "node:module";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -44,6 +45,13 @@ const { setupTerminalWebSocketServer } = await import(
 );
 
 type ShellServer = Awaited<ReturnType<typeof startShellServer>>;
+
+it("runs ssh2 with its native crypto under Node", () => {
+	const { bindingAvailable } = createRequire(import.meta.url)(
+		"ssh2/lib/protocol/crypto.js",
+	);
+	expect(bindingAvailable).toBe(true);
+});
 
 describe("server terminal ssh connection", () => {
 	let web: http.Server;
@@ -97,6 +105,9 @@ describe("server terminal ssh connection", () => {
 		await ssh.close();
 	});
 
+	// The cycles take about 2 s with ssh2's native crypto and about 8 s with its
+	// JavaScript fallback, so the default 5 s limit failed on speed rather than
+	// on a connection left open. The native module has its own test at the top.
 	it("leaves no ssh connection after 20 open and close cycles", async () => {
 		await startSsh();
 
@@ -110,7 +121,7 @@ describe("server terminal ssh connection", () => {
 
 		expect(ssh.total).toBe(20);
 		await vi.waitFor(() => expect(ssh.live).toBe(0), { timeout: 5000 });
-	});
+	}, 30_000);
 
 	it("ends the connection of a client that leaves while ssh is still connecting", async () => {
 		await startSsh({ authDelayMs: 300 });
