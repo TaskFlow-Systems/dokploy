@@ -35,6 +35,9 @@ jobs:
           node-version-file: .nvmrc
       - run: bun install --frozen-lockfile
         if: ${{ !cancelled() }}
+      - name: Lint and format check (Biome)
+        if: ${{ !cancelled() }}
+        run: ./node_modules/.bin/biome ci .
       - run: bun run server:build
         if: ${{ !cancelled() }}
       - run: bun run typecheck

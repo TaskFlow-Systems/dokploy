@@ -36,7 +36,6 @@ export const GravatarOption = ({ value, gravatarUrl, hashPending }: Props) => {
 				</FormControl>
 				<div className="gravatar-avatar h-12 w-12 rounded-full border hover:p-px hover:border-primary transition-colors flex items-center justify-center overflow-hidden">
 					{selectedGravatar ? (
-						// biome-ignore lint/performance/noImgElement: this is an justified use of img element
 						<img
 							src={selectedGravatar}
 							alt="Gravatar"

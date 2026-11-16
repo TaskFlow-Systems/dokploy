@@ -133,6 +133,7 @@
 }
 
 body[data-scroll-locked] [data-slot="sidebar-inset"] {
+	/* biome-ignore lint/complexity/noImportantStyles: beats the inset's overflow-auto utility while a dialog locks scrolling */
 	overflow: hidden !important;
 }
 
@@ -317,13 +318,16 @@ body[data-scroll-locked] [data-slot="sidebar-inset"] {
 
 @layer utilities {
 	.xterm-viewport {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides xterm.css */
 		border-radius: /* 12px */ 0.75rem !important;
 	}
 
 	.xterm .xterm-viewport {
+		/* biome-ignore lint/complexity/noImportantStyles: overrides xterm.css */
 		overflow-y: auto !important;
 		/* xterm 6 paints the theme background on its new scroll container and
 		   leaves this element on xterm.css's #000, which hid our transparent theme. */
+		/* biome-ignore lint/complexity/noImportantStyles: overrides xterm.css */
 		background-color: transparent !important;
 	}
 
@@ -388,7 +392,9 @@ body[data-scroll-locked] [data-slot="sidebar-inset"] {
 		}
 
 		.swagger-ui .info {
+			/* biome-ignore lint/complexity/noImportantStyles: overrides swagger-ui's stylesheet */
 			margin: 0px !important;
+			/* biome-ignore lint/complexity/noImportantStyles: overrides swagger-ui's stylesheet */
 			padding-top: 1rem !important;
 		}
 	}
@@ -420,7 +426,9 @@ body[data-scroll-locked] [data-slot="sidebar-inset"] {
 }
 
 .xterm-bg-257.xterm-fg-257 {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the colours xterm sets on the cell */
 	background-color: var(--terminal-paste) !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the colours xterm sets on the cell */
 	color: currentColor !important;
 }
 
@@ -432,15 +440,19 @@ body[data-scroll-locked] [data-slot="sidebar-inset"] {
 /* HubSpot Widget - Force light color-scheme to prevent white background */
 #hubspot-messages-iframe-container,
 #hubspot-messages-iframe-container * {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the HubSpot widget's own styles */
 	background-color: transparent !important;
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the HubSpot widget's own styles */
 	color-scheme: light !important;
 }
 
 #hubspot-messages-iframe-container .hs-shadow-container {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the HubSpot widget's own styles */
 	display: none !important;
 }
 
 #hubspot-conversations-iframe {
+	/* biome-ignore lint/complexity/noImportantStyles: overrides the HubSpot widget's own styles */
 	color-scheme: light !important;
 }
 
@@ -599,6 +611,7 @@ body[data-scroll-locked] [data-slot="sidebar-inset"] {
 	@media (prefers-reduced-motion: reduce) {
 		.t-panel-slide-x,
 		.t-panel-track {
+			/* biome-ignore lint/complexity/noImportantStyles: beats the more specific [data-open] rules */
 			transition: none !important;
 		}
 	}

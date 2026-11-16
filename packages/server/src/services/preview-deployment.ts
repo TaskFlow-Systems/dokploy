@@ -180,7 +180,7 @@ export const createPreviewDeployment = async (
 	const issue = await octokit.rest.issues.createComment({
 		owner: application?.owner || "",
 		repo: application?.repository || "",
-		issue_number: Number.parseInt(schema.pullRequestNumber),
+		issue_number: Number.parseInt(schema.pullRequestNumber, 10),
 		body: `### Dokploy Preview Deployment\n\n${runningComment}`,
 	});
 

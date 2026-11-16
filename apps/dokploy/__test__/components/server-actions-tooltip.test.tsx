@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 
 describe("Remote Server Action Tooltips", () => {
 	it("should close the tooltip when the dialog trigger is clicked", () => {

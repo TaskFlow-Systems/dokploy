@@ -1708,7 +1708,6 @@ const EnvironmentPage = (
 																					)}
 																					{service.type === "application" &&
 																						(service.icon ? (
-																							// biome-ignore lint/performance/noImgElement: application icon is data URL
 																							<img
 																								src={service.icon}
 																								alt={service.name}
@@ -1719,7 +1718,6 @@ const EnvironmentPage = (
 																						))}
 																					{service.type === "compose" &&
 																						(service.icon ? (
-																							// biome-ignore lint/performance/noImgElement: compose icon is data URL
 																							<img
 																								src={service.icon}
 																								alt={service.name}

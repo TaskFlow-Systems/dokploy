@@ -507,7 +507,9 @@ const ensurePreviewComment = async (
 			...issueParams,
 			...preview,
 		});
-		return result ? Number.parseInt(result.pullRequestCommentId) : Number.NaN;
+		return result
+			? Number.parseInt(result.pullRequestCommentId, 10)
+			: Number.NaN;
 	} catch (error) {
 		console.error("Could not create the preview comment on GitHub:", error);
 		return Number.NaN;
@@ -545,7 +547,7 @@ export const deployPreviewApplication = async ({
 		owner: application?.owner || "",
 		repository: application?.repository || "",
 		issue_number: previewDeployment.pullRequestNumber,
-		comment_id: Number.parseInt(previewDeployment.pullRequestCommentId),
+		comment_id: Number.parseInt(previewDeployment.pullRequestCommentId, 10),
 		githubId: application?.githubId || "",
 	};
 	try {
@@ -641,7 +643,7 @@ export const rebuildPreviewApplication = async ({
 		owner: application?.owner || "",
 		repository: application?.repository || "",
 		issue_number: previewDeployment.pullRequestNumber,
-		comment_id: Number.parseInt(previewDeployment.pullRequestCommentId),
+		comment_id: Number.parseInt(previewDeployment.pullRequestCommentId, 10),
 		githubId: application?.githubId || "",
 	};
 
@@ -722,7 +724,7 @@ export const getApplicationStats = async (appName: string) => {
 	});
 
 	const container = containers[0];
-	if (!container || container?.State !== "running") {
+	if (container?.State !== "running") {
 		return null;
 	}
 

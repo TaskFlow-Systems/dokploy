@@ -314,7 +314,6 @@ export const ProfileForm = () => {
 																			}
 																		>
 																			{field.value?.startsWith("data:") ? (
-																				// biome-ignore lint/performance/noImgElement: this is an justified use of img element
 																				<img
 																					src={field.value}
 																					alt="Custom avatar"
@@ -413,7 +412,6 @@ export const ProfileForm = () => {
 																				/>
 																			</FormControl>
 
-																			{/* biome-ignore lint/performance/noImgElement: this is an justified use of img element */}
 																			<img
 																				key={image}
 																				src={image}
