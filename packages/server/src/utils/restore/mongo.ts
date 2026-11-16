@@ -8,8 +8,8 @@ import {
 	getRcloneS3Destination,
 } from "../backups/utils";
 import { execAsync, execAsyncRemote } from "../process/execAsync";
-import { normalizeRestoreBackupFile } from "./safe-input";
 import { formatRestoreError } from "./failure";
+import { normalizeRestoreBackupFile } from "./safe-input";
 import { getRestoreCommand } from "./utils";
 
 export const restoreMongoBackup = async (

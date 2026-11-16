@@ -166,6 +166,8 @@ Every `update<Provider>Notification` skips a table whose `set` would hold no def
 
 `pull-request.yml` runs the tests in three jobs on runners of their own: `pr-check (unit)` with everything but `*.real.test.ts`, and `pr-check (docker-1)` and `pr-check (docker-2)` with the real-Docker files. These wait on Swarm's own timers for minutes, and in one job they held most of vitest's workers from the start, so most unit tests ran only in the last minutes and the job took 12 to 15 minutes. Files in one file run one after another, so the longest file sets the time of its job: split a file that grows past about four minutes, as `swarm-convergence.real.test.ts` was. `docker-1` lists its files in the workflow and fails when one of them is missing; `docker-2` takes every other real-Docker file, so a new one runs without an edit.
 
+Lint: the `audit and typecheck` job runs `biome ci .`, so a Biome error (lint, import order or formatting) fails the PR; warnings and infos do not. Run `./node_modules/.bin/biome check --write .` before pushing. `biome.json` turns off Biome's Markdown and YAML formatters: they would pad every docs table, restyle upstream's Markdown and workflows (`format.yml` included), and fail a PR over a docs edit. Keep an intentional `!important` in CSS with a `biome-ignore lint/complexity/noImportantStyles` comment saying what it overrides. Upstream's `format.yml` runs only on `canary`, so it never checks this branch.
+
 ## Pull requests
 
 Every pull request targets `AgentHits-Dev`, including a PR that builds on another open PR. Checks run only for that base, so a PR stacked on another branch gets none. When one PR depends on another, say so in the description; do not change the base.

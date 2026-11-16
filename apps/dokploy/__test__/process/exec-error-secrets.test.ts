@@ -1,5 +1,5 @@
 import { inspect } from "node:util";
-import { execAsync, ExecError } from "@dokploy/server/utils/process/execAsync";
+import { ExecError, execAsync } from "@dokploy/server/utils/process/execAsync";
 import { describe, expect, it } from "vitest";
 
 describe("execAsync failure", () => {

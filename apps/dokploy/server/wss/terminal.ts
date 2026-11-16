@@ -109,7 +109,7 @@ export const setupTerminalWebSocketServer = (
 			url.searchParams.get("rows"),
 		);
 		const { user, session } = await validateRequest(req);
-		if (!user || !session || !session.activeOrganizationId || !serverId) {
+		if (!user || !session?.activeOrganizationId || !serverId) {
 			ws.close();
 			return;
 		}

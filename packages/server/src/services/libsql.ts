@@ -123,7 +123,7 @@ export const findLibsqlByBackupId = async (backupId: string) => {
 		.where(eq(backups.backupId, backupId))
 		.limit(1);
 
-	if (!result || !result[0]) {
+	if (!result?.[0]) {
 		throw new TRPCError({
 			code: "NOT_FOUND",
 			message: "Libsql not found",

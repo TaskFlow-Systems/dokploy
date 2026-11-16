@@ -9,17 +9,18 @@
 		"ignoreUnknown": true,
 		"includes": [
 			"**",
-			"!**/.docker",
-			"!**/.next",
-			"!**/dist",
+			"!!**/.docker",
+			"!!**/.next",
+			"!!**/dist",
+			"!!**/node_modules",
 			"!**/drizzle",
-			"!node_modules",
 			"!packages/server/package.json"
 		],
-		"maxSize": 2097152,
-		"experimentalScannerIgnores": [".next", "node_modules", ".docker", "dist"]
+		"maxSize": 2097152
 	},
 	"css": { "parser": { "tailwindDirectives": true } },
+	"markdown": { "formatter": { "enabled": false } },
+	"yaml": { "formatter": { "enabled": false } },
 	"assist": { "actions": { "source": { "organizeImports": "on" } } },
 	"linter": {
 		"rules": {

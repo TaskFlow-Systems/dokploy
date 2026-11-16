@@ -1370,7 +1370,8 @@ describe("restore failure reporting", () => {
 		await vi.waitFor(() =>
 			expect(mocks.sendDatabaseBackupNotifications).toHaveBeenCalledTimes(1),
 		);
-		const notification = mocks.sendDatabaseBackupNotifications.mock.calls[0]![0];
+		const notification =
+			mocks.sendDatabaseBackupNotifications.mock.calls[0]![0];
 		expect(notification).toMatchObject({
 			operation: "restore",
 			type: "error",
@@ -1465,7 +1466,7 @@ describe("restore failure reporting", () => {
 			new ExecError("Command execution failed: exit code 2", {
 				command: "x",
 				stderr:
-					"NOTICE: Config file \"/root/.config/rclone/rclone.conf\" not found - using defaults\ngzip: stdin: not in gzip format\n",
+					'NOTICE: Config file "/root/.config/rclone/rclone.conf" not found - using defaults\ngzip: stdin: not in gzip format\n',
 				exitCode: 2,
 			}),
 		);

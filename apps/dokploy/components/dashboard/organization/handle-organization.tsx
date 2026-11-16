@@ -290,7 +290,6 @@ export function AddOrganization({
 												<div className="flex items-center gap-3">
 													<div className="flex size-10 shrink-0 items-center justify-center rounded-md border bg-muted/50 overflow-hidden">
 														{field.value ? (
-															// biome-ignore lint/performance/noImgElement: user uploaded logo preview
 															<img
 																src={field.value}
 																alt="Logo preview"

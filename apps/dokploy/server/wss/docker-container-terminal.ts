@@ -56,7 +56,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 		);
 		const { user, session } = await validateRequest(req);
 
-		if (!user || !session || !session.activeOrganizationId) {
+		if (!user || !session?.activeOrganizationId) {
 			ws.close();
 			return;
 		}

@@ -129,7 +129,7 @@ export const setupDeploymentLogsWebSocketServer = (
 			return;
 		}
 
-		if (!user || !session || !session.activeOrganizationId) {
+		if (!user || !session?.activeOrganizationId) {
 			ws.close();
 			return;
 		}

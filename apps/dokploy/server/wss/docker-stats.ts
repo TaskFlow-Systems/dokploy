@@ -115,7 +115,7 @@ export const setupDockerStatsMonitoringSocketServer = (
 			return;
 		}
 
-		if (!user || !session || !session.activeOrganizationId) {
+		if (!user || !session?.activeOrganizationId) {
 			ws.close();
 			return;
 		}
@@ -212,7 +212,7 @@ export const setupDockerStatsMonitoringSocketServer = (
 				});
 
 				const container = containers[0];
-				if (!container || container?.State !== "running") {
+				if (container?.State !== "running") {
 					const remoteNode = await findRemoteSwarmNode(appName, appType);
 					ws.close(
 						4000,
