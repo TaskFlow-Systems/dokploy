@@ -1,7 +1,7 @@
 import { createHmac } from "node:crypto";
 import { Readable } from "node:stream";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
 	findApplication: vi.fn(),
@@ -40,6 +40,17 @@ const { default: composeHandler } = await import(
 );
 
 const SECRET = "service-hook-secret";
+
+// A Bitbucket source makes the handler ask api.bitbucket.org for the pushed
+// commit's diffstat. No test may reach the real API: it made this file depend
+// on the network, and a slow answer outlasted the 5 s test timeout.
+const fetchMock = vi.fn(
+	async (_input: RequestInfo | URL, _init?: RequestInit) =>
+		new Response(
+			JSON.stringify({ values: [{ new: { path: "src/index.ts" } }] }),
+			{ status: 200, headers: { "content-type": "application/json" } },
+		),
+);
 
 const createResponse = () => {
 	const response = { json: vi.fn(), setHeader: vi.fn(), status: vi.fn() };
@@ -229,8 +240,13 @@ describe.each(targets)(
 	(target) => {
 		beforeEach(() => {
 			vi.clearAllMocks();
+			vi.stubGlobal("fetch", fetchMock);
 			queueMocks.add.mockResolvedValue(undefined);
 			target.mock.mockResolvedValue(target.service({}));
+		});
+
+		afterEach(() => {
+			vi.unstubAllGlobals();
 		});
 
 		describe.each(formats)("$name on Custom Git", (format) => {
@@ -315,12 +331,18 @@ describe.each(targets)(
 			const ok = createResponse();
 			await target.handler(streamRequest(raw, formats[0]!.headers(raw)), ok);
 			expect(ok.status).not.toHaveBeenCalledWith(401);
+			expect(fetchMock).toHaveBeenCalledTimes(1);
+			expect(fetchMock.mock.calls[0]![0]).toMatch(
+				/^https:\/\/api\.bitbucket\.org\/2\.0\/repositories\/.*\/diffstat\/h1$/,
+			);
 			const bad = createResponse();
 			await target.handler(
 				streamRequest(raw, formats[0]!.headers(raw, "nope")),
 				bad,
 			);
 			expect(bad.status).toHaveBeenCalledWith(401);
+			// A request with a wrong signature never reaches Bitbucket.
+			expect(fetchMock).toHaveBeenCalledTimes(1);
 		});
 
 		it("leaves provider-backed GitHub sources on their provider secret", async () => {
