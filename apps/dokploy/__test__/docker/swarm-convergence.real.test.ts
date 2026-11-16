@@ -72,7 +72,7 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 			await expect(
 				waitForSwarmServiceConvergence(redis.appName, null, limit),
 			).rejects.toThrow(
-				/keeps failing: 3 tasks of one slot in this update have failed \(last task error: .*non-zero exit \(3\)/,
+				/keeps failing: \d+ tasks of one slot in this update have failed \(last task error: .*non-zero exit \(3\)/,
 			);
 			expect(Date.now() - startedAt).toBeLessThan(limit.timeoutMs);
 			await removeCrashing(redis.appName);
@@ -170,9 +170,13 @@ describe("waitForSwarmServiceConvergence on real Docker", () => {
 
 			await buildLibsql(libsql);
 
+			// Which comes first depends on the runner: the third crash of the slot
+			// or the limit. Both must name the task's own exit.
 			await expect(
 				waitForSwarmServiceConvergence(libsql.appName, null, CATCHES_EVERY_RUN),
-			).rejects.toThrow(/0\/1 tasks stayed running.*non-zero exit \(3\)/);
+			).rejects.toThrow(
+				/(0\/1 tasks stayed running|keeps failing: \d+ tasks of one slot).*non-zero exit \(3\)/,
+			);
 			expect((await inspect(libsql.appName)).UpdateStatus).toBeUndefined();
 			await removeCrashing(libsql.appName);
 		},
