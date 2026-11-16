@@ -59,12 +59,20 @@ const recover = (shell: string, env: Record<string, string> = {}) =>
 		{ encoding: "utf8", env: baseEnv(env) },
 	);
 
+// A killed client whose parent shell was killed too is left to PID 1. In a
+// container whose PID 1 never reaps (`sleep infinity`), it stays a zombie for
+// good, and signal 0 still reaches a zombie, so it would count as running.
 const alive = (pid: number) => {
 	try {
 		process.kill(pid, 0);
-		return true;
 	} catch {
 		return false;
+	}
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		return stat.slice(stat.lastIndexOf(")") + 2)[0] !== "Z";
+	} catch {
+		return true;
 	}
 };
 
@@ -253,7 +261,9 @@ describe.skipIf(!REAL_JQ).each(SHELLS)(
 
 			killLeftovers();
 
-			await waitFor(() => !alive(pid));
+			await waitFor(
+				() => job.child.signalCode !== null || job.child.exitCode !== null,
+			);
 			expect(job.child.signalCode).toBe("SIGKILL");
 		});
 	},
