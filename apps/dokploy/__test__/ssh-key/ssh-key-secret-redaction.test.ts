@@ -88,7 +88,10 @@ describe("ssh key router secret redaction", () => {
 		});
 
 		const [result] = await createCaller().all();
-		expect(result?.privateKey).toBe(REDACTED_SECRET_VALUE);
+		expect(mocks.sshKeyFindMany).toHaveBeenCalledWith(
+			expect.objectContaining({ columns: { privateKey: false } }),
+		);
+		expect(JSON.stringify(result)).not.toContain("private-key");
 		expect(result?.name).toBe("deploy");
 	});
 

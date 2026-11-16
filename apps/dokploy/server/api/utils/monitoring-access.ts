@@ -10,11 +10,18 @@ import {
 	previewDeployments,
 	redis,
 } from "@dokploy/server/db/schema";
-import { checkServicePermissionAndAccess } from "@dokploy/server/services/permission";
+import {
+	checkServiceAccess,
+	checkServicePermissionAndAccess,
+} from "@dokploy/server/services/permission";
 import { execAsync } from "@dokploy/server/utils/process/execAsync";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { quote } from "shell-quote";
+import {
+	containerBelongsToService,
+	findServiceAppName,
+} from "@/server/wss/container-ownership";
 
 type MonitoringAccessCtx = {
 	session: {
@@ -477,5 +484,32 @@ export const assertContainerMetricsServiceAccess = async (
 
 	await checkServicePermissionAndAccess(ctx, service.id, {
 		monitoring: ["read"],
+	});
+};
+
+// A caller that names the service whose monitoring tab asks also gets the
+// container bound to that service, on top of the appName check above.
+export const assertMonitoringAccess = async (
+	ctx: MonitoringAccessCtx,
+	appName: string,
+	serviceId?: string,
+) => {
+	await assertContainerMetricsServiceAccess(ctx, appName);
+	if (!serviceId) {
+		return;
+	}
+
+	await checkServiceAccess(ctx, serviceId, "read");
+	const serviceAppName = await findServiceAppName(serviceId);
+	if (
+		appName === serviceAppName ||
+		(await containerBelongsToService(serviceId, appName))
+	) {
+		return;
+	}
+
+	throw new TRPCError({
+		code: "UNAUTHORIZED",
+		message: "You don't have access to this service's monitoring",
 	});
 };

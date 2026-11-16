@@ -43,6 +43,7 @@ import {
 } from "@dokploy/server/services/git-provider";
 import {
 	addNewService,
+	checkEnvironmentAccess,
 	checkPermission,
 	checkServiceAccess,
 	checkServicePermissionAndAccess,
@@ -67,7 +68,7 @@ import {
 import { assertBrowserSession } from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
 import { assertDeploySourceCredentialAccess } from "@/server/api/utils/deploy-source-access";
-import { assertContainerMetricsServiceAccess } from "@/server/api/utils/monitoring-access";
+import { assertMonitoringAccess } from "@/server/api/utils/monitoring-access";
 import { assertTargetEnvironmentAccess } from "@/server/api/utils/placement-access";
 import {
 	assertServiceEnvironmentReadAccess,
@@ -92,7 +93,9 @@ import {
 	apiUpsertApplicationEnv,
 	apiUpsertApplicationEnvResponse,
 	applications,
+	BUILD_PATH_MESSAGE,
 	environments,
+	isSafeBuildPath,
 	projects,
 } from "@/server/db/schema";
 import type { DeploymentJob } from "@/server/queues/queue-types";
@@ -1325,7 +1328,10 @@ export const applicationRouter = createTRPCRouter({
 			zfd.formData({
 				applicationId: z.string(),
 				zip: zfd.file(),
-				dropBuildPath: z.string().optional(),
+				dropBuildPath: z
+					.string()
+					.refine(isSafeBuildPath, BUILD_PATH_MESSAGE)
+					.optional(),
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
@@ -1413,7 +1419,7 @@ export const applicationRouter = createTRPCRouter({
 					message: "Functionality not available in cloud version",
 				});
 			}
-			await assertContainerMetricsServiceAccess(ctx, input.appName);
+			await assertMonitoringAccess(ctx, input.appName, input.serviceId);
 			const stats = await getApplicationStats(input.appName);
 
 			return stats;
@@ -1426,6 +1432,7 @@ export const applicationRouter = createTRPCRouter({
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
+			await checkEnvironmentAccess(ctx, input.targetEnvironmentId, "read");
 			await checkServicePermissionAndAccess(ctx, input.applicationId, {
 				service: ["create"],
 			});

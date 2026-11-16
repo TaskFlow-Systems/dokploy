@@ -85,6 +85,7 @@ export const sshRouter = createTRPCRouter({
 		}),
 	all: withPermission("sshKeys", "read").query(async ({ ctx }) => {
 		const sshKeyList = await db.query.sshKeys.findMany({
+			columns: { privateKey: false },
 			where: eq(sshKeys.organizationId, ctx.session.activeOrganizationId),
 			orderBy: desc(sshKeys.createdAt),
 		});

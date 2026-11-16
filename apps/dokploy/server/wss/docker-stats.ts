@@ -115,6 +115,14 @@ export const setupDockerStatsMonitoringSocketServer = (
 			return;
 		}
 
+		if (
+			!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(appName) ||
+			appName.includes("..")
+		) {
+			ws.close(4000, "Invalid appName");
+			return;
+		}
+
 		if (!user || !session?.activeOrganizationId) {
 			ws.close();
 			return;

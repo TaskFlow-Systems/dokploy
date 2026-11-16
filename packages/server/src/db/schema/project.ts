@@ -59,6 +59,6 @@ export const apiRemoveProject = createSchema
 export const apiUpdateProject = z.object({
 	projectId: z.string().min(1),
 	name: z.string().min(1).optional(),
-	description: z.string().optional(),
+	description: z.string().nullable().optional(),
 	env: z.string().optional(),
 });

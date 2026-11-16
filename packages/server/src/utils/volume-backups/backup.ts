@@ -124,7 +124,7 @@ export const backupVolume = async (
 	echo "Backup file name: ${backupFileName}"
 	echo "Turning off volume backup: ${turnOff ? "Yes" : "No"}"
 	echo "Starting volume backup" 
-	echo "Dir: ${volumeBackupPath}"
+	echo ${quoteVolumeBackupShellArg(`Dir: ${volumeBackupPath}`)}
     docker run --rm \
   -v ${quotedVolumeMount} \
   -v ${quotedBackupMount} \

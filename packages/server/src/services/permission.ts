@@ -361,9 +361,19 @@ const findProjectOrganizationId = async (projectId: string) => {
 	return project?.organizationId;
 };
 
+const findEnvironmentOrganizationId = async (environmentId: string) => {
+	const [row] = await db
+		.select({ organizationId: projects.organizationId })
+		.from(environments)
+		.innerJoin(projects, eq(environments.projectId, projects.projectId))
+		.where(eq(environments.environmentId, environmentId));
+	return row?.organizationId;
+};
+
 const notFoundMessages = {
 	service: "Service not found",
 	project: "Project not found",
+	environment: "Environment not found",
 };
 
 const assertOrganizationOwns = (
@@ -497,6 +507,11 @@ export const checkEnvironmentAccess = async (
 	const organizationId = ctx.session.activeOrganizationId;
 	const memberRecord = await findMemberByUserId(userId, organizationId);
 
+	assertOrganizationOwns(
+		ctx,
+		"environment",
+		await findEnvironmentOrganizationId(environmentId),
+	);
 	await checkPermission(ctx, { environment: [action] });
 
 	if (

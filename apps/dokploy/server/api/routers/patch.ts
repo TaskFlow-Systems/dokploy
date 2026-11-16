@@ -206,15 +206,7 @@ export const patchRouter = createTRPCRouter({
 			await checkServicePermissionAndAccess(ctx, input.id, {
 				service: ["create"],
 			});
-			let serverId: string | null = null;
-			if (input.type === "application") {
-				const app = await findApplicationById(input.id);
-				serverId = app.serverId;
-			} else {
-				const compose = await findComposeById(input.id);
-				serverId = compose.serverId;
-			}
-			const repoPath = await getPatchRepoPath({
+			const { repoPath, serverId } = await getPatchRepoPath({
 				type: input.type,
 				id: input.id,
 			});

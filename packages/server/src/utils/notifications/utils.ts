@@ -12,10 +12,10 @@ import type {
 	teams,
 	telegram,
 } from "@dokploy/server/db/schema";
+import { providerEgressFetch } from "@dokploy/server/services/logs-and-metrics/provider-fetch";
 import { Agent, fetch as undiciFetch } from "@dokploy/server/utils/undici";
 import nodemailer from "nodemailer";
 import { Resend } from "resend";
-import { fetchWithPublicEgress } from "../url/network";
 import {
 	assertNotificationBaseUrlAllowed,
 	assertNotificationHttpUrlAllowed,
@@ -100,13 +100,12 @@ export const sendDiscordNotification = async (
 				fieldName: "Discord webhook URL",
 			},
 		);
-		const response = await fetchWithPublicEgress(
+		const response = await providerEgressFetch(
 			webhookUrl,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ embeds: [embed] }),
-				redirect: "error",
 			},
 			{ fieldName: "Discord webhook URL" },
 		);
@@ -300,13 +299,12 @@ export const sendSlackNotification = async (
 				fieldName: "Slack webhook URL",
 			},
 		);
-		const response = await fetchWithPublicEgress(
+		const response = await providerEgressFetch(
 			webhookUrl,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(message),
-				redirect: "error",
 			},
 			{ fieldName: "Slack webhook URL" },
 		);
@@ -334,7 +332,7 @@ export const sendGotifyNotification = async (
 			fieldName: "Gotify server URL",
 		},
 	);
-	const response = await fetchWithPublicEgress(
+	const response = await providerEgressFetch(
 		new URL("message", `${serverUrl}/`),
 		{
 			method: "POST",
@@ -352,7 +350,6 @@ export const sendGotifyNotification = async (
 					},
 				},
 			}),
-			redirect: "error",
 		},
 		{ fieldName: "Gotify server URL" },
 	);
@@ -377,21 +374,21 @@ export const sendNtfyNotification = async (
 			fieldName: "ntfy server URL",
 		},
 	);
-	const response = await fetchWithPublicEgress(
+	const headers: Record<string, string> = {
+		"X-Priority": connection.priority?.toString() || "3",
+		"X-Title": title,
+		"X-Tags": tags,
+		"X-Actions": actions,
+	};
+	if (connection.accessToken) {
+		headers.Authorization = `Bearer ${connection.accessToken}`;
+	}
+	const response = await providerEgressFetch(
 		`${serverUrl}/${encodeURIComponent(connection.topic)}`,
 		{
 			method: "POST",
-			headers: {
-				...(connection.accessToken && {
-					Authorization: `Bearer ${connection.accessToken}`,
-				}),
-				"X-Priority": connection.priority?.toString() || "3",
-				"X-Title": title,
-				"X-Tags": tags,
-				"X-Actions": actions,
-			},
+			headers,
 			body: message,
-			redirect: "error",
 		},
 		{ fieldName: "ntfy server URL" },
 	);
@@ -421,13 +418,12 @@ export const sendMattermostNotification = async (
 			fieldName: "Mattermost webhook URL",
 		},
 	);
-	const response = await fetchWithPublicEgress(
+	const response = await providerEgressFetch(
 		webhookUrl,
 		{
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
 			body: JSON.stringify(payload),
-			redirect: "error",
 		},
 		{ fieldName: "Mattermost webhook URL" },
 	);
@@ -460,13 +456,12 @@ export const sendCustomNotification = async (
 				fieldName: "Custom notification endpoint",
 			},
 		);
-		const response = await fetchWithPublicEgress(
+		const response = await providerEgressFetch(
 			endpoint,
 			{
 				method: "POST",
 				headers,
 				body,
-				redirect: "error",
 			},
 			{
 				allowPrivateNetwork: false,
@@ -498,13 +493,12 @@ export const sendLarkNotification = async (
 				fieldName: "Lark webhook URL",
 			},
 		);
-		await fetchWithPublicEgress(
+		await providerEgressFetch(
 			webhookUrl,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(message),
-				redirect: "error",
 			},
 			{ fieldName: "Lark webhook URL" },
 		);
@@ -578,13 +572,12 @@ export const sendTeamsNotification = async (
 				fieldName: "Teams webhook URL",
 			},
 		);
-		const response = await fetchWithPublicEgress(
+		const response = await providerEgressFetch(
 			webhookUrl,
 			{
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify(payload),
-				redirect: "error",
 			},
 			{ fieldName: "Teams webhook URL" },
 		);

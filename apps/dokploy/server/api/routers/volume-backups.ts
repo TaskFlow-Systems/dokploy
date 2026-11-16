@@ -390,7 +390,8 @@ export const volumeBackupsRouter = createTRPCRouter({
 					existingVolumeBackups.length,
 				);
 			}
-			const newVolumeBackup = await createVolumeBackup(input);
+			const { appName: _appName, ...volumeBackupInput } = input;
+			const newVolumeBackup = await createVolumeBackup(volumeBackupInput);
 
 			if (newVolumeBackup?.enabled) {
 				if (IS_CLOUD) {
@@ -486,6 +487,19 @@ export const volumeBackupsRouter = createTRPCRouter({
 					inputServiceBinding.type,
 				);
 			}
+			// Moving or adding a service would leave one row bound to two services.
+			if (
+				volumeBackupServiceFields.some(
+					({ idField }) =>
+						input[idField] !== undefined &&
+						input[idField] !== existingVb[idField],
+				)
+			) {
+				throw new TRPCError({
+					code: "BAD_REQUEST",
+					message: "A volume backup cannot be moved to another service",
+				});
+			}
 			await assertDestinationAccess(
 				input.destinationId,
 				ctx.session.activeOrganizationId,
@@ -506,9 +520,10 @@ export const volumeBackupsRouter = createTRPCRouter({
 							},
 						)
 					: null;
+			const { appName: _appName, ...volumeBackupInput } = input;
 			const updatedVolumeBackup = await updateVolumeBackup(
 				input.volumeBackupId,
-				input,
+				volumeBackupInput,
 			);
 
 			if (!updatedVolumeBackup) {
@@ -576,7 +591,16 @@ export const volumeBackupsRouter = createTRPCRouter({
 		})
 		.input(
 			z.object({
-				backupFileName: z.string().min(1),
+				backupFileName: z
+					.string()
+					.min(1)
+					.refine(
+						(name) =>
+							!name.startsWith("/") &&
+							!name.split("/").includes("..") &&
+							!/[\0\r\n]/.test(name),
+						"Invalid backup file name",
+					),
 				destinationId: z.string().min(1),
 				volumeName: z
 					.string()

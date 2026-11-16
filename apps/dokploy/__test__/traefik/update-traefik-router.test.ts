@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	findServerById: vi.fn(),
+	getAccessibleServerIds: vi.fn(),
 	getTraefikOverview: vi.fn(),
 	pullTraefikImage: vi.fn(),
 	readEnvironmentVariableList: vi.fn(),
@@ -62,6 +63,9 @@ describe("Traefik update endpoints", () => {
 			serverId,
 			organizationId: serverId === "server-b" ? "org-b" : "org-a",
 		}));
+		mocks.getAccessibleServerIds.mockResolvedValue(
+			new Set(["server-a", "server-c"]),
+		);
 		mocks.getTraefikOverview.mockResolvedValue(overview("outdated"));
 		mocks.pullTraefikImage.mockResolvedValue(undefined);
 		mocks.readEnvironmentVariableList.mockResolvedValue(TRAEFIK_ENV);

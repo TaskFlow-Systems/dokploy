@@ -146,9 +146,12 @@ export const createVolumeBackupSchema = createInsertSchema(volumeBackups)
 		volumeBackupId: true,
 	})
 	.extend({
+		// Still checked so an unsafe value fails, but the router drops it: appName
+		// names the backup's directory on the server and the panel generates it.
 		appName: safeDockerServiceName.optional(),
 		keepLatestCount: safeVolumeBackupRetentionCount,
-		serviceName: safeDockerServiceName.nullable().optional(),
+		// The form sends an empty service name for services other than compose.
+		serviceName: safeDockerServiceName.or(z.literal("")).nullable().optional(),
 		volumeName: safeDockerVolumeName,
 		serviceType: z
 			.enum([

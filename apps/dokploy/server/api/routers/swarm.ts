@@ -6,6 +6,7 @@ import {
 	getNodeInfo,
 	getSwarmNodes,
 } from "@dokploy/server";
+import { IS_CLOUD } from "@dokploy/server/constants";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { assertLocalHostAccess } from "@/server/api/utils/local-host-access";
@@ -25,6 +26,10 @@ const assertSwarmServerAccess = async (
 	serverId?: string,
 ) => {
 	if (!serverId) {
+		// In the cloud the panel host's Swarm belongs to no organization.
+		if (IS_CLOUD) {
+			throw new TRPCError({ code: "UNAUTHORIZED" });
+		}
 		await assertLocalHostAccess(ctx);
 		return;
 	}

@@ -17,8 +17,11 @@ import { firstWorker, secondWorker, thirdWorker } from "./workers.js";
 
 const app = new Hono();
 
-cleanQueue();
-initializeJobs();
+if (!process.env.API_KEY) {
+	console.error(
+		"API_KEY is not set; all authenticated routes will be rejected",
+	);
+}
 
 app.use(async (c, next) => {
 	if (c.req.path === "/health") {
@@ -130,6 +133,16 @@ process.on("unhandledRejection", (reason, _promise) => {
 });
 
 const port = Number.parseInt(process.env.PORT || "3000", 10);
+
+// Restore jobs before accepting requests, so cleanQueue() can't wipe jobs
+// registered through the API during startup.
+try {
+	await cleanQueue();
+	await initializeJobs();
+} catch (error) {
+	logger.error(error, "Failed to initialize jobs");
+	process.exit(1);
+}
 
 logger.info({ port }, "Starting Schedules Server ✅");
 serve({ fetch: app.fetch, port });

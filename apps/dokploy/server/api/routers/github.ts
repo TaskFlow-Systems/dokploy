@@ -213,14 +213,15 @@ export const githubRouter = createTRPCRouter({
 	update: withPermission("gitProviders", "create")
 		.input(apiUpdateGithub)
 		.mutation(async ({ input, ctx }) => {
-			const gitProviderId = await findGithubGitProviderId(input.githubId);
+			const existing = await findGithubById(input.githubId);
+			const { gitProviderId } = existing.gitProvider;
 			if (gitProviderId !== input.gitProviderId) {
 				throw new TRPCError({
 					code: "UNAUTHORIZED",
 					message: "You are not authorized to update this Git provider",
 				});
 			}
-			await assertGitProviderAccess(gitProviderId, ctx.session);
+			await assertGitProviderAccess(ctx.session, existing.gitProvider);
 
 			await updateGitProvider(gitProviderId, {
 				name: input.name,

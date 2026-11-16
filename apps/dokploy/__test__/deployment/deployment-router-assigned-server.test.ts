@@ -131,7 +131,7 @@ const { deploymentRouter } = await import(
 	"../../server/api/routers/deployment"
 );
 
-const createCaller = () =>
+const createCaller = (role = "member") =>
 	deploymentRouter.createCaller({
 		db: {},
 		req: {},
@@ -142,7 +142,7 @@ const createCaller = () =>
 		},
 		user: {
 			id: "user-1",
-			role: "member",
+			role,
 		},
 	} as never);
 
@@ -434,11 +434,37 @@ describe("deployment router assigned-server boundary", () => {
 		expect(mocks.findAllDeploymentsByServerId).not.toHaveBeenCalled();
 	});
 
-	it("filters cloud deployment queue jobs to accessible servers", async () => {
+	it.each(["owner", "admin"])(
+		"filters cloud deployment queue jobs to accessible servers for an %s",
+		async (role) => {
+			mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
+
+			await expect(createCaller(role).queueList()).resolves.toEqual([
+				{ id: "server-1-job", serverId: "server-1", servicePath: undefined },
+			]);
+
+			expect(mocks.fetchDeployApiJobs).toHaveBeenCalledTimes(1);
+			expect(mocks.fetchDeployApiJobs).toHaveBeenCalledWith("server-1");
+		},
+	);
+
+	it("shows a member only cloud queue jobs of services shared with them", async () => {
 		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
+		mocks.fetchDeployApiJobs.mockImplementation((serverId: string) =>
+			Promise.resolve([
+				{ id: "shared-job", serverId, data: { applicationId: "app-1" } },
+				{ id: "other-job", serverId, data: { composeId: "compose-9" } },
+				{ id: "setup-job", serverId, data: { serverId } },
+			]),
+		);
 
 		await expect(createCaller().queueList()).resolves.toEqual([
-			{ id: "server-1-job", serverId: "server-1", servicePath: undefined },
+			{
+				id: "shared-job",
+				serverId: "server-1",
+				data: { applicationId: "app-1" },
+				servicePath: undefined,
+			},
 		]);
 
 		expect(mocks.fetchDeployApiJobs).toHaveBeenCalledTimes(1);
@@ -837,7 +863,35 @@ describe("deployment router assigned-server boundary", () => {
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 	});
 
-	it("reads a server setup log on the panel, after checking access to that server", async () => {
+	it.each(["owner", "admin"])(
+		"reads a server setup log on the panel for an %s, after checking access to that server",
+		async (role) => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role });
+			mocks.execAsync.mockResolvedValue({ stdout: "setup logs" });
+			mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: "/tmp/deployment.log",
+				serverId: "server-1",
+			});
+
+			await expect(
+				createCaller(role).readLogs({
+					deploymentId: "deployment-1",
+					tail: 100,
+				}),
+			).resolves.toBe("setup logs");
+
+			expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
+				expect.anything(),
+				"server-1",
+			);
+			expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps a server setup log away from a member with access to that server", async () => {
 		mocks.isCloud = false;
 		mocks.execAsync.mockResolvedValue({ stdout: "setup logs" });
 		mocks.getAccessibleServerIds.mockResolvedValue(new Set(["server-1"]));
@@ -849,12 +903,9 @@ describe("deployment router assigned-server boundary", () => {
 
 		await expect(
 			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
-		).resolves.toBe("setup logs");
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-		expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
-			expect.anything(),
-			"server-1",
-		);
+		expect(mocks.execAsync).not.toHaveBeenCalled();
 		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
 	});
 
@@ -952,10 +1003,6 @@ describe("deployment router assigned-server boundary", () => {
 				},
 			},
 		},
-		{
-			owner: "server schedule",
-			deployment: { schedule: { serverId: "server-1" } },
-		},
 	])(
 		"reads the $owner deployment log from the server that holds it",
 		async ({ deployment }) => {
@@ -976,6 +1023,50 @@ describe("deployment router assigned-server boundary", () => {
 			expect(mocks.execAsync).not.toHaveBeenCalled();
 		},
 	);
+
+	it.each(["owner", "admin"])(
+		"reads the server schedule deployment log from the server that holds it for an %s",
+		async (role) => {
+			mocks.findMemberByUserId.mockResolvedValue({ role });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				logPath: "/tmp/deployment.log",
+				schedule: { serverId: "server-1" },
+			});
+
+			await expect(
+				createCaller(role).readLogs({
+					deploymentId: "deployment-1",
+					tail: 100,
+				}),
+			).resolves.toBe("logs");
+
+			expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
+				expect.anything(),
+				"server-1",
+			);
+			expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+				"server-1",
+				expect.stringContaining('tail -n 100 "/tmp/deployment.log"'),
+			);
+			expect(mocks.execAsync).not.toHaveBeenCalled();
+		},
+	);
+
+	it("keeps a server schedule deployment log away from a member with access to that server", async () => {
+		mocks.findDeploymentById.mockResolvedValue({
+			deploymentId: "deployment-1",
+			logPath: "/tmp/deployment.log",
+			schedule: { scheduleType: "server", serverId: "server-1" },
+		});
+
+		await expect(
+			createCaller().readLogs({ deploymentId: "deployment-1", tail: 100 }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+
+		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+		expect(mocks.execAsync).not.toHaveBeenCalled();
+	});
 
 	it("reads a deployment log locally when the service runs on the panel", async () => {
 		mocks.isCloud = false;
@@ -1315,23 +1406,40 @@ describe("deployment router assigned-server boundary", () => {
 		});
 
 		describe("server schedule", () => {
-			it("kills a run on the schedule's server", async () => {
+			it.each(["owner", "admin"])(
+				"lets an %s kill a run on the schedule's server",
+				async (role) => {
+					mocks.findMemberByUserId.mockResolvedValue({ role });
+					mocks.findDeploymentById.mockResolvedValue(
+						scheduleRun(serverSchedule),
+					);
+
+					await killRun();
+
+					expect(mocks.checkPermission).toHaveBeenCalledWith(
+						expect.anything(),
+						{ deployment: ["cancel"] },
+					);
+					expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
+						expect.anything(),
+						"server-1",
+					);
+					expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
+						"server-1",
+						KILL_RUN,
+					);
+					expect(mocks.execAsync).not.toHaveBeenCalled();
+				},
+			);
+
+			it("refuses both actions for a member with access to the schedule's server", async () => {
 				mocks.findDeploymentById.mockResolvedValue(scheduleRun(serverSchedule));
 
-				await killRun();
+				await expect(killRun()).rejects.toMatchObject({ code: "FORBIDDEN" });
+				await expect(removeRun()).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-				expect(mocks.checkPermission).toHaveBeenCalledWith(expect.anything(), {
-					deployment: ["cancel"],
-				});
-				expect(mocks.assertTargetServerAccess).toHaveBeenCalledWith(
-					expect.anything(),
-					"server-1",
-				);
-				expect(mocks.execAsyncRemote).toHaveBeenCalledWith(
-					"server-1",
-					KILL_RUN,
-				);
-				expect(mocks.execAsync).not.toHaveBeenCalled();
+				expectNoProcessSideEffects();
+				expect(mocks.removeDeployment).not.toHaveBeenCalled();
 			});
 
 			it("does not let a service left on the row replace the server check", async () => {
@@ -1382,7 +1490,26 @@ describe("deployment router assigned-server boundary", () => {
 		);
 	});
 
-	it("kills a server-bound run on its server, never on the panel", async () => {
+	it.each(["owner", "admin"])(
+		"kills a server-bound run on its server for an %s, never on the panel",
+		async (role) => {
+			mocks.isCloud = false;
+			mocks.findMemberByUserId.mockResolvedValue({ role });
+			mocks.findDeploymentById.mockResolvedValue({
+				deploymentId: "deployment-1",
+				pid: "1234",
+				serverId: "server-1",
+				status: "running",
+			});
+
+			await createCaller(role).killProcess({ deploymentId: "deployment-1" });
+
+			expect(mocks.execAsyncRemote).toHaveBeenCalledWith("server-1", KILL_RUN);
+			expect(mocks.execAsync).not.toHaveBeenCalled();
+		},
+	);
+
+	it("refuses to kill or remove a server-bound run for a member with access to that server", async () => {
 		mocks.isCloud = false;
 		mocks.findDeploymentById.mockResolvedValue({
 			deploymentId: "deployment-1",
@@ -1391,10 +1518,17 @@ describe("deployment router assigned-server boundary", () => {
 			status: "running",
 		});
 
-		await createCaller().killProcess({ deploymentId: "deployment-1" });
+		await expect(
+			createCaller().killProcess({ deploymentId: "deployment-1" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
+		await expect(
+			createCaller().removeDeployment({ deploymentId: "deployment-1" }),
+		).rejects.toMatchObject({ code: "FORBIDDEN" });
 
-		expect(mocks.execAsyncRemote).toHaveBeenCalledWith("server-1", KILL_RUN);
 		expect(mocks.execAsync).not.toHaveBeenCalled();
+		expect(mocks.execAsyncRemote).not.toHaveBeenCalled();
+		expect(mocks.updateDeploymentStatus).not.toHaveBeenCalled();
+		expect(mocks.removeDeployment).not.toHaveBeenCalled();
 	});
 
 	it("denies backup deployment logs through the owning backup service before log reads", async () => {

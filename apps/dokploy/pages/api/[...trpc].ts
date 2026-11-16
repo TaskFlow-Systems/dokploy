@@ -11,6 +11,19 @@ import { logProcedureFailure } from "@/server/api/utils/procedure-error-log";
 import { handleApplicationEnvUpsert } from "./application.env.upsert";
 
 const handler = async (req: NextApiRequest, res: NextApiResponse) => {
+	// Validated once per request: the env upsert handler and the tRPC context
+	// get the same result, so an API key's rate limit counts this call once.
+	const result = await validateRequest(req);
+
+	if ("rateLimited" in result && result.rateLimited) {
+		const { retryAfterSeconds } = result.rateLimited;
+		if (retryAfterSeconds) {
+			res.setHeader("Retry-After", retryAfterSeconds);
+		}
+		res.status(429).json({ message: "Rate limit exceeded" });
+		return;
+	}
+
 	const path = Array.isArray(req.query.trpc)
 		? req.query.trpc.join("/")
 		: req.query.trpc;
@@ -28,7 +41,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
 		return;
 	}
 
-	const { session, user } = await validateRequest(req);
+	const { session, user } = result;
 
 	if (!user || !session) {
 		res.status(401).json({ message: "Unauthorized" });

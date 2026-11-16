@@ -145,16 +145,29 @@ const LOGO_MIME_TYPES: Record<string, string> = {
 
 export async function fetchTemplateLogo(
 	templateId: string,
-	baseUrl = "https://templates.dokploy.com",
+	baseUrl?: string,
+	options: TemplateFetchOptions = {},
 ): Promise<string | null> {
 	try {
-		const templates = await fetchTemplatesList(baseUrl);
+		const templateBaseUrl = await resolveTemplatesBaseUrl(baseUrl, options);
+		const templates = await fetchTemplatesList(templateBaseUrl, options);
 		const template = templates.find((t) => t.id === templateId);
 		if (!template?.logo) return null;
 
-		const response = await fetch(
-			`${baseUrl}/blueprints/${templateId}/${template.logo}`,
-			{ signal: AbortSignal.timeout(10000) },
+		const response = await fetchWithPublicEgress(
+			buildTemplateUrl(
+				templateBaseUrl,
+				`/blueprints/${templateId}/${template.logo}`,
+			),
+			{
+				redirect: "error",
+				signal: AbortSignal.timeout(10000),
+			},
+			{
+				allowPrivateNetwork: false,
+				fieldName: "template base URL",
+				lookup: options.lookup,
+			},
 		);
 		if (!response.ok) return null;
 

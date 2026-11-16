@@ -205,7 +205,12 @@ const createSchema = createInsertSchema(compose, {
 	customGitSSHKeyId: z.string().nullable().optional(),
 	command: z.string().optional(),
 	createEnvFile: z.boolean().optional(),
-	composePath: z.string().min(1).optional(),
+	composePath: z
+		.string()
+		.min(1)
+		.regex(/^[a-zA-Z0-9._@+][a-zA-Z0-9._@+/-]*$/, "Invalid compose path")
+		.refine((p) => !p.split("/").includes(".."), "Invalid compose path")
+		.optional(),
 	composeType: z.enum(["docker-compose", "stack"]).optional(),
 	watchPaths: watchPathsSchema.nullable().optional(),
 	sourceType: z

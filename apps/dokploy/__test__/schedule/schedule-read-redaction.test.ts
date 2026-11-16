@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 	findMemberByUserId: vi.fn(),
 	findScheduleById: vi.fn(),
 	schedulesFindMany: vi.fn(),
+	serverFindFirst: vi.fn(),
 }));
 
 vi.mock("@dokploy/server", () => ({
@@ -20,6 +21,9 @@ vi.mock("@dokploy/server/db", () => ({
 		query: {
 			schedules: {
 				findMany: mocks.schedulesFindMany,
+			},
+			server: {
+				findFirst: mocks.serverFindFirst,
 			},
 		},
 	},
@@ -111,6 +115,7 @@ describe("schedule read redaction", () => {
 		mocks.checkPermission.mockResolvedValue(undefined);
 		mocks.checkServicePermissionAndAccess.mockResolvedValue(undefined);
 		mocks.findMemberByUserId.mockResolvedValue({ role: "admin" });
+		mocks.serverFindFirst.mockResolvedValue(remoteServer);
 	});
 
 	it("redacts the bound compose service and shared env in one", async () => {

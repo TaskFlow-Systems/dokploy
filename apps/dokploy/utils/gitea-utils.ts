@@ -1,28 +1,8 @@
 // utils/gitea-utils.ts
 // This file contains client-safe utilities for Gitea integration
 
-/**
- * Generates the Dokploy server-side OAuth authorization URL for Gitea.
- *
- * @param giteaId The ID of the Gitea provider.
- * @param clientId The OAuth client ID. Kept for caller compatibility.
- * @param giteaUrl The base URL of the Gitea instance. Kept for caller compatibility.
- * @param baseUrl The base URL of the application for callback
- * @returns The Dokploy authorize URL that creates signed OAuth state server-side.
- */
-export const getGiteaOAuthUrl = (
-	giteaId: string,
-	clientId: string,
-	giteaUrl: string,
-	baseUrl: string,
-): string => {
-	if (!clientId || !giteaUrl || !baseUrl) {
-		// Return a marker that can be checked by the caller
-		return "#";
-	}
-
-	return `${baseUrl}/api/providers/gitea/authorize?giteaId=${encodeURIComponent(giteaId)}`;
-};
+export const getGiteaOAuthUrl = (giteaId: string): string =>
+	`/api/providers/gitea/authorize?giteaId=${encodeURIComponent(giteaId)}`;
 
 // Interfaces for Gitea API responses and components
 export interface Repository {

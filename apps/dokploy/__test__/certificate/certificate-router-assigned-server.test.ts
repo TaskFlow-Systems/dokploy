@@ -1,7 +1,9 @@
 import { REDACTED_SECRET_VALUE } from "@dokploy/server/utils/security/redaction";
+import { TRPCError } from "@trpc/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	assertServerAccess: vi.fn(),
 	audit: vi.fn(),
 	certificateFindMany: vi.fn(),
 	checkPermission: vi.fn(),
@@ -14,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@dokploy/server", () => ({
 	IS_CLOUD: true,
+	assertServerAccess: mocks.assertServerAccess,
 	createCertificate: mocks.createCertificate,
 	findCertificateById: mocks.findCertificateById,
 	getAccessibleServerIds: mocks.getAccessibleServerIds,
@@ -71,6 +74,17 @@ const createCaller = () =>
 describe("certificate router assigned-server boundary", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		// The rule of the real helper on the cloud, over the mocked server list.
+		mocks.assertServerAccess.mockImplementation(
+			async (session: unknown, serverId?: string | null) => {
+				const accessible = serverId
+					? await mocks.getAccessibleServerIds(session)
+					: null;
+				if (!accessible?.has(serverId)) {
+					throw new TRPCError({ code: "UNAUTHORIZED" });
+				}
+			},
+		);
 		mocks.checkPermission.mockResolvedValue(undefined);
 		mocks.createCertificate.mockResolvedValue({
 			certificateId: "certificate-1",
@@ -196,6 +210,18 @@ describe("certificate router assigned-server boundary", () => {
 		await expect(createCaller().create(certificateInput)).rejects.toMatchObject(
 			{ code: "UNAUTHORIZED" },
 		);
+
+		expect(mocks.assertServerAccess).toHaveBeenCalledWith(
+			expect.objectContaining({ userId: "user-1" }),
+			"server-1",
+		);
+		expect(mocks.createCertificate).not.toHaveBeenCalled();
+	});
+
+	it("denies cloud certificate creation without a server before file writes", async () => {
+		await expect(
+			createCaller().create({ ...certificateInput, serverId: undefined }),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
 
 		expect(mocks.createCertificate).not.toHaveBeenCalled();
 	});

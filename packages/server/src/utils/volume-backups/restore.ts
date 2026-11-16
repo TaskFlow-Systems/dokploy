@@ -87,7 +87,7 @@ export const restoreVolume = async (
 	const baseRestoreCommand = `
 	set -e
 	echo "Volume name: ${safeVolumeName}"
-	echo "Backup file name: ${backupObjectPath}"
+	echo ${quoteShellArg(`Backup file name: ${backupObjectPath}`)}
 	echo "Volume backup path: ${volumeBackupPath}"
 		echo "Downloading backup from S3..."
 		mkdir -p ${quotedVolumeBackupPath}
@@ -99,7 +99,7 @@ export const restoreVolume = async (
 		-v ${quotedVolumeMount} \
 		-v ${quotedBackupMount} \
 		ubuntu \
-		bash -c "cd /volume_data && tar xvf ${quotedBackupFileInContainer} ."
+		tar xvf ${quotedBackupFileInContainer} -C /volume_data
 	echo "Volume restore completed ✅"
 	`;
 

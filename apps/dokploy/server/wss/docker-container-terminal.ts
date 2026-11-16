@@ -164,6 +164,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 									ws.send(`\nContainer closed with code: ${code}\n`);
 									if (!hangingUp) {
 										conn.end();
+										ws.close();
 									}
 								})
 								.on("data", (data: string) => {
@@ -251,8 +252,8 @@ export const setupDockerContainerTerminalWebSocketServer = (
 						});
 					})
 					.on("error", (err) => {
-						console.error("SSH connection error:", err);
 						if (ws.readyState === ws.OPEN) {
+							console.error("SSH connection error:", err);
 							ws.send(`SSH error: ${err.message}`);
 							ws.close();
 						}

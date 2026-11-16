@@ -45,9 +45,11 @@ const getPatchRepoContext = async ({ type, id }: PatchRepoConfig) => {
 	};
 };
 
-export const getPatchRepoPath = async (config: PatchRepoConfig) => {
-	const { repoPath } = await getPatchRepoContext(config);
-	return repoPath;
+export const getPatchRepoPath = async (
+	config: PatchRepoConfig,
+): Promise<{ repoPath: string; serverId: string | null }> => {
+	const { repoPath, serverId } = await getPatchRepoContext(config);
+	return { repoPath, serverId };
 };
 
 const normalizePatchRepoFilePath = (filePath: string) => {

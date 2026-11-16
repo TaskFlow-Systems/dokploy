@@ -1,4 +1,5 @@
 import {
+	assertServerAccess,
 	containerKill,
 	containerRemove,
 	containerRestart,
@@ -20,6 +21,7 @@ import {
 	uploadFileToContainer,
 	writeContainerFile,
 } from "@dokploy/server";
+import { IS_CLOUD } from "@dokploy/server/constants";
 import {
 	checkPermission,
 	findMemberByUserId,
@@ -62,6 +64,10 @@ export const assertDockerServerAccess = async (
 	}
 
 	if (!serverId) {
+		// In the cloud the panel host's Docker belongs to no organization.
+		if (IS_CLOUD) {
+			throw new TRPCError({ code: "UNAUTHORIZED" });
+		}
 		return;
 	}
 
@@ -149,6 +155,7 @@ export const dockerRouter = createTRPCRouter({
 			}),
 		)
 		.query(async ({ input, ctx }) => {
+			await assertServerAccess(ctx.session, input.serverId ?? null);
 			await checkPermission(ctx, { docker: ["read"], server: ["read"] });
 			if (input.serverId) {
 				const server = await findServerById(input.serverId);
