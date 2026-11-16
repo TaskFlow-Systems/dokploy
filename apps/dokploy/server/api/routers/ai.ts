@@ -22,6 +22,7 @@ import {
 } from "@dokploy/server/services/ai";
 import { createComposeByTemplate } from "@dokploy/server/services/compose";
 import { getKnownSecretMatcher } from "@dokploy/server/services/known-secrets";
+import { providerEgressFetch } from "@dokploy/server/services/logs-and-metrics/provider-fetch";
 import {
 	addNewService,
 	checkPermission,
@@ -37,7 +38,6 @@ import {
 } from "@dokploy/server/utils/ai/select-ai-provider";
 import { redactAiSettingsSecrets } from "@dokploy/server/utils/security/redaction";
 import { scrubSecretText } from "@dokploy/server/utils/security/secret-scrub";
-import { fetchWithPublicEgress } from "@dokploy/server/utils/url/network";
 import { TRPCError } from "@trpc/server";
 import { generateText } from "ai";
 import { z } from "zod";
@@ -96,24 +96,18 @@ export const aiRouter = createTRPCRouter({
 				let response = null;
 				switch (providerName) {
 					case "ollama":
-						response = await fetchWithPublicEgress(
+						response = await providerEgressFetch(
 							appendAIProviderPath(apiUrl, "api/tags"),
-							{
-								headers,
-								redirect: "error",
-							},
+							{ headers },
 							{ fieldName: "AI provider URL" },
 						);
 						break;
 					case "gemini": {
 						const modelsUrl = new URL(appendAIProviderPath(apiUrl, "models"));
 						modelsUrl.searchParams.set("key", apiKey);
-						response = await fetchWithPublicEgress(
+						response = await providerEgressFetch(
 							modelsUrl,
-							{
-								headers: {},
-								redirect: "error",
-							},
+							{ headers: {} },
 							{ fieldName: "AI provider URL" },
 						);
 						break;
@@ -183,12 +177,9 @@ export const aiRouter = createTRPCRouter({
 								message: "API key must contain at least 1 character(s)",
 							});
 						}
-						response = await fetchWithPublicEgress(
+						response = await providerEgressFetch(
 							appendAIProviderPath(apiUrl, "models"),
-							{
-								headers,
-								redirect: "error",
-							},
+							{ headers },
 							{ fieldName: "AI provider URL" },
 						);
 				}

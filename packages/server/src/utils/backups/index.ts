@@ -1,4 +1,4 @@
-import { CLEANUP_CRON_JOB } from "@dokploy/server/constants";
+import { CLEANUP_CRON_JOB, IS_CLOUD } from "@dokploy/server/constants";
 import { member } from "@dokploy/server/db/schema";
 import type { BackupSchedule } from "@dokploy/server/services/backup";
 import { findDestinationById } from "@dokploy/server/services/destination";
@@ -133,6 +133,10 @@ export const keepLatestNBackups = async (
 	// 0 also immediately returns which is good as the empty "keep latest" field in the UI
 	// is saved as 0 in the database
 	if (!shouldRunBackupRetention(backup.keepLatestCount)) {
+		return;
+	}
+	// The panel host is shared in the cloud, so retention runs only on a server.
+	if (IS_CLOUD && !serverId) {
 		return;
 	}
 

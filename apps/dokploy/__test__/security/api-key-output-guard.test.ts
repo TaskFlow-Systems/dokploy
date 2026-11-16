@@ -138,6 +138,7 @@ const testRouter = createTRPCRouter({
 	}),
 	dockerVolume: createTRPCRouter({ readVolumeFile: secretReader }),
 	notification: createTRPCRouter({ revealSecret: secretReader }),
+	projectExportImport: createTRPCRouter({ export: secretReader }),
 	settings: createTRPCRouter({
 		readTraefikEnv: secretReader,
 		getOpenApiDocument: protectedProcedure.query(() => ({
@@ -267,6 +268,10 @@ describe("procedures that return raw secrets", () => {
 			() => apiKey().dockerVolume.readVolumeFile(),
 		],
 		["notification.revealSecret", () => apiKey().notification.revealSecret()],
+		[
+			"projectExportImport.export",
+			() => apiKey().projectExportImport.export(),
+		],
 		["settings.readTraefikEnv", () => apiKey().settings.readTraefikEnv()],
 		["user.revealApiKey", () => apiKey().user.revealApiKey()],
 	])("%s is refused before it runs", async (_path, call) => {

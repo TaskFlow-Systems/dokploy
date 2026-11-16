@@ -29,6 +29,9 @@ const API_KEY_DENIED_PROCEDURES = new Set([
 	"docker.readContainerFile",
 	"dockerVolume.readVolumeFile",
 	"notification.revealSecret",
+	// The bundle holds every secret of the project, encrypted with a passphrase
+	// the caller picks, so the key's holder could decrypt it offline.
+	"projectExportImport.export",
 	"settings.readTraefikEnv",
 	"user.revealApiKey",
 ]);

@@ -57,9 +57,16 @@ import { sshKeys } from "./ssh-key";
 import {
 	APP_NAME_MESSAGE,
 	APP_NAME_REGEX,
+	BUILD_PATH_MESSAGE,
+	BUILD_TOKEN_MESSAGE,
+	BUILD_TOKEN_REGEX,
 	encryptedText,
 	generateAppName,
+	isSafeBuildPath,
 } from "./utils";
+
+const buildPath = z.string().refine(isSafeBuildPath, BUILD_PATH_MESSAGE);
+const buildToken = z.string().regex(BUILD_TOKEN_REGEX, BUILD_TOKEN_MESSAGE);
 
 const isSafeOptionalBuildDirectory = (value: string | null | undefined) => {
 	if (value === null || value === undefined) {
@@ -92,19 +99,16 @@ const isSafeOptionalRelativeFilePath = (value: string | null | undefined) => {
 	}
 };
 
-const buildDirectorySchema = z
-	.string()
+const buildDirectorySchema = buildPath
 	.optional()
 	.refine(isSafeOptionalBuildDirectory, "Invalid file path");
 
-const nullableBuildDirectorySchema = z
-	.string()
+const nullableBuildDirectorySchema = buildPath
 	.nullable()
 	.optional()
 	.refine(isSafeOptionalBuildDirectory, "Invalid file path");
 
-const nullableRelativeFilePathSchema = z
-	.string()
+const nullableRelativeFilePathSchema = buildPath
 	.nullable()
 	.optional()
 	.refine(isSafeOptionalRelativeFilePath, "Invalid file path");
@@ -388,6 +392,7 @@ const createSchema = createInsertSchema(applications, {
 	repository: z.string().nullable().optional(),
 	dockerfile: nullableRelativeFilePathSchema,
 	dockerContextPath: nullableBuildDirectorySchema,
+	dockerBuildStage: buildToken.nullable().optional(),
 	branch: z.string().nullable().optional(),
 	customGitBranch: z.string().nullable().optional(),
 	customGitBuildPath: buildDirectorySchema.nullable(),
@@ -413,8 +418,8 @@ const createSchema = createInsertSchema(applications, {
 			"railpack",
 		])
 		.optional(),
-	railpackVersion: z.string().nullable().optional(),
-	herokuVersion: z.string().nullable().optional(),
+	railpackVersion: buildToken.nullable().optional(),
+	herokuVersion: buildToken.nullable().optional(),
 	publishDirectory: nullableRelativeFilePathSchema,
 	isStaticSpa: z.boolean().nullable().optional(),
 	createEnvFile: z.boolean().optional(),
@@ -640,6 +645,7 @@ export const apiUpsertApplicationEnvResponse = z.object({
 
 export const apiFindMonitoringStats = z.object({
 	appName: z.string().min(1),
+	serviceId: z.string().optional(),
 });
 
 export const apiUpdateApplication = createSchema

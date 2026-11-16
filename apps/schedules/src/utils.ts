@@ -242,6 +242,7 @@ export const initializeJobs = async () => {
 				scheduleId: schedule.scheduleId,
 				type: "schedule",
 				cronSchedule: schedule.cronExpression,
+				timezone: schedule.timezone,
 			});
 		} catch (error) {
 			logger.error(error, `Failed to schedule ${schedule.scheduleId}`);

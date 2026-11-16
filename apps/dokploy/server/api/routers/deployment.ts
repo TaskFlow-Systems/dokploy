@@ -60,6 +60,24 @@ import { createTRPCRouter, protectedProcedure, withPermission } from "../trpc";
 
 type DeploymentPermissionAction = "cancel" | "read";
 
+// A deployment that belongs to no service (a server's setup run, a host-level
+// schedule) has no access list of its own, so only owners and admins reach it.
+const assertServicelessDeploymentRole = async (
+	ctx: Parameters<typeof assertTargetServerAccess>[0],
+) => {
+	const member = await findMemberByUserId(
+		ctx.user.id,
+		ctx.session.activeOrganizationId,
+	);
+	if (member.role !== "owner" && member.role !== "admin") {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message:
+				"Only owners and admins can access deployments that belong to no service.",
+		});
+	}
+};
+
 const assertDeploymentActionAccess = async (
 	ctx: Parameters<typeof assertTargetServerAccess>[0],
 	deployment: DeploymentOwnerCandidate,
@@ -85,6 +103,7 @@ const assertDeploymentActionAccess = async (
 	if (deploymentServerId) {
 		await checkPermission(ctx, { deployment: [action] });
 		await assertTargetServerAccess(ctx, deploymentServerId);
+		await assertServicelessDeploymentRole(ctx);
 		return;
 	}
 
@@ -173,6 +192,11 @@ const assertScheduleRunCancelAccess = async (
 	if (schedule.scheduleType === "server" && schedule.serverId) {
 		await checkPermission(ctx, { deployment: ["cancel"] });
 		await assertTargetServerAccess(ctx, schedule.serverId);
+		await assertHostScheduleAccess(
+			ctx,
+			schedule.scheduleType,
+			schedule.serverId,
+		);
 		return;
 	}
 
@@ -424,6 +448,10 @@ export const deploymentRouter = createTRPCRouter({
 			rows = jobRows;
 		}
 
+		const accessedServices =
+			ctx.user.role !== "owner" && ctx.user.role !== "admin"
+				? (await findMemberByUserId(ctx.user.id, orgId)).accessedServices
+				: null;
 		const rowsWithServicePath = await Promise.all(
 			rows.map(async (row) => {
 				const servicePath = await resolveServicePath(
@@ -437,11 +465,21 @@ export const deploymentRouter = createTRPCRouter({
 			}),
 		);
 
-		if (IS_CLOUD) {
-			return rowsWithServicePath;
+		const visibleRows = IS_CLOUD
+			? rowsWithServicePath
+			: rowsWithServicePath.filter((row) => row.servicePath.href !== null);
+
+		if (accessedServices === null) {
+			return visibleRows;
 		}
 
-		return rowsWithServicePath.filter((row) => row.servicePath.href !== null);
+		// A member sees only jobs of services shared with them, never serviceless ones.
+		return visibleRows.filter((row) => {
+			const serviceId = String(
+				row.data?.applicationId ?? row.data?.composeId ?? "",
+			);
+			return serviceId !== "" && accessedServices.includes(serviceId);
+		});
 	}),
 
 	allByType: protectedProcedure
@@ -450,6 +488,11 @@ export const deploymentRouter = createTRPCRouter({
 			if (input.type === "schedule") {
 				const schedule = await findScheduleById(input.id);
 				await assertScheduleDeploymentReadAccess(ctx, schedule);
+				await assertHostScheduleAccess(
+					ctx,
+					schedule.scheduleType,
+					schedule.serverId,
+				);
 			} else if (input.type === "server") {
 				const accessibleServerIds = await getAccessibleServerIds(ctx.session);
 				if (!accessibleServerIds.has(input.id)) {

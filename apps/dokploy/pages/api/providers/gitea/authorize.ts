@@ -50,7 +50,7 @@ export default async function handler(
 			"redirect_uri",
 			gitea.redirectUri as string,
 		);
-		authorizationUrl.searchParams.append("scope", "read:user repo");
+		authorizationUrl.searchParams.append("scope", GITEA_OAUTH_SCOPE);
 		authorizationUrl.searchParams.append(
 			"state",
 			signGitProviderOAuthState({

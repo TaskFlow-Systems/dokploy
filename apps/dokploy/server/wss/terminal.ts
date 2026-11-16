@@ -273,6 +273,7 @@ export const setupTerminalWebSocketServer = (
 						.on("close", (code: number, _signal: string) => {
 							ws.send(`\nContainer closed with code: ${code}\n`);
 							conn.end();
+							ws.close();
 						})
 						.on("data", (data: string) => {
 							ws.send(data.toString());

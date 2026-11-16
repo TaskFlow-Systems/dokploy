@@ -60,6 +60,10 @@ export const domainHostSchema = z
 const pathSchema = z
 	.string()
 	.min(1)
+	.regex(
+		/^(\/[^`\s$]*)?$/,
+		"Path must start with '/' and cannot contain spaces, backticks or '$'",
+	)
 	.refine(isValidTraefikPath, {
 		message: "Path must start with '/' and cannot contain Traefik rule syntax",
 	})

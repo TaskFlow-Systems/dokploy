@@ -153,7 +153,7 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 	try {
 		const command = await backupVolume(volumeBackup);
 
-		const commandWithLog = `(${command}) >> ${deployment.logPath} 2>&1`;
+		const commandWithLog = `(${command}) >> ${quoteShellArgument(deployment.logPath)} 2>&1`;
 		if (serverId) {
 			await execAsyncRemote(serverId, commandWithLog);
 		} else {
@@ -189,7 +189,7 @@ export const runVolumeBackup = async (volumeBackupId: string) => {
 			volumeBackup.appName,
 		);
 		// delete all the .tar files
-		const command = `rm -rf ${volumeBackupPath}/*.tar`;
+		const command = `rm -rf ${quoteShellArgument(volumeBackupPath)}/*.tar`;
 		try {
 			if (serverId) {
 				await execAsyncRemote(serverId, command);

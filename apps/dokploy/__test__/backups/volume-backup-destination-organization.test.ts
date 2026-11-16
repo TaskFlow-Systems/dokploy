@@ -44,6 +44,7 @@ vi.mock("@dokploy/server", async (importOriginal) => ({
 	removeVolumeBackup: vi.fn(),
 	restoreVolume: vi.fn(),
 	runVolumeBackup: vi.fn(),
+	assertVolumeBelongsToService: vi.fn(async () => {}),
 }));
 
 vi.mock("@dokploy/server/lib/auth", () => ({

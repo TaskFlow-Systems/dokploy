@@ -258,6 +258,15 @@ const assertOwnerOrAdmin = (
 	}
 };
 
+const assertWebServerBackupsAvailable = () => {
+	if (IS_CLOUD) {
+		throw new TRPCError({
+			code: "FORBIDDEN",
+			message: "Web-server backups are not available in the cloud version",
+		});
+	}
+};
+
 const assertWebServerBackupAccess = async (
 	ctx: BackupAccessCtx,
 	backup: Pick<BackupScheduleWithRelations, "destinationId" | "databaseType">,
@@ -270,6 +279,7 @@ const assertWebServerBackupAccess = async (
 		});
 	}
 
+	assertWebServerBackupsAvailable();
 	assertOwnerOrAdmin(ctx, `You don't have access to ${action} server backups.`);
 	await assertDestinationAccess(
 		backup.destinationId,
@@ -477,7 +487,9 @@ const getVolumeRestoreServiceAppName = (backup: {
 const skipInaccessibleSchedule = (error: unknown) => {
 	if (
 		error instanceof TRPCError &&
-		(error.code === "UNAUTHORIZED" || error.code === "NOT_FOUND")
+		(error.code === "UNAUTHORIZED" ||
+			error.code === "FORBIDDEN" ||
+			error.code === "NOT_FOUND")
 	) {
 		return true;
 	}
@@ -628,6 +640,7 @@ export const backupRouter = createTRPCRouter({
 					input.backupType === "database" &&
 					input.databaseType === "web-server"
 				) {
+					assertWebServerBackupsAvailable();
 					assertOwnerOrAdmin(
 						ctx,
 						"You don't have access to create server backups.",
@@ -1211,27 +1224,43 @@ export const backupRouter = createTRPCRouter({
 				}
 				queue.push(log);
 			};
+			const assertBackupFileInService = (...folders: string[]) => {
+				if (
+					input.backupFile.split("/").includes("..") ||
+					!folders.some((folder) => input.backupFile.startsWith(`${folder}/`))
+				) {
+					throw new TRPCError({
+						code: "UNAUTHORIZED",
+						message: "Backup file does not belong to this service",
+					});
+				}
+			};
 			const runRestore = async () => {
 				if (input.backupType === "database") {
 					if (input.databaseType === "postgres") {
 						const postgres = await findPostgresById(databaseId);
 						service = postgres;
+						assertBackupFileInService(postgres.appName);
 						await restorePostgresBackup(postgres, destination, input, onLog);
 					} else if (input.databaseType === "mysql") {
 						const mysql = await findMySqlById(databaseId);
 						service = mysql;
+						assertBackupFileInService(mysql.appName);
 						await restoreMySqlBackup(mysql, destination, input, onLog);
 					} else if (input.databaseType === "mariadb") {
 						const mariadb = await findMariadbById(databaseId);
 						service = mariadb;
+						assertBackupFileInService(mariadb.appName);
 						await restoreMariadbBackup(mariadb, destination, input, onLog);
 					} else if (input.databaseType === "mongo") {
 						const mongo = await findMongoById(databaseId);
 						service = mongo;
+						assertBackupFileInService(mongo.appName);
 						await restoreMongoBackup(mongo, destination, input, onLog);
 					} else if (input.databaseType === "libsql") {
 						const libsql = await findLibsqlById(databaseId);
 						service = libsql;
+						assertBackupFileInService(libsql.appName);
 						await restoreLibsqlBackup(libsql, destination, input, onLog);
 					} else if (input.databaseType === "web-server") {
 						await restoreWebServerBackup(destination, input.backupFile, onLog);
@@ -1239,6 +1268,11 @@ export const backupRouter = createTRPCRouter({
 				} else if (input.backupType === "compose") {
 					const compose = await findComposeById(databaseId);
 					service = compose;
+					const serviceName = input.metadata?.serviceName;
+					assertBackupFileInService(
+						compose.appName,
+						...(serviceName ? [`${compose.appName}_${serviceName}`] : []),
+					);
 					await restoreComposeBackup(compose, destination, input, onLog);
 				}
 			};

@@ -2,6 +2,7 @@ import { type LookupAddress, lookup } from "node:dns";
 import { BlockList, isIP, type LookupFunction } from "node:net";
 import { IS_CLOUD } from "@dokploy/server/constants";
 import { Agent, fetch, type RequestInit } from "@dokploy/server/utils/undici";
+import { fetchWithPublicEgress } from "@dokploy/server/utils/url/network";
 
 export const PROVIDER_REQUEST_TIMEOUT_MS = 15_000;
 
@@ -92,13 +93,20 @@ export const guardedLookup: LookupFunction = (hostname, options, callback) => {
 // that package's own fetch.
 const guardedAgent = new Agent({ connect: { lookup: guardedLookup } });
 
-export const providerFetch = async (url: string, init: RequestInit = {}) => {
-	assertNotBlockedEndpoint(url);
+// A Request of the undici package is not an instance of the runtime's own.
+const requestUrl = (input: unknown): string => {
+	if (typeof input === "string") return input;
+	if (input instanceof URL) return input.href;
+	return String((input as { url?: unknown }).url);
+};
+
+// No timeout of its own, so long AI generations keep the caller's signal.
+export const guardedFetch: typeof fetch = async (input, init) => {
+	assertNotBlockedEndpoint(requestUrl(input));
 	try {
-		return await fetch(url, {
+		return await fetch(input, {
 			...init,
 			redirect: "error",
-			signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
 			dispatcher: guardedAgent,
 		});
 	} catch (error) {
@@ -107,4 +115,41 @@ export const providerFetch = async (url: string, init: RequestInit = {}) => {
 		}
 		throw error;
 	}
+};
+
+export const providerFetch = (url: string, init: RequestInit = {}) =>
+	guardedFetch(url, {
+		...init,
+		signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
+	});
+
+type ProviderEgressInit = {
+	method?: string;
+	headers?: Record<string, string>;
+	body?: string;
+};
+
+// A panel that may not reach private networks (the cloud) sends only to the
+// public addresses fetchWithPublicEgress checked, pinned for the request; any
+// other panel may reach its own network, and providerFetch still keeps it off
+// cloud metadata endpoints. Neither follows a redirect.
+export const providerEgressFetch = (
+	url: string | URL,
+	init: ProviderEgressInit,
+	options: { fieldName: string; allowPrivateNetwork?: boolean },
+) => {
+	const allowPrivateNetwork =
+		options.allowPrivateNetwork ?? process.env.IS_CLOUD !== "true";
+	if (allowPrivateNetwork) {
+		return providerFetch(url.toString(), init);
+	}
+	return fetchWithPublicEgress(
+		url,
+		{
+			...init,
+			redirect: "error",
+			signal: AbortSignal.timeout(PROVIDER_REQUEST_TIMEOUT_MS),
+		},
+		{ allowPrivateNetwork: false, fieldName: options.fieldName },
+	);
 };

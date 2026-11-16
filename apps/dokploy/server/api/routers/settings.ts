@@ -166,22 +166,16 @@ const beginTraefikOperation = async (
 	return release;
 };
 
-const traefikUpdateLocks = new Map<string, symbol>();
-const traefikUpdateErrors = new Map<string, string>();
-
-const assertTraefikAccess = async (
-	serverId: string | undefined,
-	organizationId: string,
-) => {
-	if (serverId) {
-		const server = await findServerById(serverId);
-		if (server.organizationId !== organizationId) {
-			throw new TRPCError({ code: "UNAUTHORIZED" });
-		}
-	} else if (IS_CLOUD) {
+// In the cloud the panel's own host belongs to no organization, so a request
+// that names no server never reaches it.
+const assertNotCloudPanelHost = (serverId?: string | null) => {
+	if (IS_CLOUD && !serverId) {
 		throw new TRPCError({ code: "UNAUTHORIZED" });
 	}
 };
+
+const traefikUpdateLocks = new Map<string, symbol>();
+const traefikUpdateErrors = new Map<string, string>();
 
 export const settingsRouter = createTRPCRouter({
 	getWebServerSettings: protectedProcedure.query(async () => {
@@ -219,6 +213,7 @@ export const settingsRouter = createTRPCRouter({
 	reloadTraefik: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			const releaseTraefikOperation = await beginTraefikOperation(
@@ -392,6 +387,7 @@ export const settingsRouter = createTRPCRouter({
 	toggleDashboard: adminProcedure
 		.input(apiEnableDashboard)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input.serverId);
 			const releaseTraefikOperation = await beginTraefikOperation(
 				input.serverId,
@@ -455,6 +451,7 @@ export const settingsRouter = createTRPCRouter({
 	cleanUnusedImages: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			await cleanupImages(input?.serverId);
@@ -468,6 +465,7 @@ export const settingsRouter = createTRPCRouter({
 	cleanUnusedVolumes: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			await cleanupVolumes(input?.serverId);
@@ -481,6 +479,7 @@ export const settingsRouter = createTRPCRouter({
 	cleanStoppedContainers: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			await cleanupContainers(input?.serverId);
@@ -494,6 +493,7 @@ export const settingsRouter = createTRPCRouter({
 	cleanDockerBuilder: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			await cleanupBuilders(input?.serverId);
@@ -506,6 +506,7 @@ export const settingsRouter = createTRPCRouter({
 	cleanDockerPrune: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			await cleanupSystem(input?.serverId);
@@ -520,6 +521,7 @@ export const settingsRouter = createTRPCRouter({
 	cleanAll: adminProcedure
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 
 			// Execute cleanup in background and return immediately to avoid gateway timeouts
@@ -1036,6 +1038,7 @@ export const settingsRouter = createTRPCRouter({
 	readDirectories: protectedProcedure
 		.input(apiServerSchema)
 		.query(async ({ ctx, input }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			try {
 				await checkPermission(ctx, { traefikFiles: ["read"] });
 				await assertTraefikFilesHostAccess(ctx, input?.serverId);
@@ -1053,6 +1056,7 @@ export const settingsRouter = createTRPCRouter({
 	updateTraefikFile: protectedProcedure
 		.input(apiModifyTraefikConfig)
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await checkPermission(ctx, { traefikFiles: ["write"] });
 			await assertTraefikFilesHostAccess(ctx, input?.serverId);
 			const allowProtected = isProtectedTraefikPath(
@@ -1079,6 +1083,7 @@ export const settingsRouter = createTRPCRouter({
 	readTraefikFile: protectedProcedure
 		.input(apiReadTraefikConfig)
 		.query(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await checkPermission(ctx, { traefikFiles: ["read"] });
 			await assertTraefikFilesHostAccess(ctx, input.serverId);
 			const allowProtected = isProtectedTraefikPath(input.path, input.serverId);
@@ -1204,6 +1209,7 @@ export const settingsRouter = createTRPCRouter({
 	readTraefikEnv: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 			const envVars = await readEnvironmentVariables(
 				"dokploy-traefik",
@@ -1215,6 +1221,7 @@ export const settingsRouter = createTRPCRouter({
 	writeTraefikEnv: adminProcedure
 		.input(z.object({ env: z.string(), serverId: z.string().optional() }))
 		.mutation(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 			const envs = prepareEnvironmentVariables(input.env);
 			const ports = await readPorts("dokploy-traefik", input?.serverId);
@@ -1282,6 +1289,7 @@ export const settingsRouter = createTRPCRouter({
 	haveTraefikDashboardPortEnabled: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 			const ports = await readPorts("dokploy-traefik", input?.serverId);
 			return ports.some((port) => port.targetPort === 8080);
@@ -1599,6 +1607,7 @@ export const settingsRouter = createTRPCRouter({
 	getTraefikPorts: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input, ctx }) => {
+			assertNotCloudPanelHost(input?.serverId);
 			await assertSettingsServerAccess(ctx, input?.serverId);
 			const ports = await readPorts("dokploy-traefik", input?.serverId);
 			return ports;
@@ -1606,10 +1615,8 @@ export const settingsRouter = createTRPCRouter({
 	getTraefikOverview: adminProcedure
 		.input(apiServerSchema)
 		.query(async ({ input, ctx }) => {
-			await assertTraefikAccess(
-				input?.serverId,
-				ctx.session.activeOrganizationId,
-			);
+			assertNotCloudPanelHost(input?.serverId);
+			await assertSettingsServerAccess(ctx, input?.serverId);
 			const key = input?.serverId ?? "local";
 			const overview = await getTraefikOverview(input?.serverId);
 			return {
@@ -1622,7 +1629,8 @@ export const settingsRouter = createTRPCRouter({
 		.input(apiServerSchema)
 		.mutation(async ({ input, ctx }) => {
 			const serverId = input?.serverId;
-			await assertTraefikAccess(serverId, ctx.session.activeOrganizationId);
+			assertNotCloudPanelHost(serverId);
+			await assertSettingsServerAccess(ctx, serverId);
 
 			const lockKey = serverId ?? "local";
 			if (traefikUpdateLocks.has(lockKey)) {

@@ -84,7 +84,6 @@ const assertScheduleBindingUnchanged = (
 		"applicationId",
 		"composeId",
 		"serverId",
-		"organizationId",
 	] as const;
 
 	for (const field of fields) {
@@ -443,6 +442,11 @@ export const scheduleRouter = createTRPCRouter({
 				await checkPermission(ctx, { schedule: ["read"] });
 				await assertServerLevelScheduleAccess(ctx, schedule);
 			}
+			await assertHostScheduleAccess(
+				ctx,
+				schedule.scheduleType,
+				schedule.serverId,
+			);
 			return redactServiceRelationSecrets(schedule);
 		}),
 

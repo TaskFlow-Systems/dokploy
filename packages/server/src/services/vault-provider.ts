@@ -60,8 +60,9 @@ export const mergeVaultProviderConfig = (
 ): VaultProviderConfig => {
 	const merged: Record<string, unknown> = { ...incoming };
 	const stored = existing as Record<string, unknown>;
+	const sensitive = SENSITIVE_FIELDS[incoming.providerType];
 	let keepsStoredSecret = false;
-	for (const field of SENSITIVE_FIELDS[incoming.providerType]) {
+	for (const field of sensitive) {
 		if (merged[field] === VAULT_SECRET_MASK) {
 			if (incoming.providerType !== existing.providerType) {
 				throw new TRPCError({
@@ -75,10 +76,18 @@ export const mergeVaultProviderConfig = (
 		}
 	}
 	if (keepsStoredSecret) {
+		// Besides where a kept secret goes, every other setting (a mount, a
+		// project, a path) decides what it reads, so any change needs it again.
+		const targetFields = new Set([
+			...SECRET_TARGET_FIELDS[incoming.providerType],
+			...[...Object.keys(merged), ...Object.keys(stored)].filter(
+				(field) => !sensitive.includes(field),
+			),
+		]);
 		assertStoredSecretTargetUnchanged(
 			"vault provider credentials",
 			Object.fromEntries(
-				SECRET_TARGET_FIELDS[incoming.providerType].map((field) => [
+				[...targetFields].map((field) => [
 					field,
 					[merged[field], stored[field]] as const,
 				]),

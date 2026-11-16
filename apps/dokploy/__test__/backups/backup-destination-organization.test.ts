@@ -80,6 +80,12 @@ const caller = backupRouter.createCaller({
 	user: { id: "user-1", email: "user@example.com", role: "owner" },
 } as Parameters<typeof backupRouter.createCaller>[0]);
 
+const callerAs = (role: string) =>
+	backupRouter.createCaller({
+		session: { activeOrganizationId: "org-a" },
+		user: { id: "user-1", email: "user@example.com", role },
+	} as Parameters<typeof backupRouter.createCaller>[0]);
+
 const ownDestination = { destinationId: "dest-a", organizationId: "org-a" };
 const foreignDestination = { destinationId: "dest-b", organizationId: "org-b" };
 
@@ -113,6 +119,13 @@ const restoreInput = {
 	backupFile: "app/2024.sql.gz",
 };
 
+const postgresSchedule = {
+	appName: "app",
+	prefix: "/",
+	postgres: { appName: "app" },
+};
+const webServerSchedule = { appName: "panel", prefix: "/" };
+
 const drain = async (stream: unknown) => {
 	for await (const _ of stream as AsyncIterable<string>) {
 	}
@@ -130,11 +143,12 @@ describe("backup endpoints scope destinations to the active organization", () =>
 			databaseType: "postgres",
 			backupType: "database",
 		});
-		mocks.findPostgresById.mockResolvedValue({ postgresId: "pg-1" });
+		mocks.findPostgresById.mockResolvedValue({
+			postgresId: "pg-1",
+			appName: "app",
+		});
 		// The fork only restores objects under a schedule of the same database.
-		mocks.findRestoreBackups.mockResolvedValue([
-			{ appName: "app", prefix: "/", postgres: { appName: "app" } },
-		]);
+		mocks.findRestoreBackups.mockResolvedValue([postgresSchedule]);
 	});
 
 	it("rejects creating a backup on a destination from another organization", async () => {
@@ -193,9 +207,7 @@ describe("backup endpoints scope destinations to the active organization", () =>
 		expect(mocks.restorePostgresBackup).toHaveBeenCalledTimes(1);
 	});
 
-	// Upstream leaves service-less web-server schedules unscoped; the fork
-	// scopes their destination like every other schedule.
-	it("rejects web-server schedules on a destination from another organization", async () => {
+	it("rejects a service-less web-server schedule on a foreign destination", async () => {
 		mocks.findDestinationRow.mockResolvedValue(foreignDestination);
 
 		await expect(
@@ -209,5 +221,76 @@ describe("backup endpoints scope destinations to the active organization", () =>
 			message: "You don't have access to this destination.",
 		});
 		expect(mocks.createBackup).not.toHaveBeenCalled();
+	});
+});
+
+describe("restore access by role", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.findPostgresById.mockResolvedValue({
+			postgresId: "pg-1",
+			appName: "app",
+		});
+	});
+
+	// Web-server backups live under the schedule's appName folder, and the fork
+	// restores only objects under a schedule on that destination.
+	const webServerRestore = {
+		databaseId: "",
+		databaseType: "web-server" as const,
+		backupType: "database" as const,
+		databaseName: "panel",
+		backupFile: "panel/panel.zip",
+		destinationId: "dest-a",
+	};
+
+	for (const role of ["owner", "admin"]) {
+		it(`${role} can run a web-server restore`, async () => {
+			mocks.findDestinationRow.mockResolvedValue(ownDestination);
+			mocks.findRestoreBackups.mockResolvedValue([webServerSchedule]);
+			const stream =
+				await callerAs(role).restoreBackupWithLogs(webServerRestore);
+			await drain(stream);
+			expect(mocks.restoreWebServerBackup).toHaveBeenCalledTimes(1);
+		});
+	}
+
+	it("a member cannot run a web-server restore (panel wipe)", async () => {
+		mocks.findDestinationRow.mockResolvedValue(ownDestination);
+		mocks.findRestoreBackups.mockResolvedValue([webServerSchedule]);
+		const stream =
+			await callerAs("member").restoreBackupWithLogs(webServerRestore);
+		await expect(drain(stream)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+		expect(mocks.restoreWebServerBackup).not.toHaveBeenCalled();
+	});
+
+	it("a member with service access can still restore its own database", async () => {
+		mocks.findDestinationRow.mockResolvedValue(ownDestination);
+		mocks.findRestoreBackups.mockResolvedValue([postgresSchedule]);
+		const stream = await callerAs("member").restoreBackupWithLogs({
+			...restoreInput,
+			destinationId: "dest-a",
+		});
+		await drain(stream);
+		expect(mocks.restorePostgresBackup).toHaveBeenCalledTimes(1);
+	});
+
+	it("refuses a backup file outside the target service's folder", async () => {
+		mocks.findDestinationRow.mockResolvedValue(ownDestination);
+		mocks.findRestoreBackups.mockResolvedValue([postgresSchedule]);
+		mocks.findPostgresById.mockResolvedValue({
+			postgresId: "pg-1",
+			appName: "other",
+		});
+		const stream = await callerAs("member").restoreBackupWithLogs({
+			...restoreInput,
+			destinationId: "dest-a",
+		});
+		await expect(drain(stream)).rejects.toMatchObject({
+			message: expect.stringContaining(
+				"Backup file does not belong to this service",
+			),
+		});
+		expect(mocks.restorePostgresBackup).not.toHaveBeenCalled();
 	});
 });

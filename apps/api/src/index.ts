@@ -108,6 +108,12 @@ export const deploymentFunction = inngest.createFunction(
 	},
 );
 
+if (!process.env.API_KEY) {
+	console.error(
+		"API_KEY is not set; all authenticated routes will be rejected",
+	);
+}
+
 app.use(async (c, next) => {
 	if (c.req.path === "/health" || c.req.path === "/api/inngest") {
 		return next();

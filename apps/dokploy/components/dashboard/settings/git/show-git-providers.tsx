@@ -34,7 +34,6 @@ import {
 } from "@/components/ui/tooltip";
 import { api } from "@/utils/api";
 import { DEFAULT_GITHUB_URL } from "@/utils/github-utils";
-import { useUrl } from "@/utils/hooks/use-url";
 import { AddBitbucketProvider } from "./bitbucket/add-bitbucket-provider";
 import { EditBitbucketProvider } from "./bitbucket/edit-bitbucket-provider";
 import { AddGiteaProvider } from "./gitea/add-gitea-provider";
@@ -96,12 +95,11 @@ export const ShowGitProviders = () => {
 		api.gitProvider.toggleShare.useMutation();
 	const { data: currentMember } = api.user.get.useQuery();
 	const { data: permissions } = api.user.getPermissions.useQuery();
-	const url = useUrl();
 	const isOrgAdmin =
 		currentMember?.role === "owner" || currentMember?.role === "admin";
 
 	const getGitlabUrl = (gitlabId: string) =>
-		`${url}/api/providers/gitlab/authorize?gitlabId=${encodeURIComponent(gitlabId)}`;
+		`/api/providers/gitlab/authorize?gitlabId=${encodeURIComponent(gitlabId)}`;
 
 	return (
 		<div className="w-full">

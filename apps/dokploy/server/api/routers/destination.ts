@@ -98,9 +98,7 @@ export const destinationRouter = createTRPCRouter({
 					message: "Server not found",
 				});
 			}
-			if (IS_CLOUD) {
-				await assertDestinationServerAccess(ctx, input.serverId);
-			}
+			await assertDestinationServerAccess(ctx, input.serverId);
 
 			const { destinationId, ...connectionInput } = input;
 			if (isRedactedSecretValue(connectionInput.secretAccessKey)) {

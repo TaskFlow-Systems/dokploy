@@ -843,8 +843,8 @@ export const createDeploymentVolumeBackup = async (
 			const server = await findServerById(serverId);
 
 			const command = `
-				mkdir -p ${VOLUME_BACKUPS_PATH}/${volumeBackup.appName};
-            	echo "Initializing volume backup" >> ${logFilePath};
+				mkdir -p ${quoteShellArg(path.join(VOLUME_BACKUPS_PATH, volumeBackup.appName))};
+				echo "Initializing volume backup" >> ${quoteShellArg(logFilePath)};
 			`;
 
 			await execAsyncRemote(server.serverId, command);
@@ -967,7 +967,7 @@ const getDeploymentsByType = async (
 		where: eq(deployments[`${type}Id`], id),
 		orderBy: desc(deployments.createdAt),
 		with: {
-			rollback: true,
+			rollback: { columns: { fullContext: false } },
 		},
 	});
 	return deploymentList;
@@ -1380,3 +1380,56 @@ export const clearOldDeployments = async (
 		await execAsync(command);
 	}
 };
+
+const deploymentOwnerQuery = {
+	columns: { applicationId: true, composeId: true },
+	with: {
+		server: { columns: { organizationId: true } },
+		schedule: {
+			columns: { organizationId: true, applicationId: true, composeId: true },
+			with: { server: { columns: { organizationId: true } } },
+		},
+		previewDeployment: { columns: { applicationId: true } },
+		backup: {
+			columns: {
+				postgresId: true,
+				mysqlId: true,
+				mariadbId: true,
+				mongoId: true,
+				libsqlId: true,
+				composeId: true,
+			},
+			with: { destination: { columns: { organizationId: true } } },
+		},
+		volumeBackup: {
+			columns: {
+				applicationId: true,
+				postgresId: true,
+				mysqlId: true,
+				mariadbId: true,
+				mongoId: true,
+				redisId: true,
+				libsqlId: true,
+				composeId: true,
+			},
+		},
+	},
+} as const;
+
+export const findDeploymentByLogPath = async (logPath: string) => {
+	return db.query.deployments.findFirst({
+		where: (fields, { eq }) => eq(fields.logPath, logPath),
+		...deploymentOwnerQuery,
+	});
+};
+
+export const findDeploymentOwnerById = async (deploymentId: string) => {
+	return db.query.deployments.findFirst({
+		where: (fields, { eq }) => eq(fields.deploymentId, deploymentId),
+		...deploymentOwnerQuery,
+	});
+};
+
+export type DeploymentOwner = NonNullable<
+	Awaited<ReturnType<typeof findDeploymentOwnerById>>
+>;

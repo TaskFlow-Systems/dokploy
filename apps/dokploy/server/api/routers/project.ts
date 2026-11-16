@@ -36,6 +36,7 @@ import {
 	addNewProject,
 	checkPermission,
 	checkProjectAccess,
+	checkServicePermissionAndAccess,
 	findMemberByUserId,
 	hasPermission,
 } from "@dokploy/server/services/permission";
@@ -371,26 +372,31 @@ export const projectRouter = createTRPCRouter({
 						mariadb: {
 							columns: {
 								mariadbId: true,
+								name: true,
 							},
 						},
 						mongo: {
 							columns: {
 								mongoId: true,
+								name: true,
 							},
 						},
 						mysql: {
 							columns: {
 								mysqlId: true,
+								name: true,
 							},
 						},
 						postgres: {
 							columns: {
 								postgresId: true,
+								name: true,
 							},
 						},
 						redis: {
 							columns: {
 								redisId: true,
+								name: true,
 							},
 						},
 						compose: {
@@ -403,6 +409,7 @@ export const projectRouter = createTRPCRouter({
 						libsql: {
 							columns: {
 								libsqlId: true,
+								name: true,
 							},
 						},
 					},
@@ -923,6 +930,9 @@ export const projectRouter = createTRPCRouter({
 				for (const service of servicesToDuplicate) {
 					await assertServicePlacementAccess(ctx, service.id, service.type, {
 						sourceEnvironmentId: sourceEnvironment.environmentId,
+					});
+					await checkServicePermissionAndAccess(ctx, service.id, {
+						service: ["read"],
 					});
 				}
 

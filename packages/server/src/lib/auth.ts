@@ -13,7 +13,7 @@ import {
 } from "better-auth/api";
 import { admin, organization, twoFactor } from "better-auth/plugins";
 import { and, desc, eq } from "drizzle-orm";
-import { IS_CLOUD } from "../constants";
+import { getRootAdminIds, IS_CLOUD } from "../constants";
 import { db } from "../db";
 import * as schema from "../db/schema";
 import { getTrustedOrigins, getUserByToken } from "../services/admin";
@@ -103,6 +103,31 @@ export const resolveTrustedOriginsForAuthRequest = async (
 	}
 };
 
+// A link in a verification or reset email must point at the panel itself,
+// not at whatever host the request that triggered the email came through.
+const rewriteToCanonicalOrigin = async (url: string): Promise<string> => {
+	try {
+		const configured = process.env.BETTER_AUTH_URL;
+		let origin: string | null = configured ?? null;
+		if (!origin) {
+			const settings = await getWebServerSettings();
+			origin = settings?.host
+				? `${settings.https ? "https" : "http"}://${settings.host}`
+				: settings?.serverIp
+					? `http://${settings.serverIp}:3000`
+					: null;
+		}
+		if (!origin) return url;
+		const target = new URL(url);
+		const canonical = new URL(origin);
+		target.protocol = canonical.protocol;
+		target.host = canonical.host;
+		return target.toString();
+	} catch {
+		return url;
+	}
+};
+
 export const canProvisionSsoMembershipForEmail = (
 	email: string | undefined,
 	provider: {
@@ -148,6 +173,10 @@ const { handler, api } = betterAuth({
 		"/organization/create",
 		"/organization/update",
 		"/organization/delete",
+		"/organization/update-member-role",
+		"/organization/invite-member",
+		"/api-key/create",
+		"/api-key/update",
 		...(!IS_CLOUD ? ["/verify-email"] : []),
 	],
 	secret: betterAuthSecret,
@@ -188,6 +217,22 @@ const { handler, api } = betterAuth({
 	},
 	hooks: {
 		before: createAuthMiddleware(async (ctx) => {
+			if (ctx.path === "/admin/impersonate-user") {
+				const targetUserId = (ctx.body as { userId?: string } | undefined)
+					?.userId;
+				const target = targetUserId
+					? await db.query.user.findFirst({
+							where: eq(schema.user.id, targetUserId),
+							columns: { allowImpersonation: true },
+						})
+					: undefined;
+				if (!target?.allowImpersonation) {
+					throw new APIError("FORBIDDEN", {
+						message: "This user has not allowed impersonation",
+					});
+				}
+			}
+
 			if (ctx.path === "/two-factor/enable") {
 				const session = await getSessionFromCtx(ctx);
 				if (session && !session.user.twoFactorEnabled) {
@@ -223,7 +268,7 @@ const { handler, api } = betterAuth({
 				await sendVerificationEmail({
 					userName: user.name || "User",
 					email: user.email,
-					verificationUrl: url,
+					verificationUrl: await rewriteToCanonicalOrigin(url),
 				});
 			}
 		},
@@ -241,11 +286,12 @@ const { handler, api } = betterAuth({
 			},
 		},
 		sendResetPassword: async ({ user, url }) => {
+			const safeUrl = await rewriteToCanonicalOrigin(url);
 			await sendEmail({
 				email: user.email,
 				subject: "Reset your password",
 				text: `
-				<p>Click the link to reset your password: <a href="${url}">Reset Password</a></p>
+				<p>Click the link to reset your password: <a href="${safeUrl}">Reset Password</a></p>
 				`,
 			});
 		},
@@ -624,7 +670,9 @@ const { handler, api } = betterAuth({
 		...(IS_CLOUD
 			? [
 					admin({
-						adminUserIds: [process.env.USER_ADMIN_ID as string],
+						adminUserIds: getRootAdminIds(),
+						// No role grants admin powers, only the listed users do.
+						roles: {},
 					}),
 				]
 			: []),
@@ -648,7 +696,23 @@ const _auth = {
 export type AuthType = typeof _auth;
 export const auth: AuthType = _auth;
 
-export const validateRequest = async (request: IncomingMessage) => {
+// The OpenAPI handler and the tRPC context both validate the same request;
+// without this an API key's usage counters would be consumed twice per call.
+const validatedRequests = new WeakMap<
+	IncomingMessage,
+	ReturnType<typeof resolveRequest>
+>();
+
+export const validateRequest = (request: IncomingMessage) => {
+	let result = validatedRequests.get(request);
+	if (!result) {
+		result = resolveRequest(request);
+		validatedRequests.set(request, result);
+	}
+	return result;
+};
+
+const resolveRequest = async (request: IncomingMessage) => {
 	const apiKey = request.headers["x-api-key"] as string;
 	if (apiKey) {
 		try {
@@ -657,6 +721,18 @@ export const validateRequest = async (request: IncomingMessage) => {
 					key: apiKey,
 				},
 			});
+
+			if (error?.code === "RATE_LIMITED" || error?.code === "USAGE_EXCEEDED") {
+				const tryAgainIn = (error as { details?: { tryAgainIn?: number } })
+					.details?.tryAgainIn;
+				return {
+					session: null,
+					user: null,
+					rateLimited: {
+						retryAfterSeconds: tryAgainIn ? Math.ceil(tryAgainIn / 1000) : null,
+					},
+				};
+			}
 
 			if (error) {
 				throw new Error(error.message?.toString() || "Error verifying API key");

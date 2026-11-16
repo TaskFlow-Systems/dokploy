@@ -5,6 +5,7 @@ import { createDeepInfra } from "@ai-sdk/deepinfra";
 import { createMistral } from "@ai-sdk/mistral";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { guardedFetch } from "@dokploy/server/services/logs-and-metrics/provider-fetch";
 import {
 	assertCloudHostResolvesPublic,
 	fetchWithPublicEgress,
@@ -114,10 +115,37 @@ export function getProviderName(apiUrl: string) {
 	return "custom";
 }
 
-const aiProviderFetch = (input: RequestInfo | URL, init?: RequestInit) => {
-	return fetchWithPublicEgress(input, init, {
-		fieldName: "AI provider URL",
-	});
+// A cloud panel calls only the public addresses fetchWithPublicEgress checked,
+// pinned for the request. A self-hosted one may use a provider on its own
+// network, and guardedFetch still keeps it off cloud metadata endpoints and
+// redirects. Neither sets a timeout: a long generation keeps the SDK's signal.
+const aiProviderFetch = async (
+	input: RequestInfo | URL,
+	init?: RequestInit,
+): Promise<Response> => {
+	if (process.env.IS_CLOUD === "true") {
+		return fetchWithPublicEgress(input, init, {
+			fieldName: "AI provider URL",
+		});
+	}
+	if (input instanceof Request) {
+		// The undici package's fetch takes no Request of the runtime's fetch.
+		return aiProviderFetch(input.url, {
+			method: input.method,
+			headers: Array.from(input.headers),
+			body:
+				input.method === "GET" || input.method === "HEAD"
+					? undefined
+					: await input.arrayBuffer(),
+			signal: input.signal,
+			...init,
+		});
+	}
+	const response = await guardedFetch(input.toString(), {
+		...init,
+	} as Parameters<typeof guardedFetch>[1]);
+	// The SDKs read status, headers and body, which undici's Response has too.
+	return response as unknown as Response;
 };
 
 export function selectAIProvider(config: { apiUrl: string; apiKey: string }) {

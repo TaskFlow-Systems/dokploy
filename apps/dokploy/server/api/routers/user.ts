@@ -13,6 +13,7 @@ import {
 	findUserById,
 	getAccessibleServerIds,
 	getDokployUrl,
+	getRootAdminIds,
 	getUserByToken,
 	getWebServerSettings,
 	IS_CLOUD,
@@ -37,6 +38,7 @@ import {
 	session,
 	user,
 } from "@dokploy/server/db/schema";
+import { providerFetch } from "@dokploy/server/services/logs-and-metrics/provider-fetch";
 import {
 	assertRoleAssignmentAllowed,
 	checkPermission,
@@ -44,7 +46,6 @@ import {
 	resolvePermissions,
 } from "@dokploy/server/services/permission";
 import { hasValidLicense } from "@dokploy/server/services/proprietary/license-key";
-import { fetchWithPublicEgress } from "@dokploy/server/utils/url/network";
 import { TRPCError } from "@trpc/server";
 import * as bcrypt from "bcrypt";
 import { and, asc, desc, eq, gt, inArray, ne } from "drizzle-orm";
@@ -270,19 +271,19 @@ const buildContainerMetricsRequest = ({
 	};
 };
 
-const metricsFetchOptions = {
-	allowPrivateNetwork: true,
-	fieldName: "Monitoring metrics URL",
-} as const;
 const hasRootAccess = (ctx: {
 	user: { id: string };
 	session: { impersonatedBy?: string } | null;
 }) => {
-	const rootId = process.env.USER_ADMIN_ID;
-	if (!IS_CLOUD || !rootId) {
+	if (!IS_CLOUD) {
 		return false;
 	}
-	return rootId === ctx.user.id || ctx.session?.impersonatedBy === rootId;
+	const rootIds = getRootAdminIds();
+	return (
+		rootIds.includes(ctx.user.id) ||
+		(!!ctx.session?.impersonatedBy &&
+			rootIds.includes(ctx.session.impersonatedBy))
+	);
 };
 
 const assertCanDeleteOwnAccount = async (ctx: {
@@ -856,7 +857,7 @@ export const userRouter = createTRPCRouter({
 				});
 			}
 
-			if (target.id === process.env.USER_ADMIN_ID) {
+			if (getRootAdminIds().includes(target.id)) {
 				throw new TRPCError({
 					code: "BAD_REQUEST",
 					message: "The root account cannot be deleted",
@@ -971,15 +972,11 @@ export const userRouter = createTRPCRouter({
 					dataPoints: input.dataPoints,
 					appName: input.appName,
 				});
-				const response = await fetchWithPublicEgress(
-					request.url.toString(),
-					{
-						headers: {
-							Authorization: `Bearer ${request.token}`,
-						},
+				const response = await providerFetch(request.url.toString(), {
+					headers: {
+						Authorization: `Bearer ${request.token}`,
 					},
-					metricsFetchOptions,
-				);
+				});
 				if (!response.ok) {
 					throw new Error(
 						`Error ${response.status}: ${response.statusText}. Please verify that the application "${input.appName}" is running and this service is included in the monitoring configuration.`,

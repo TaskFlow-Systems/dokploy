@@ -15,7 +15,7 @@ type SshKeySession = {
 };
 
 export const createSshKey = async (input: z.infer<typeof apiCreateSshKey>) => {
-	await db.transaction(async (tx) => {
+	return await db.transaction(async (tx) => {
 		const sshKey = await tx
 			.insert(sshKeys)
 			.values(input)
