@@ -1,18 +1,21 @@
 import { createHmac } from "node:crypto";
 import { Readable } from "node:stream";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const dbMocks = vi.hoisted(() => ({
 	findApplication: vi.fn(),
 	findCompose: vi.fn(),
 }));
 const queueMocks = vi.hoisted(() => ({ add: vi.fn() }));
+const serverMocks = vi.hoisted(() => ({
+	shouldDeploy: vi.fn((_watchPaths: unknown, _paths: unknown) => true),
+}));
 
 vi.mock("@dokploy/server", () => ({
 	getBitbucketHeaders: vi.fn(() => ({})),
 	IS_CLOUD: false,
-	shouldDeploy: vi.fn(() => true),
+	shouldDeploy: serverMocks.shouldDeploy,
 }));
 vi.mock("@dokploy/server/db", () => ({
 	db: {
@@ -233,6 +236,10 @@ describe.each(targets)(
 			target.mock.mockResolvedValue(target.service({}));
 		});
 
+		afterEach(() => {
+			vi.unstubAllGlobals();
+		});
+
 		describe.each(formats)("$name on Custom Git", (format) => {
 			const send = async (raw: string, headers: Record<string, string>) => {
 				const response = createResponse();
@@ -309,18 +316,39 @@ describe.each(targets)(
 
 		it("checks a Bitbucket source with the service secret too", async () => {
 			target.mock.mockResolvedValue(
-				target.service({ sourceType: "bitbucket" }),
+				target.service({
+					sourceType: "bitbucket",
+					bitbucket: { bitbucketWorkspaceName: "ws" },
+					bitbucketRepositorySlug: "repo",
+				}),
 			);
+			// A signed Bitbucket push asks the Bitbucket API which paths changed.
+			const diffstat = vi.fn(async (_url: string | URL | Request) =>
+				Response.json({ values: [{ new: { path: "src/app.ts" } }] }),
+			);
+			vi.stubGlobal("fetch", diffstat);
 			const raw = bitbucketCloud("main");
 			const ok = createResponse();
 			await target.handler(streamRequest(raw, formats[0]!.headers(raw)), ok);
-			expect(ok.status).not.toHaveBeenCalledWith(401);
+			expect(ok.status).toHaveBeenCalledWith(200);
+			expect(queueMocks.add).toHaveBeenCalledTimes(1);
+			expect(diffstat).toHaveBeenCalledTimes(1);
+			expect(String(diffstat.mock.calls[0]![0])).toBe(
+				"https://api.bitbucket.org/2.0/repositories/ws/repo/diffstat/h1",
+			);
+			expect(serverMocks.shouldDeploy).toHaveBeenCalledWith(null, [
+				"src/app.ts",
+			]);
+
+			diffstat.mockClear();
 			const bad = createResponse();
 			await target.handler(
 				streamRequest(raw, formats[0]!.headers(raw, "nope")),
 				bad,
 			);
 			expect(bad.status).toHaveBeenCalledWith(401);
+			expect(diffstat).not.toHaveBeenCalled();
+			expect(queueMocks.add).toHaveBeenCalledTimes(1);
 		});
 
 		it("leaves provider-backed GitHub sources on their provider secret", async () => {
