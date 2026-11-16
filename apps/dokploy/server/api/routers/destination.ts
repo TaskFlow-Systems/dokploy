@@ -92,13 +92,15 @@ export const destinationRouter = createTRPCRouter({
 	testConnection: withPermission("destination", "create")
 		.input(apiTestDestinationConnection)
 		.mutation(async ({ input, ctx }) => {
-			if (IS_CLOUD && !input.serverId) {
+			// The cloud form's server picker sends "none" for no server.
+			const serverId = input.serverId === "none" ? undefined : input.serverId;
+			if (IS_CLOUD && !serverId) {
 				throw new TRPCError({
 					code: "NOT_FOUND",
 					message: "Server not found",
 				});
 			}
-			await assertDestinationServerAccess(ctx, input.serverId);
+			await assertDestinationServerAccess(ctx, serverId);
 
 			const { destinationId, ...connectionInput } = input;
 			if (isRedactedSecretValue(connectionInput.secretAccessKey)) {
