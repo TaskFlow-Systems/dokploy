@@ -4,7 +4,7 @@
 // when they drift from this object.
 export const PINNED_VERSIONS = {
 	node: "26.13.1",
-	docker: "29.9.3",
+	docker: "29.10.0",
 	traefik: "3.7.19",
 	postgres: "18.7",
 	redis: "8.10.3",

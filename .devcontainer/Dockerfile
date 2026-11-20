@@ -14,7 +14,7 @@ ENV BUN_INSTALL="/home/node/.bun"
 ENV PATH="$BUN_INSTALL/bin:$PATH"
 RUN mkdir -p "$BUN_INSTALL" \
     && chown -R node:node "$BUN_INSTALL" \
-    && su node -c "curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.4"
+    && su node -c "curl -fsSL https://bun.sh/install | bash -s -- bun-v1.4.5"
 
 # Create workspace directory
 WORKDIR /workspaces/dokploy
