@@ -88,9 +88,9 @@ jobs:
           - name: traefik
           - name: postgres
             # gosu only switches to the postgres user when the container
-            # starts. The Postgres 18.7 image, rebuilt on 2026-11-12 and still
-            # the newest on 2026-11-16, ships gosu 1.19, built with Go 1.24.6;
-            # its 26 Go stdlib advisories would each need an entry in
+            # starts. The Postgres 18.7 image, rebuilt on 2026-11-20 and the
+            # newest on that day, ships gosu 1.19, built with Go 1.24.6;
+            # its 27 Go stdlib advisories would each need an entry in
             # .trivyignore.yaml. gosu 1.20 came out on 2026-10-25, so the skip
             # ends with the date below and the scan reports gosu again.
             skip-files: usr/local/bin/gosu
