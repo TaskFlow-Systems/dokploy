@@ -19,7 +19,7 @@ RUN echo "Debian updates of ${DEBIAN_UPDATES_DAY:-the build day}" \
     && apt-get install -y --no-install-recommends apt bash ca-certificates curl unzip \
     && rm -rf /var/lib/apt/lists/* \
     && bun_arch="$(uname -m | sed 's/x86_64/x64/')" \
-    && github-release-asset oven-sh/bun bun-v1.4.4 "bun-linux-$bun_arch.zip" /tmp/bun.zip \
+    && github-release-asset oven-sh/bun bun-v1.4.5 "bun-linux-$bun_arch.zip" /tmp/bun.zip \
     && unzip -q /tmp/bun.zip -d /tmp/bun \
     && install -D -m 0755 "/tmp/bun/bun-linux-$bun_arch/bun" "$BUN_INSTALL/bin/bun" \
     && rm -rf /tmp/bun /tmp/bun.zip \
@@ -118,7 +118,7 @@ COPY --from=build /usr/src/app/packages/server/dist ./packages/server/dist
 # needs only the CLI and its buildx and compose plugins. get.docker.com would
 # also install the engine, containerd and the rootless extras: unused binaries
 # that scanners report.
-ARG DOCKER_VERSION=29.9.3
+ARG DOCKER_VERSION=29.10.0
 RUN . /etc/os-release \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
