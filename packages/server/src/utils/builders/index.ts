@@ -26,6 +26,7 @@ import { getRemoteDocker } from "../servers/remote-docker";
 import { withResolvedVaultRefs } from "../vault";
 import { getDockerCommand } from "./docker-file";
 import { getHerokuCommand } from "./heroku";
+import { preservePinnedDigestOnReload } from "./image-digest";
 import { getNixpacksCommand } from "./nixpacks";
 import { getPaketoCommand } from "./paketo";
 import { getRailpackCommand } from "./railpack";
@@ -122,6 +123,7 @@ export const getBuildCommand = async (rawApplication: ApplicationNested) => {
 
 export const mechanizeDockerContainer = async (
 	rawApplication: ApplicationNested,
+	options?: { imageOverride?: string; preservePinnedDigest?: boolean },
 ) => {
 	const application = await withResolvedVaultRefs(rawApplication);
 	const {
@@ -173,7 +175,7 @@ export const mechanizeDockerContainer = async (
 		application.environment.env,
 	);
 
-	const image = await getImageName(application);
+	const image = options?.imageOverride || (await getImageName(application));
 	const authConfig = await getAuthConfig(application);
 	const docker = await getRemoteDocker(application.serverId);
 
@@ -236,13 +238,40 @@ export const mechanizeDockerContainer = async (
 		appName,
 		settings,
 		authConfig,
-		getUpdate: (spec, inspect) => ({
-			...withNextForceUpdate(spec, inspect),
-			// Dokploy sets no service-level labels of its own. A service update
-			// replaces the whole spec, so labels added outside Dokploy (e.g.
-			// traefik.* for the Swarm provider) are dropped unless carried over.
-			Labels: inspect.Spec?.Labels ?? {},
-		}),
+		getUpdate: (spec, inspect) => {
+			const currentImage =
+				inspect.Spec?.TaskTemplate &&
+				"ContainerSpec" in inspect.Spec.TaskTemplate
+					? inspect.Spec.TaskTemplate.ContainerSpec?.Image
+					: undefined;
+			const preservedImage =
+				options?.preservePinnedDigest && application.sourceType !== "docker"
+					? preservePinnedDigestOnReload(image, currentImage)
+					: undefined;
+			const specWithImage: CreateServiceOptions =
+				preservedImage &&
+				spec.TaskTemplate &&
+				"ContainerSpec" in spec.TaskTemplate &&
+				spec.TaskTemplate.ContainerSpec
+					? {
+							...spec,
+							TaskTemplate: {
+								...spec.TaskTemplate,
+								ContainerSpec: {
+									...spec.TaskTemplate.ContainerSpec,
+									Image: preservedImage,
+								},
+							},
+						}
+					: spec;
+			return {
+				...withNextForceUpdate(specWithImage, inspect),
+				// Dokploy sets no service-level labels of its own. A service update
+				// replaces the whole spec, so labels added outside Dokploy (e.g.
+				// traefik.* for the Swarm provider) are dropped unless carried over.
+				Labels: inspect.Spec?.Labels ?? {},
+			};
+		},
 	});
 };
 
@@ -254,7 +283,14 @@ export const waitForApplicationRollout = (
 		quietStartAllowanceMs: QUIET_START_ALLOWANCE_MS,
 	});
 
-const getImageName = async (application: ApplicationNested) => {
+export {
+	pickPushedImageDigest,
+	preservePinnedDigestOnReload,
+	resolvePushedImageRef,
+	stripImageTag,
+} from "./image-digest";
+
+export const getImageName = async (application: ApplicationNested) => {
 	const { appName, sourceType, dockerImage, registry, buildRegistry } =
 		application;
 	const imageName = `${appName}:latest`;
