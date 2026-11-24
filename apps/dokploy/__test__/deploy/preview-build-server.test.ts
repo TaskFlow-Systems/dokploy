@@ -56,10 +56,22 @@ vi.mock("@dokploy/server/utils/builders", async () => {
 	return {
 		...actual,
 		getBuildCommand: vi.fn().mockResolvedValue("build;"),
+		getImageName: vi
+			.fn()
+			.mockResolvedValue("registry.example.com/preview-app-abc-xyz:latest"),
 		mechanizeDockerContainer: vi.fn(),
+		resolvePushedImageRef: vi
+			.fn()
+			.mockResolvedValue(
+				`registry.example.com/preview-app-abc-xyz@sha256:${"a".repeat(64)}`,
+			),
 		waitForApplicationRollout: vi.fn(),
 	};
 });
+
+vi.mock("@dokploy/server/utils/servers/remote-docker", () => ({
+	getRemoteDocker: vi.fn().mockResolvedValue({}),
+}));
 
 vi.mock("@dokploy/server/utils/docker/utils", async () => {
 	const actual = await vi.importActual<
@@ -92,7 +104,9 @@ import {
 	execAsyncRemote,
 } from "@dokploy/server/utils/process/execAsync";
 import { cloneGithubRepository } from "@dokploy/server/utils/providers/github";
+import { getRemoteDocker } from "@dokploy/server/utils/servers/remote-docker";
 
+const PINNED_PREVIEW_IMAGE = `registry.example.com/preview-app-abc-xyz@sha256:${"a".repeat(64)}`;
 const buildRegistry = { registryId: "build-reg" };
 const registry = { registryId: "swarm-reg" };
 const rollbackRegistry = { registryId: "rollback-reg" };
@@ -214,6 +228,11 @@ describe("preview deployments with a build server", () => {
 				previewDeploymentId: "preview-1",
 			});
 
+			expect(getRemoteDocker).toHaveBeenCalledWith("build-server");
+			expect(mechanizeDockerContainer).toHaveBeenCalledWith(
+				expect.objectContaining({ serverId: "deploy-server" }),
+				{ imageOverride: PINNED_PREVIEW_IMAGE },
+			);
 			expect(waitForApplicationRollout).toHaveBeenCalledWith(
 				"preview-app-abc-xyz",
 				"deploy-server",
@@ -222,6 +241,7 @@ describe("preview deployments with a build server", () => {
 				command.includes("base64 -d >>"),
 			);
 			expect(logLines.map(({ serverId }) => serverId)).toEqual([
+				"build-server",
 				"build-server",
 				"build-server",
 			]);
