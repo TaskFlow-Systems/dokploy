@@ -10,7 +10,9 @@ import { getAdvancedStats } from "@dokploy/server/monitoring/utils";
 import {
 	type ApplicationNested,
 	getBuildCommand,
+	getImageName,
 	mechanizeDockerContainer,
+	resolvePushedImageRef,
 	waitForApplicationRollout,
 } from "@dokploy/server/utils/builders";
 import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
@@ -31,6 +33,7 @@ import {
 import { cloneGiteaRepository } from "@dokploy/server/utils/providers/gitea";
 import { cloneGithubRepository } from "@dokploy/server/utils/providers/github";
 import { cloneGitlabRepository } from "@dokploy/server/utils/providers/gitlab";
+import { getRemoteDocker } from "@dokploy/server/utils/servers/remote-docker";
 import { createTraefikConfig } from "@dokploy/server/utils/traefik/application";
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
@@ -234,12 +237,62 @@ export const updateApplicationStatus = async (
 
 // The service runs on `application.serverId`, the log stays on the server that
 // built the image.
+const resolveDigestPinForRollout = async (
+	application: ApplicationNested,
+	logPath: string,
+	buildServerId: string | null,
+): Promise<string | undefined> => {
+	if (
+		application.sourceType === "docker" ||
+		(!application.registry && !application.buildRegistry)
+	) {
+		return undefined;
+	}
+	try {
+		const targetImage = await getImageName(application);
+		const docker = await getRemoteDocker(buildServerId);
+		const pinned = await resolvePushedImageRef({
+			docker,
+			imageRef: targetImage,
+		});
+		if (pinned) {
+			await appendToBuildLog(
+				buildServerId,
+				logPath,
+				`Pinned image digest: ${pinned}`,
+			);
+			return pinned;
+		}
+		await appendToBuildLog(
+			buildServerId,
+			logPath,
+			`⚠️ Could not resolve digest for ${targetImage}; deploying by tag`,
+		);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		await appendToBuildLog(
+			buildServerId,
+			logPath,
+			`⚠️ Failed to resolve image digest (${detail}); deploying by tag`,
+		);
+	}
+	return undefined;
+};
+
 const rollOutApplication = async (
 	application: ApplicationNested,
 	logPath: string,
 	buildServerId: string | null,
 ) => {
-	await mechanizeDockerContainer(application);
+	const imageOverride = await resolveDigestPinForRollout(
+		application,
+		logPath,
+		buildServerId,
+	);
+	await mechanizeDockerContainer(
+		application,
+		imageOverride ? { imageOverride } : undefined,
+	);
 	await appendToBuildLog(
 		buildServerId,
 		logPath,
@@ -259,7 +312,7 @@ export const reloadApplication = async (applicationId: string) => {
 	const application = await findApplicationById(applicationId);
 	await updateApplicationStatus(applicationId, "running");
 	try {
-		await mechanizeDockerContainer(application);
+		await mechanizeDockerContainer(application, { preservePinnedDigest: true });
 		await waitForApplicationRollout(application.appName, application.serverId);
 	} catch (error) {
 		await updateApplicationStatus(applicationId, "error");
