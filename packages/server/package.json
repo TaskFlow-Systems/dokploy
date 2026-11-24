@@ -59,7 +59,7 @@
     "@octokit/auth-app": "^8.3.1",
     "@peculiar/x509": "^3.1.0",
     "@react-email/components": "^1.0.12",
-    "@trpc/server": "^11.31.0",
+    "@trpc/server": "^11.31.2",
     "adm-zip": "^0.6.1",
     "ai": "^7.0.181",
     "ai-sdk-ollama": "^4.6.3",
