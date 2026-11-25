@@ -7,28 +7,30 @@ name: Pins auto-update
 # decides the range: patch and minor releases in the same major, patches only
 # for Traefik, Redis and 0.x tools. Releases outside it, and Railpack, are
 # listed in the PR for a manual one. On every push to AgentHits-Dev and every
-# day it keeps one PR from deps/pins-auto-update into AgentHits-Dev and starts
-# the checks on it; the image build and Trivy scan in
+# day at 04:30 UTC it keeps one PR from deps/pins-auto-update into AgentHits-Dev
+# and starts the checks on it; the image build and Trivy scan in
 # bun-migration-docker-check.yml show whether the new pins carry a fix. It
-# never merges. A commit of anyone else in the
-# branch stops the rebuild until the PR is merged or closed.
+# never merges. A commit of anyone else in the branch stops the rebuild until
+# the PR is merged or closed.
 on:
   push:
     branches: [AgentHits-Dev]
   schedule:
-    - cron: "30 3 * * *"
+    - cron: "30 4 * * *"
   workflow_dispatch:
+    inputs:
+      redispatch:
+        description: "Internal flag for re-running when the base branch updates (do not set manually)"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
 
-# Rebuilt from the latest AgentHits-Dev commit after every push, so the checks
-# of the PR never run on an outdated base; a new push cancels the run on the
-# older one. Cancelling mid-publish is safe: the next run builds on a newer
-# base, gets a different tree, pushes and starts the checks.
 concurrency:
   group: pins-auto-update
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   BRANCH: deps/pins-auto-update
@@ -44,7 +46,7 @@ jobs:
     outputs:
       changed: ${{ steps.update.outputs.changed }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -59,16 +61,37 @@ jobs:
           mkdir -p "$out/files"
           .github/scripts/pins-update.sh "$out"
 
-          mapfile -t changed_files < <(git diff --name-only)
-          for path in "${changed_files[@]}"; do
-            case "$path" in
-              Dockerfile | Dockerfile.* | .devcontainer/Dockerfile | .nvmrc | package.json | apps/*/package.json | packages/*/package.json | install-agenthits.sh | update.sh | packages/server/src/setup/component-versions.ts) ;;
-              *)
-                echo "::error::pins-update.sh changed a file outside the pin files: $path"
-                exit 1
-                ;;
-            esac
-          done
+          allowed=(
+            Dockerfile
+            Dockerfile.cloud
+            Dockerfile.schedule
+            Dockerfile.server
+            .devcontainer/Dockerfile
+            .nvmrc
+            package.json
+            apps/api/package.json
+            apps/dokploy/package.json
+            apps/schedules/package.json
+            packages/server/package.json
+            install-agenthits.sh
+            update.sh
+            packages/server/src/setup/component-versions.ts
+          )
+
+          changed_files=()
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            path="${line:3}"
+            ok=false
+            for a in "${allowed[@]}"; do
+              if [ "$path" = "$a" ]; then ok=true; break; fi
+            done
+            if ! $ok; then
+              echo "::error::pins-update.sh changed a file outside the pin files: $path"
+              exit 1
+            fi
+            changed_files+=("$path")
+          done < <(git status --porcelain --untracked-files=all)
 
           {
             echo "Daily update of the pinned images and tools ($(date -u +%F), workflow \`pins-auto-update\`): patch and minor releases in the same major, patches only for Traefik, Redis and 0.x tools."
@@ -101,7 +124,7 @@ jobs:
           printf '%s\n' "${changed_files[@]}" > "$out/files.txt"
           for f in "${changed_files[@]}"; do
             mkdir -p "$out/files/$(dirname "$f")"
-            cp "$f" "$out/files/$f"
+            cp -P -- "$f" "$out/files/$f"
           done
           {
             echo "chore(deps): update pinned images and tools"
@@ -112,7 +135,7 @@ jobs:
             echo "(.github/scripts/pins-update.sh)."
           } > "$out/commit.txt"
           echo "changed=true" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pins-auto-update
           path: ${{ runner.temp }}/pins
@@ -130,17 +153,17 @@ jobs:
       pull-requests: write
       actions: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: pins-auto-update
           path: ${{ runner.temp }}/pins
       - name: Open PR of the branch
         id: pr
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const { data } = await github.rest.pulls.list({
@@ -154,55 +177,231 @@ jobs:
         id: branch
         env:
           CHANGED: ${{ needs.update.outputs.changed }}
+          BASE_SHA: ${{ github.sha }}
           PR: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
+          git fetch -q origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+
           remote=false
           if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
             git fetch -q origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
             remote=true
           fi
           if [ -n "$PR" ] && $remote; then
-            foreign="$(git log --format='%h %ae' "origin/$BASE..origin/$BRANCH" | grep -v -F " $BOT_EMAIL" || true)"
+            foreign="$(git log --format='%h %ae%n%h %ce' "origin/$BASE..origin/$BRANCH" | awk -v bot="$BOT_EMAIL" 'NF && $2 != bot')"
             if [ -n "$foreign" ]; then
               echo "::notice::Branch $BRANCH of open PR #$PR has commits of others, so it is not rebuilt until the PR is merged or closed: $(echo "$foreign" | tr '\n' ' ')"
               echo "action=skip" >> "$GITHUB_OUTPUT"
               exit 0
             fi
           fi
+
+          allowed=(
+            Dockerfile
+            Dockerfile.cloud
+            Dockerfile.schedule
+            Dockerfile.server
+            .devcontainer/Dockerfile
+            .nvmrc
+            package.json
+            apps/api/package.json
+            apps/dokploy/package.json
+            apps/schedules/package.json
+            packages/server/package.json
+            install-agenthits.sh
+            update.sh
+            packages/server/src/setup/component-versions.ts
+          )
+
+          git cat-file -e "${BASE_SHA}^{commit}"
+          origin_base_sha="$(git rev-parse "origin/$BASE")"
+          if [ "$BASE_SHA" != "$origin_base_sha" ]; then
+            changed_on_base="$(git diff --name-only "$BASE_SHA..origin/$BASE")"
+            stale_files=false
+            while IFS= read -r p; do
+              [ -n "$p" ] || continue
+              for a in "${allowed[@]}"; do
+                if [ "$p" = "$a" ]; then stale_files=true; break 2; fi
+              done
+            done <<< "$changed_on_base"
+            if $stale_files; then
+              echo "::notice::Branch $BASE updated pin files during update ($BASE_SHA -> $origin_base_sha); redispatch required."
+              echo "action=redispatch" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
           if [ "$CHANGED" != "true" ]; then
             echo "action=close" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+
           git config user.name "github-actions[bot]"
           git config user.email "$BOT_EMAIL"
-          git checkout -q -B "$BRANCH"
-          cp -R "$RUNNER_TEMP/pins/files/." .
-          mapfile -t files < "$RUNNER_TEMP/pins/files.txt"
+          git checkout -q -B "$BRANCH" "origin/$BASE"
+
+          files_txt="$RUNNER_TEMP/pins/files.txt"
+          commit_file="$RUNNER_TEMP/pins/commit.txt"
+          python3 -I - "$files_txt" "$commit_file" <<'PY'
+          import os
+          import stat
+          import sys
+
+          for path in sys.argv[1:]:
+              st = os.lstat(path)
+              if stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                  raise SystemExit(f"::error::Missing or non-regular artifact file: {path}")
+              with open(path, "rb") as fh:
+                  if b"\x00" in fh.read():
+                      raise SystemExit(f"::error::NUL byte in artifact file: {path}")
+          PY
+
+          mapfile -t raw_files < "$files_txt"
+          if [ "${#raw_files[@]}" -eq 0 ]; then
+            echo "::error::Empty files.txt with CHANGED=true"
+            exit 1
+          fi
+          files=()
+          for f in "${raw_files[@]}"; do
+            if [ -z "$f" ] || [[ "$f" = /* ]] || [[ "$f" == *".."* ]]; then
+              echo "::error::Forbidden path in files.txt: $f"
+              exit 1
+            fi
+            ok=false
+            for a in "${allowed[@]}"; do
+              if [ "$f" = "$a" ]; then ok=true; break; fi
+            done
+            if ! $ok; then
+              echo "::error::Path outside pin allowlist: $f"
+              exit 1
+            fi
+            src="$RUNNER_TEMP/pins/files/$f"
+            if [ ! -f "$src" ] || [ -L "$src" ]; then
+              echo "::error::Missing or symlinked artifact file: $f"
+              exit 1
+            fi
+            cur_src="$RUNNER_TEMP/pins/files"
+            cur_dst="."
+            IFS='/' read -r -a parts <<< "$f"
+            for part in "${parts[@]}"; do
+              cur_src="$cur_src/$part"
+              cur_dst="$cur_dst/$part"
+              if [ -L "$cur_src" ]; then
+                echo "::error::Symlink in artifact path component: $f"
+                exit 1
+              fi
+              if [ -L "$cur_dst" ]; then
+                echo "::error::Symlink in target path component: $f"
+                exit 1
+              fi
+            done
+            cp -P -- "$src" "$f"
+            files+=("$f")
+          done
+
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            path="${line:3}"
+            ok=false
+            for a in "${files[@]}"; do
+              if [ "$path" = "$a" ]; then ok=true; break; fi
+            done
+            if ! $ok; then
+              echo "::error::Unexpected changed file in publish: $path"
+              exit 1
+            fi
+          done < <(git status --porcelain --untracked-files=all)
+
           git add -- "${files[@]}"
-          git commit -q -F "$RUNNER_TEMP/pins/commit.txt"
+          git commit -q -F "$commit_file"
+
+          wf_diff="$(git diff --name-only "origin/$BASE" HEAD -- .github/workflows/)"
+          if [ -n "$wf_diff" ]; then
+            echo "::error::Diff against origin/$BASE touches .github/workflows/: $wf_diff"
+            exit 1
+          fi
+
           if $remote && [ "$(git rev-parse 'HEAD^{tree}')" = "$(git rev-parse "origin/$BRANCH^{tree}")" ]; then
             echo "Branch $BRANCH already holds the same tree."
             echo "action=same" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+          push_err_file="$RUNNER_TEMP/push.err"
+          if ! git push -q --force origin "HEAD:refs/heads/$BRANCH" 2>"$push_err_file"; then
+            push_err="$(cat "$push_err_file")"
+            if printf '%s' "$push_err" | grep -qiE 'without workflows permission|refusing to allow'; then
+              echo "::error::git push to $BRANCH rejected due to GITHUB_TOKEN workflows permission restriction: $push_err"
+              echo "action=workflow_perm" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            printf '%s\n' "$push_err" >&2
+            exit 1
+          fi
+          pushed_sha="$(git rev-parse HEAD)"
+          echo "pushed_sha=$pushed_sha" >> "$GITHUB_OUTPUT"
           echo "action=pushed" >> "$GITHUB_OUTPUT"
       - name: PR and checks of the branch
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           ACTION: ${{ steps.branch.outputs.action }}
+          PUSHED_SHA: ${{ steps.branch.outputs.pushed_sha }}
           PR: ${{ steps.pr.outputs.number }}
+          IS_REDISPATCH: ${{ inputs.redispatch == true && 'true' || 'false' }}
         with:
           script: |
             const fs = require('node:fs');
-            const { ACTION: action, BRANCH: branch, BASE: base, CI_WORKFLOWS: ciWorkflows, RUNNER_TEMP: tmp } = process.env;
+            const { setTimeout } = require('node:timers/promises');
+            const {
+              ACTION: action,
+              BRANCH: branch,
+              BASE: base,
+              CI_WORKFLOWS: ciWorkflows,
+              PUSHED_SHA: pushedSha,
+              RUNNER_TEMP: tmp,
+              IS_REDISPATCH: isRedispatch,
+            } = process.env;
             const repo = context.repo;
             let pr = process.env.PR ? Number(process.env.PR) : null;
             const summary = (text) => core.summary.addRaw(`${text}\n`).write();
 
             if (action === 'skip') {
               await summary(`PR #${pr}: the branch has commits of others, not rebuilt.`);
+              return;
+            }
+            if (action === 'workflow_perm') {
+              const msg = `Push to branch ${branch} rejected: GITHUB_TOKEN lacks workflows permission (or server refused .github/workflows/ modification).`;
+              await summary(msg);
+              core.setFailed(msg);
+              return;
+            }
+            if (action === 'redispatch') {
+              if (isRedispatch === 'true') {
+                await summary(`Branch ${base} changed again during redispatch; deferred to next scheduled run to avoid loops.`);
+                return;
+              }
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                ...repo,
+                workflow_id: 'pins-auto-update.yml',
+                per_page: 20,
+              });
+              const activeStatuses = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
+              const already = (data.workflow_runs || []).some(
+                (r) => r.id !== context.runId && activeStatuses.has(r.status) && r.head_branch === base
+              );
+              if (already) {
+                await summary(`Branch ${base} updated pin files during update, and an active pins-auto-update.yml run already exists.`);
+                return;
+              }
+              await github.rest.actions.createWorkflowDispatch({
+                ...repo,
+                workflow_id: 'pins-auto-update.yml',
+                ref: base,
+                inputs: {
+                  redispatch: 'true',
+                },
+              });
+              await summary(`Branch ${base} updated pin files during update; redispatched pins-auto-update.yml on ${base}.`);
               return;
             }
             if (action === 'close') {
@@ -219,16 +418,51 @@ jobs:
               return;
             }
 
+            const checkArtifactFile = (filePath, name) => {
+              const st = fs.lstatSync(filePath);
+              if (!st.isFile() || st.isSymbolicLink()) {
+                throw new Error(`Invalid artifact ${name}: ${filePath}`);
+              }
+            };
+            const reportPath = `${tmp}/pins/report.md`;
+            const commitPath = `${tmp}/pins/commit.txt`;
+            checkArtifactFile(reportPath, 'report.md');
+            checkArtifactFile(commitPath, 'commit.txt');
+
             const title = 'chore(deps): update pinned images and tools';
-            const body = fs.readFileSync(`${tmp}/pins/report.md`, 'utf8');
+            let body = fs.readFileSync(reportPath, 'utf8');
+            if (body.length > 60000) body = `${body.slice(0, 60000)}\n\n… report truncated, full output is in the run summary.`;
             if (pr) {
               await github.rest.pulls.update({ ...repo, pull_number: pr, title, body });
             } else {
-              ({ data: { number: pr } } = await github.rest.pulls.create({ ...repo, head: branch, base, title, body }));
+              try {
+                ({ data: { number: pr } } = await github.rest.pulls.create({ ...repo, head: branch, base, title, body }));
+              } catch (error) {
+                core.setFailed(`Branch ${branch} updated, but PR creation failed (${error.status}: ${error.message}).`);
+                return;
+              }
             }
             if (action === 'pushed') {
-              for (const workflow of ciWorkflows.split(' ')) {
+              if (pushedSha) {
+                let propagated = false;
+                for (let attempt = 0; attempt < 4; attempt += 1) {
+                  await setTimeout(attempt === 0 ? 3000 : 2000);
+                  try {
+                    const { data: refData } = await github.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
+                    if (refData && refData.object && refData.object.sha === pushedSha) {
+                      propagated = true;
+                      break;
+                    }
+                  } catch (refErr) {
+                    core.info(`Waiting for ref ${branch}: ${refErr.message}`);
+                  }
+                }
+                if (!propagated) {
+                  throw new Error(`ref ${branch} did not confirm SHA ${pushedSha} within 9s after git push.`);
+                }
+              }
+              for (const workflow of ciWorkflows.split(/\s+/).filter(Boolean)) {
                 await github.rest.actions.createWorkflowDispatch({ ...repo, workflow_id: workflow, ref: branch });
               }
             }
-            await summary(`PR #${pr}: ${action === 'pushed' ? `branch updated, started ${ciWorkflows}` : 'branch unchanged, description updated'}.`);
+            await summary(pr ? `PR #${pr}: ${action === 'pushed' ? `branch updated, started ${ciWorkflows}` : 'branch unchanged, description updated'}.` : `Branch ${branch} updated, no PR.`);

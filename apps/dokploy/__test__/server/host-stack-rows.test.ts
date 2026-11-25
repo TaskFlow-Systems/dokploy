@@ -100,10 +100,23 @@ describe("buildHostStackRows", () => {
 	});
 
 	it("compares Docker Engine versions numerically", () => {
-		expect(rowNamed(rowsFor({ docker: "29.10.0" }), "docker").outdated).toBe(
-			false,
-		);
-		expect(rowNamed(rowsFor({ docker: "29.8.1" }), "docker").outdated).toBe(
+		const [major = 0, minor = 0] = PINNED_VERSIONS.docker
+			.split(".")
+			.map(Number);
+		expect(
+			rowNamed(rowsFor({ docker: PINNED_VERSIONS.docker }), "docker").outdated,
+		).toBe(false);
+		expect(
+			rowNamed(rowsFor({ docker: `${major}.${minor + 10}.0` }), "docker")
+				.outdated,
+		).toBe(false);
+		const olderDocker =
+			minor >= 10
+				? `${major}.9.9`
+				: minor > 0
+					? `${major}.${minor - 1}.9`
+					: `${major - 1}.99.9`;
+		expect(rowNamed(rowsFor({ docker: olderDocker }), "docker").outdated).toBe(
 			true,
 		);
 	});

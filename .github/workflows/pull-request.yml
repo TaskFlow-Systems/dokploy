@@ -17,9 +17,7 @@ concurrency:
 jobs:
   audit:
     name: audit and typecheck
-    # Only the owner's own PRs reach the Mac mini runners. A fork PR could rewrite
-    # this line, so the repo also requires approval for every outside contributor.
-    runs-on: ${{ (github.event.pull_request.user.login == github.repository_owner && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "dokploy-ci"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -45,7 +43,7 @@ jobs:
 
   pr-check:
     name: pr-check (${{ matrix.part }})
-    runs-on: ${{ (github.event.pull_request.user.login == github.repository_owner && github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted", "dokploy-ci"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -66,7 +64,7 @@ jobs:
           node-version-file: .nvmrc
       
       - name: Install Nixpacks
-        if: matrix.part != 'build' && runner.environment == 'github-hosted'
+        if: matrix.part != 'build'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run:  |
@@ -76,7 +74,7 @@ jobs:
           echo "Nixpacks installed $NIXPACKS_VERSION"
 
       - name: Install Railpack
-        if: matrix.part != 'build' && runner.environment == 'github-hosted'
+        if: matrix.part != 'build'
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run:  |
@@ -98,7 +96,6 @@ jobs:
       - name: Initialize Docker Swarm
         if: matrix.part != 'build'
         run: |
-          # The Mac mini keeps its swarm between runs.
           if [ "$(docker info --format '{{.Swarm.LocalNodeState}}')" != "active" ]; then
             docker swarm init
           fi
@@ -153,8 +150,8 @@ jobs:
           ./node_modules/.bin/vitest run --config __test__/vitest.config.ts "${files[@]}"
 
       # Tests remove their swarm services and compose projects, but a cancelled or
-      # timed-out run skips that. Docker is shared by all Mac mini runners, so only this checkout's
-      # apps go (see CHECKOUT_ID in application.real.test.ts).
+      # timed-out run skips that; only this checkout's apps go (see CHECKOUT_ID
+      # in application.real.test.ts).
       - name: Remove leftover real-test services
         if: always() && matrix.part != 'build'
         working-directory: apps/dokploy
