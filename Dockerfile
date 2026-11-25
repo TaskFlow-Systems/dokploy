@@ -118,7 +118,7 @@ COPY --from=build /usr/src/app/packages/server/dist ./packages/server/dist
 # needs only the CLI and its buildx and compose plugins. get.docker.com would
 # also install the engine, containerd and the rootless extras: unused binaries
 # that scanners report.
-ARG DOCKER_VERSION=29.10.0
+ARG DOCKER_VERSION=29.10.1
 RUN . /etc/os-release \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
