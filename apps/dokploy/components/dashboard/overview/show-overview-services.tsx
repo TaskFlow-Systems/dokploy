@@ -447,11 +447,19 @@ export const ShowOverviewServices = () => {
 															<TooltipProvider delayDuration={0}>
 																<Tooltip>
 																	<TooltipTrigger asChild>
-																		<Badge variant="yellow">Frozen</Badge>
+																		<Badge variant="yellow">
+																			{service.deployFreeze.scopeType ===
+																			"environment"
+																				? "Env Frozen"
+																				: "Frozen"}
+																		</Badge>
 																	</TooltipTrigger>
 																	<TooltipContent className="max-w-xs text-xs">
 																		<p className="font-medium">
-																			Deploys frozen{" "}
+																			{service.deployFreeze.scopeType ===
+																			"environment"
+																				? `Environment (${service.environmentName}) deploys frozen `
+																				: "Deploys frozen "}
 																			{service.deployFreeze.expiresAt
 																				? `until ${new Date(service.deployFreeze.expiresAt).toLocaleString()}`
 																				: "until resumed manually"}
@@ -514,9 +522,10 @@ export const ShowOverviewServices = () => {
 																			Are you sure you want to deploy "
 																			{service.name}"?{" "}
 																			<span className="font-medium text-amber-600 dark:text-amber-400">
-																				Deploys are currently frozen —
-																				confirming will run a forced deploy
-																				without unfreezing.
+																				{service.deployFreeze.scopeType ===
+																				"environment"
+																					? `Deploys are currently frozen at the environment level (${service.environmentName}) — confirming will run a forced deploy without unfreezing the environment.`
+																					: "Deploys are currently frozen — confirming will run a forced deploy without unfreezing."}
 																			</span>
 																		</span>
 																	) : (

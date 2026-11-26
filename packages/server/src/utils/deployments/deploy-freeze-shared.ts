@@ -12,6 +12,8 @@ export type DeploymentFreezeScopeType =
 export type DeploymentFreezeSkipSource = "webhook" | "api" | "queue";
 
 export interface DeployFreezeRowLike {
+	scopeType: DeploymentFreezeScopeType;
+	scopeId: string;
 	createdAt: string;
 	expiresAt: string | null;
 	liftedAt: string | null;
@@ -24,6 +26,8 @@ export interface DeployFreezeRowLike {
 
 export interface DeployFreezeState {
 	active: true;
+	scopeType: DeploymentFreezeScopeType;
+	scopeId: string;
 	frozenAt: string;
 	expiresAt: string | null;
 	reason: string | null;
@@ -34,10 +38,38 @@ export interface DeployFreezeState {
 }
 
 export interface OverviewDeployFreeze {
+	scopeType: DeploymentFreezeScopeType;
+	scopeId: string;
 	frozenAt: string;
 	expiresAt: string | null;
 	reason: string | null;
 	skippedCount: number;
+}
+
+function rankFreezeExpiry(expiresAt: string | null): number {
+	if (expiresAt === null) {
+		return Number.POSITIVE_INFINITY;
+	}
+	const parsed = Date.parse(expiresAt);
+	return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
+export function pickStrictestDeployFreeze<T extends DeployFreezeRowLike>(
+	serviceRow: T | null | undefined,
+	envRow: T | null | undefined,
+): T | null {
+	if (!serviceRow && !envRow) {
+		return null;
+	}
+	if (!serviceRow) {
+		return envRow ?? null;
+	}
+	if (!envRow) {
+		return serviceRow;
+	}
+	const serviceRank = rankFreezeExpiry(serviceRow.expiresAt);
+	const envRank = rankFreezeExpiry(envRow.expiresAt);
+	return serviceRank > envRank ? serviceRow : envRow;
 }
 
 export function isDeployFreezeActive(
@@ -67,6 +99,8 @@ export function toDeployFreezeState(
 	}
 	return {
 		active: true,
+		scopeType: row.scopeType,
+		scopeId: row.scopeId,
 		frozenAt: row.createdAt,
 		expiresAt: row.expiresAt,
 		reason: row.reason ?? null,
@@ -86,6 +120,8 @@ export function toOverviewDeployFreeze(
 		return null;
 	}
 	return {
+		scopeType: row.scopeType,
+		scopeId: row.scopeId,
 		frozenAt: row.createdAt,
 		expiresAt: row.expiresAt,
 		reason: row.reason ?? null,
@@ -130,8 +166,20 @@ export function sanitizeFreezeReason(
 	return normalized;
 }
 
-export function formatDeployFrozenMessage(freeze: DeployFreezeState): string {
-	let message = `${DEPLOY_FROZEN_CODE}: Deployments are frozen for this service`;
+export function formatDeployFrozenWebhookMessage(
+	freeze: Pick<DeployFreezeRowLike, "scopeType">,
+): string {
+	return freeze.scopeType === "environment"
+		? "Deployments are frozen for this environment"
+		: "Deployments are frozen for this service";
+}
+
+export function formatDeployFrozenMessage(
+	freeze: Pick<DeployFreezeState, "scopeType" | "expiresAt" | "reason">,
+): string {
+	const scopeLabel =
+		freeze.scopeType === "environment" ? "this environment" : "this service";
+	let message = `${DEPLOY_FROZEN_CODE}: Deployments are frozen for ${scopeLabel}`;
 	if (freeze.expiresAt) {
 		message += ` until ${freeze.expiresAt}`;
 	}
@@ -148,9 +196,13 @@ export function appendForcedFreezeNote(
 	if (!freeze) {
 		return descriptionLog ?? "";
 	}
+	const prefix =
+		freeze.scopeType === "environment"
+			? "forced during environment deploy freeze"
+			: "forced during deploy freeze";
 	const note = freeze.expiresAt
-		? `[forced during deploy freeze until ${freeze.expiresAt}]`
-		: "[forced during deploy freeze]";
+		? `[${prefix} until ${freeze.expiresAt}]`
+		: `[${prefix}]`;
 	const base = (descriptionLog ?? "").trim();
 	if (!base) {
 		return note;

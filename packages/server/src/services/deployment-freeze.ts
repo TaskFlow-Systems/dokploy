@@ -1,27 +1,62 @@
 import { db } from "@dokploy/server/db";
 import {
+	applications,
+	compose,
 	type DeploymentFreeze,
 	deploymentFreeze,
 	user,
 } from "@dokploy/server/db/schema";
 import {
 	type DeployFreezeState,
+	type DeploymentFreezeScopeType,
 	type DeploymentFreezeSkipSource,
 	formatDeployFrozenMessage,
 	isDeployFreezeActive,
 	MAX_FREEZE_DURATION_MINUTES,
+	pickStrictestDeployFreeze,
 	sanitizeFreezeReason,
 	toDeployFreezeState,
 } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { TRPCError } from "@trpc/server";
 import { and, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 
-export type DeployFreezeTargetScope = "application" | "compose";
+export type DeployFreezeServiceScope = "application" | "compose";
+export type DeployFreezeTargetScope = DeployFreezeServiceScope | "environment";
+export type ActiveDeployFreezeRow = DeploymentFreeze;
+
+export interface EffectiveDeploymentFreezeResult {
+	effective: ActiveDeployFreezeRow | null;
+	serviceFreeze: ActiveDeployFreezeRow | null;
+	environmentFreeze: ActiveDeployFreezeRow | null;
+	environmentId: string | null;
+}
 
 export interface DeploymentFreezeActor {
 	userId: string;
 	label: string | null;
 	authMethod: "session" | "api-key";
+}
+
+type DeleteExecutor = Pick<typeof db, "delete">;
+
+async function resolveServiceEnvironmentId(
+	scopeType: DeployFreezeServiceScope,
+	scopeId: string,
+): Promise<string | null> {
+	if (scopeType === "application") {
+		const rows = await db
+			.select({ environmentId: applications.environmentId })
+			.from(applications)
+			.where(eq(applications.applicationId, scopeId))
+			.limit(1);
+		return rows[0]?.environmentId ?? null;
+	}
+	const rows = await db
+		.select({ environmentId: compose.environmentId })
+		.from(compose)
+		.where(eq(compose.composeId, scopeId))
+		.limit(1);
+	return rows[0]?.environmentId ?? null;
 }
 
 export async function getActiveDeploymentFreeze(
@@ -42,6 +77,67 @@ export async function getActiveDeploymentFreeze(
 		.limit(1);
 	const row = rows[0];
 	return row && isDeployFreezeActive(row, now) ? row : null;
+}
+
+export async function getEffectiveDeploymentFreeze(input: {
+	scopeType: DeployFreezeServiceScope;
+	scopeId: string;
+	environmentId?: string | null;
+	now?: Date;
+}): Promise<EffectiveDeploymentFreezeResult> {
+	const now = input.now ?? new Date();
+	const environmentId =
+		input.environmentId === undefined
+			? await resolveServiceEnvironmentId(input.scopeType, input.scopeId)
+			: input.environmentId;
+
+	const scopeCondition = environmentId
+		? or(
+				and(
+					eq(deploymentFreeze.scopeType, input.scopeType),
+					eq(deploymentFreeze.scopeId, input.scopeId),
+				),
+				and(
+					eq(deploymentFreeze.scopeType, "environment"),
+					eq(deploymentFreeze.scopeId, environmentId),
+				),
+			)
+		: and(
+				eq(deploymentFreeze.scopeType, input.scopeType),
+				eq(deploymentFreeze.scopeId, input.scopeId),
+			);
+
+	const rows = await db
+		.select()
+		.from(deploymentFreeze)
+		.where(and(isNull(deploymentFreeze.liftedAt), scopeCondition));
+
+	let serviceFreeze: ActiveDeployFreezeRow | null = null;
+	let environmentFreeze: ActiveDeployFreezeRow | null = null;
+
+	for (const row of rows) {
+		if (!isDeployFreezeActive(row, now)) {
+			continue;
+		}
+		if (row.scopeType === input.scopeType && row.scopeId === input.scopeId) {
+			serviceFreeze = row;
+		} else if (
+			environmentId &&
+			row.scopeType === "environment" &&
+			row.scopeId === environmentId
+		) {
+			environmentFreeze = row;
+		}
+	}
+
+	const effective = pickStrictestDeployFreeze(serviceFreeze, environmentFreeze);
+
+	return {
+		effective,
+		serviceFreeze,
+		environmentFreeze,
+		environmentId,
+	};
 }
 
 export async function getActiveDeploymentFreezesByIds(
@@ -253,48 +349,115 @@ export async function recordSkippedDeploymentFreeze(
 	}
 }
 
-export async function deleteDeploymentFreezesForScope(
-	scopeType: DeployFreezeTargetScope,
-	scopeId: string,
+export async function recordSkippedEffectiveDeploymentFreeze(input: {
+	scopeType: DeployFreezeServiceScope;
+	scopeId: string;
+	environmentId: string | null;
+	source: DeploymentFreezeSkipSource;
+	now?: Date;
+}): Promise<void> {
+	const now = input.now ?? new Date();
+	const nowIso = now.toISOString();
+	const scopeCondition = input.environmentId
+		? or(
+				and(
+					eq(deploymentFreeze.scopeType, input.scopeType),
+					eq(deploymentFreeze.scopeId, input.scopeId),
+				),
+				and(
+					eq(deploymentFreeze.scopeType, "environment"),
+					eq(deploymentFreeze.scopeId, input.environmentId),
+				),
+			)
+		: and(
+				eq(deploymentFreeze.scopeType, input.scopeType),
+				eq(deploymentFreeze.scopeId, input.scopeId),
+			);
+
+	try {
+		await db
+			.update(deploymentFreeze)
+			.set({
+				skippedCount: sql`${deploymentFreeze.skippedCount} + 1`,
+				lastSkippedAt: nowIso,
+				lastSkippedSource: input.source,
+			})
+			.where(
+				and(
+					scopeCondition,
+					isNull(deploymentFreeze.liftedAt),
+					or(
+						isNull(deploymentFreeze.expiresAt),
+						gt(deploymentFreeze.expiresAt, nowIso),
+					),
+				),
+			);
+	} catch (error) {
+		console.warn("[deploy-freeze] Failed to record skipped deploy:", error);
+	}
+}
+
+export async function deleteDeploymentFreezesForScopes(
+	scopeType: DeploymentFreezeScopeType,
+	scopeIds: string[],
+	executor: DeleteExecutor = db,
 ): Promise<void> {
-	await db
+	if (scopeIds.length === 0) {
+		return;
+	}
+	const uniqueIds = Array.from(new Set(scopeIds));
+	await executor
 		.delete(deploymentFreeze)
 		.where(
 			and(
 				eq(deploymentFreeze.scopeType, scopeType),
-				eq(deploymentFreeze.scopeId, scopeId),
+				inArray(deploymentFreeze.scopeId, uniqueIds),
 			),
 		);
 }
 
+export async function deleteDeploymentFreezesForScope(
+	scopeType: DeploymentFreezeScopeType,
+	scopeId: string,
+	executor: DeleteExecutor = db,
+): Promise<void> {
+	await deleteDeploymentFreezesForScopes(scopeType, [scopeId], executor);
+}
+
 export async function assertDeploymentNotFrozen(input: {
-	scopeType: DeployFreezeTargetScope;
+	scopeType: DeployFreezeServiceScope;
 	scopeId: string;
+	environmentId?: string | null;
 	force?: boolean;
 	source: DeploymentFreezeSkipSource;
 }): Promise<DeployFreezeState | null> {
 	const now = new Date();
-	const active = await getActiveDeploymentFreeze(
-		input.scopeType,
-		input.scopeId,
+	const { effective, environmentId } = await getEffectiveDeploymentFreeze({
+		scopeType: input.scopeType,
+		scopeId: input.scopeId,
+		environmentId: input.environmentId,
 		now,
-	);
-	if (!active) {
+	});
+	if (!effective) {
 		return null;
 	}
-	const state = toDeployFreezeState(active, { includeActorLabel: false, now });
+	const state = toDeployFreezeState(effective, {
+		includeActorLabel: false,
+		now,
+	});
 	if (!state) {
 		return null;
 	}
 	if (input.force === true) {
 		return state;
 	}
-	await recordSkippedDeploymentFreeze(
-		input.scopeType,
-		input.scopeId,
-		input.source,
+	await recordSkippedEffectiveDeploymentFreeze({
+		scopeType: input.scopeType,
+		scopeId: input.scopeId,
+		environmentId,
+		source: input.source,
 		now,
-	);
+	});
 	throw new TRPCError({
 		code: "PRECONDITION_FAILED",
 		message: formatDeployFrozenMessage(state),

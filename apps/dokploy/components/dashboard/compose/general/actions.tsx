@@ -37,6 +37,7 @@ export const ComposeActions = ({ composeId }: Props) => {
 	const { mutateAsync: stop, isPending: isStopping } =
 		api.compose.stop.useMutation();
 	const isFrozen = Boolean(data?.deployFreeze?.active);
+	const isEnvFrozen = Boolean(data?.environmentFreeze?.active);
 	return (
 		<div className="flex flex-row gap-4 w-full flex-wrap ">
 			<TooltipProvider delayDuration={0} disableHoverableContent={false}>
@@ -48,8 +49,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 								<span>
 									Are you sure you want to deploy this compose?{" "}
 									<span className="font-medium text-amber-600 dark:text-amber-400">
-										Deploys are currently frozen — confirming will run a one-off
-										forced deploy without unfreezing.
+										{isEnvFrozen
+											? `Deploys are currently frozen for environment ${data?.environment?.name ?? ""} — confirming will run a one-off forced deploy without unfreezing.`
+											: "Deploys are currently frozen — confirming will run a one-off forced deploy without unfreezing."}
 									</span>
 								</span>
 							) : (
@@ -106,8 +108,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 								<span>
 									Are you sure you want to rebuild this compose?{" "}
 									<span className="font-medium text-amber-600 dark:text-amber-400">
-										Deploys are currently frozen — confirming will run a one-off
-										forced deploy without unfreezing.
+										{isEnvFrozen
+											? `Deploys are currently frozen for environment ${data?.environment?.name ?? ""} — confirming will run a one-off forced deploy without unfreezing.`
+											: "Deploys are currently frozen — confirming will run a one-off forced deploy without unfreezing."}
 									</span>
 								</span>
 							) : (
@@ -238,7 +241,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 				<DeployFreezeControl
 					serviceType="compose"
 					serviceId={composeId}
-					deployFreeze={data?.deployFreeze}
+					deployFreeze={data?.serviceFreeze}
+					inheritedFreeze={data?.environmentFreeze}
+					environmentName={data?.environment?.name}
 					onChanged={() => refetch()}
 				/>
 			)}

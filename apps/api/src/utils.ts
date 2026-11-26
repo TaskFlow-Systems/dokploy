@@ -5,9 +5,11 @@ import {
 	deployPreviewApplication,
 	ExactDeploymentFinalizationError,
 	finalizeDeploymentOperation,
+	getEffectiveDeploymentFreeze,
 	rebuildApplication,
 	rebuildCompose,
 	rebuildPreviewApplication,
+	recordSkippedEffectiveDeploymentFreeze,
 	updateApplicationStatus,
 	updateCompose,
 	updatePreviewDeployment,
@@ -17,6 +19,22 @@ import type { DeployJob } from "./schema.js";
 export const deploy = async (job: DeployJob) => {
 	try {
 		if (job.applicationType === "application") {
+			if (!job.bypassFreeze) {
+				const { effective: activeFreeze, environmentId } =
+					await getEffectiveDeploymentFreeze({
+						scopeType: "application",
+						scopeId: job.applicationId,
+					});
+				if (activeFreeze) {
+					await recordSkippedEffectiveDeploymentFreeze({
+						scopeType: "application",
+						scopeId: job.applicationId,
+						environmentId,
+						source: "queue",
+					});
+					return true;
+				}
+			}
 			await updateApplicationStatus(job.applicationId, "running");
 			if (job.server) {
 				if (job.type === "redeploy") {
@@ -34,6 +52,31 @@ export const deploy = async (job: DeployJob) => {
 				}
 			}
 		} else if (job.applicationType === "compose") {
+			if (!job.bypassFreeze) {
+				const { effective: activeFreeze, environmentId } =
+					await getEffectiveDeploymentFreeze({
+						scopeType: "compose",
+						scopeId: job.composeId,
+					});
+				if (activeFreeze) {
+					await recordSkippedEffectiveDeploymentFreeze({
+						scopeType: "compose",
+						scopeId: job.composeId,
+						environmentId,
+						source: "queue",
+					});
+					if (job.operationId) {
+						const claimed = await claimDeploymentOperation(
+							job.composeId,
+							job.operationId,
+						);
+						if (claimed) {
+							await finalizeDeploymentOperation(job.operationId, "failed");
+						}
+					}
+					return true;
+				}
+			}
 			if (job.operationId) {
 				const claimed = await claimDeploymentOperation(
 					job.composeId,

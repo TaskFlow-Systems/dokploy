@@ -8,7 +8,12 @@ import {
 	updateEnvironmentById,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
-import { getActiveDeploymentFreezesByIds } from "@dokploy/server/services/deployment-freeze";
+import {
+	formatUserActorLabel,
+	getActiveDeploymentFreeze,
+	getActiveDeploymentFreezesByIds,
+	setDeploymentFreeze,
+} from "@dokploy/server/services/deployment-freeze";
 import { redactGitProviderSecrets } from "@dokploy/server/services/git-provider";
 import {
 	addNewEnvironment,
@@ -19,7 +24,11 @@ import {
 	findMemberByUserId,
 	hasPermission,
 } from "@dokploy/server/services/permission";
-import { toOverviewDeployFreeze } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
+import {
+	pickStrictestDeployFreeze,
+	toDeployFreezeState,
+	toOverviewDeployFreeze,
+} from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { environmentHasServices } from "@dokploy/server/utils/environments/has-services";
 import {
 	preserveSecretPlaceholderFields,
@@ -31,7 +40,10 @@ import { TRPCError } from "@trpc/server";
 import { and, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { createTRPCRouter, protectedProcedure } from "@/server/api/trpc";
+import { isApiKeySession } from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
+import { canUserManageEnvironmentDeployFreeze } from "@/server/api/utils/deploy-freeze-access";
+import { resolveDeployFreezeChangeAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
 import { assertTargetProjectAccess } from "@/server/api/utils/placement-access";
 import { assertEnvironmentLimit } from "@/server/api/utils/plan-limits";
 import {
@@ -39,6 +51,8 @@ import {
 	apiDuplicateEnvironment,
 	apiFindOneEnvironment,
 	apiRemoveEnvironment,
+	apiSetEnvironmentDeployFreeze,
+	apiSetEnvironmentDeployFreezeResponse,
 	apiUpdateEnvironment,
 	environments,
 	projects,
@@ -181,73 +195,106 @@ const redactEnvironmentForPermissions = <T extends SecretRecord>(
 
 const attachEnvironmentDeployFreezes = async <
 	T extends {
-		applications?: Array<{ applicationId: string } & SecretRecord>;
-		compose?: Array<{ composeId: string } & SecretRecord>;
+		environmentId: string;
+		applications: Array<{ applicationId: string } & SecretRecord>;
+		compose: Array<{ composeId: string } & SecretRecord>;
 	},
 >(
 	environment: T,
-): Promise<T> => {
-	const applicationIds = (environment.applications ?? []).map(
+	opts: { includeActorLabel: boolean; canManageDeployFreeze: boolean },
+) => {
+	const applicationIds = environment.applications.map(
 		(app) => app.applicationId,
 	);
-	const composeIds = (environment.compose ?? []).map((comp) => comp.composeId);
-	const [appFreezes, composeFreezes] = await Promise.all([
+	const composeIds = environment.compose.map((comp) => comp.composeId);
+	const [envFreeze, appFreezes, composeFreezes] = await Promise.all([
+		getActiveDeploymentFreeze("environment", environment.environmentId),
 		getActiveDeploymentFreezesByIds("application", applicationIds),
 		getActiveDeploymentFreezesByIds("compose", composeIds),
 	]);
 
 	return {
 		...environment,
-		...(Array.isArray(environment.applications)
-			? {
-					applications: environment.applications.map((app) => ({
-						...app,
-						deployFreeze: toOverviewDeployFreeze(
-							appFreezes.get(app.applicationId),
-						),
-					})),
-				}
-			: {}),
-		...(Array.isArray(environment.compose)
-			? {
-					compose: environment.compose.map((comp) => ({
-						...comp,
-						deployFreeze: toOverviewDeployFreeze(
-							composeFreezes.get(comp.composeId),
-						),
-					})),
-				}
-			: {}),
+		deployFreeze: toDeployFreezeState(envFreeze, {
+			includeActorLabel: opts.includeActorLabel,
+		}),
+		canManageDeployFreeze: opts.canManageDeployFreeze,
+		applications: environment.applications.map((app) => {
+			const ownFreeze = appFreezes.get(app.applicationId) ?? null;
+			return {
+				...app,
+				deployFreeze: toOverviewDeployFreeze(
+					pickStrictestDeployFreeze(ownFreeze, envFreeze),
+				),
+				serviceFreeze: toOverviewDeployFreeze(ownFreeze),
+			};
+		}),
+		compose: environment.compose.map((comp) => {
+			const ownFreeze = composeFreezes.get(comp.composeId) ?? null;
+			return {
+				...comp,
+				deployFreeze: toOverviewDeployFreeze(
+					pickStrictestDeployFreeze(ownFreeze, envFreeze),
+				),
+				serviceFreeze: toOverviewDeployFreeze(ownFreeze),
+			};
+		}),
 	};
 };
 
-const filterEnvironmentServices = (
-	environment: any,
+const attachEnvironmentsDeployFreezes = async <
+	T extends { environmentId: string },
+>(
+	environmentList: T[],
+) => {
+	const envFreezes = await getActiveDeploymentFreezesByIds(
+		"environment",
+		environmentList.map((env) => env.environmentId),
+	);
+	return environmentList.map((env) => ({
+		...env,
+		deployFreeze: toOverviewDeployFreeze(envFreezes.get(env.environmentId)),
+	}));
+};
+
+const filterEnvironmentServices = <
+	T extends {
+		applications: Array<{ applicationId: string }>;
+		compose: Array<{ composeId: string }>;
+		libsql: Array<{ libsqlId: string }>;
+		mariadb: Array<{ mariadbId: string }>;
+		mongo: Array<{ mongoId: string }>;
+		mysql: Array<{ mysqlId: string }>;
+		postgres: Array<{ postgresId: string }>;
+		redis: Array<{ redisId: string }>;
+	},
+>(
+	environment: T,
 	accessedServices: string[],
-) => ({
+): T => ({
 	...environment,
-	applications: environment.applications.filter((app: any) =>
+	applications: environment.applications.filter((app) =>
 		accessedServices.includes(app.applicationId),
 	),
-	compose: environment.compose.filter((comp: any) =>
+	compose: environment.compose.filter((comp) =>
 		accessedServices.includes(comp.composeId),
 	),
-	libsql: environment.libsql.filter((db: any) =>
+	libsql: environment.libsql.filter((db) =>
 		accessedServices.includes(db.libsqlId),
 	),
-	mariadb: environment.mariadb.filter((db: any) =>
+	mariadb: environment.mariadb.filter((db) =>
 		accessedServices.includes(db.mariadbId),
 	),
-	mongo: environment.mongo.filter((db: any) =>
+	mongo: environment.mongo.filter((db) =>
 		accessedServices.includes(db.mongoId),
 	),
-	mysql: environment.mysql.filter((db: any) =>
+	mysql: environment.mysql.filter((db) =>
 		accessedServices.includes(db.mysqlId),
 	),
-	postgres: environment.postgres.filter((db: any) =>
+	postgres: environment.postgres.filter((db) =>
 		accessedServices.includes(db.postgresId),
 	),
-	redis: environment.redis.filter((db: any) =>
+	redis: environment.redis.filter((db) =>
 		accessedServices.includes(db.redisId),
 	),
 });
@@ -309,12 +356,14 @@ export const environmentRouter = createTRPCRouter({
 				});
 			}
 
+			const includeActorLabel = !isApiKeySession(ctx.session);
+
 			if (ctx.user.role !== "owner" && ctx.user.role !== "admin") {
-				const { accessedEnvironments, accessedServices } =
-					await findMemberByUserId(
-						ctx.user.id,
-						ctx.session.activeOrganizationId,
-					);
+				const memberRecord = await findMemberByUserId(
+					ctx.user.id,
+					ctx.session.activeOrganizationId,
+				);
+				const { accessedEnvironments, accessedServices } = memberRecord;
 
 				if (!accessedEnvironments.includes(environment.environmentId)) {
 					throw new TRPCError({
@@ -323,29 +372,111 @@ export const environmentRouter = createTRPCRouter({
 					});
 				}
 
+				const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
+				const canReadProjectEnv = await canReadProjectEnvVars(ctx);
+				const canManageDeployFreeze =
+					await canUserManageEnvironmentDeployFreeze(
+						ctx,
+						environment,
+						memberRecord,
+					);
+
 				const filteredEnvironment = filterEnvironmentServices(
 					environment,
 					accessedServices,
 				);
-				const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
-				const canReadProjectEnv = await canReadProjectEnvVars(ctx);
 
 				const redacted = redactEnvironmentForPermissions(
 					filteredEnvironment,
 					canReadEnvironmentEnv,
 					canReadProjectEnv,
 				);
-				return attachEnvironmentDeployFreezes(redacted);
+				return attachEnvironmentDeployFreezes(redacted, {
+					includeActorLabel,
+					canManageDeployFreeze,
+				});
 			}
 
 			const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
 			const canReadProjectEnv = await canReadProjectEnvVars(ctx);
+			const canManageDeployFreeze = await canUserManageEnvironmentDeployFreeze(
+				ctx,
+				environment,
+			);
 			const redacted = redactEnvironmentForPermissions(
 				environment,
 				canReadEnvironmentEnv,
 				canReadProjectEnv,
 			);
-			return attachEnvironmentDeployFreezes(redacted);
+			return attachEnvironmentDeployFreezes(redacted, {
+				includeActorLabel,
+				canManageDeployFreeze,
+			});
+		}),
+
+	setDeployFreeze: protectedProcedure
+		.input(apiSetEnvironmentDeployFreeze)
+		.output(apiSetEnvironmentDeployFreezeResponse)
+		.mutation(async ({ input, ctx }) => {
+			await checkEnvironmentAccess(ctx, input.environmentId, "update");
+			await checkPermission(ctx, { deployment: ["create"] });
+			const environment = await findEnvironmentById(input.environmentId);
+			if (
+				environment.project.organizationId !== ctx.session.activeOrganizationId
+			) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message: "You are not allowed to access this environment",
+				});
+			}
+
+			const canManage = await canUserManageEnvironmentDeployFreeze(
+				ctx,
+				environment,
+			);
+			if (!canManage) {
+				throw new TRPCError({
+					code: "FORBIDDEN",
+					message:
+						"You must have access to all deployable services in this environment to manage its deployment freeze",
+				});
+			}
+
+			const authMethod = isApiKeySession(ctx.session) ? "api-key" : "session";
+			const label = input.frozen
+				? await formatUserActorLabel(ctx.user.id, ctx.user.email)
+				: null;
+			const row = await setDeploymentFreeze({
+				scopeType: "environment",
+				scopeId: input.environmentId,
+				frozen: input.frozen,
+				durationMinutes: input.durationMinutes,
+				reason: input.reason,
+				actor: {
+					userId: ctx.user.id,
+					label,
+					authMethod,
+				},
+			});
+			await audit(ctx, {
+				action: "update",
+				resourceType: "environment",
+				resourceId: environment.environmentId,
+				resourceName: environment.name,
+				metadata: resolveDeployFreezeChangeAuditMetadata({
+					scopeType: "environment",
+					scopeId: environment.environmentId,
+					frozen: input.frozen,
+					durationMinutes: input.durationMinutes,
+					ctx,
+				}),
+			});
+			return {
+				environmentId: input.environmentId,
+				deployFreeze: toDeployFreezeState(row, {
+					includeActorLabel: authMethod !== "api-key",
+				}),
+			};
 		}),
 
 	byProjectId: protectedProcedure
@@ -384,24 +515,26 @@ export const environmentRouter = createTRPCRouter({
 					const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
 					const canReadProjectEnv = await canReadProjectEnvVars(ctx);
 
-					return filteredEnvironments.map((environment) =>
+					const redactedEnvironments = filteredEnvironments.map((environment) =>
 						redactEnvironmentForPermissions(
 							environment,
 							canReadEnvironmentEnv,
 							canReadProjectEnv,
 						),
 					);
+					return attachEnvironmentsDeployFreezes(redactedEnvironments);
 				}
 
 				const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
 				const canReadProjectEnv = await canReadProjectEnvVars(ctx);
-				return environments.map((environment) =>
+				const redactedEnvironments = environments.map((environment) =>
 					redactEnvironmentForPermissions(
 						environment,
 						canReadEnvironmentEnv,
 						canReadProjectEnv,
 					),
 				);
+				return attachEnvironmentsDeployFreezes(redactedEnvironments);
 			} catch (error) {
 				console.log(error);
 				throw new TRPCError({

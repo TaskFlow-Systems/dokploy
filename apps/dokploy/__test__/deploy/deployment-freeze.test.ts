@@ -3,6 +3,7 @@ import { Readable } from "node:stream";
 import {
 	applications,
 	compose,
+	type DeploymentFreeze,
 	deploymentFreeze,
 	deployments,
 	libsql,
@@ -17,10 +18,12 @@ import {
 	appendForcedFreezeNote,
 	DEPLOY_FROZEN_CODE,
 	formatDeployFrozenMessage,
+	formatDeployFrozenWebhookMessage,
 	getNextFreezeExpiryTimeoutMs,
 	isDeployFreezeActive,
 	MAX_FREEZE_REASON_LENGTH,
 	MAX_FREEZE_TIMEOUT_MS,
+	pickStrictestDeployFreeze,
 	sanitizeFreezeReason,
 	toDeployFreezeState,
 	toOverviewDeployFreeze,
@@ -113,6 +116,7 @@ const state = vi.hoisted(() => ({
 
 const mocks = vi.hoisted(() => ({
 	audit: vi.fn(),
+	checkEnvironmentAccess: vi.fn(async () => undefined),
 	checkPermission: vi.fn(async () => true),
 	checkServiceAccess: vi.fn(async () => undefined),
 	checkServicePermissionAndAccess: vi.fn(async () => undefined),
@@ -126,10 +130,13 @@ const mocks = vi.hoisted(() => ({
 	updateApplication: vi.fn(async () => undefined),
 	updateApplicationStatus: vi.fn(async () => undefined),
 	updateCompose: vi.fn(async () => undefined),
+	updatePreviewDeployment: vi.fn(async () => undefined),
 	deployApplication: vi.fn(async () => undefined),
 	deployCompose: vi.fn(async () => undefined),
+	deployPreviewApplication: vi.fn(async () => undefined),
 	rebuildApplication: vi.fn(async () => undefined),
 	rebuildCompose: vi.fn(async () => undefined),
+	rebuildPreviewApplication: vi.fn(async () => undefined),
 	claimDeploymentOperation: vi.fn(async () => true),
 	finalizeDeploymentOperation: vi.fn(async () => undefined),
 	markDeploymentOperationDispatched: vi.fn(async () => undefined),
@@ -175,6 +182,12 @@ vi.mock("@dokploy/server/db", () => {
 			if (isUser) {
 				return state.actorUser ? [state.actorUser] : [];
 			}
+			if (table === applications) {
+				return [{ environmentId: state.appEntity.environmentId }];
+			}
+			if (table === compose) {
+				return [{ environmentId: state.composeEntity.environmentId }];
+			}
 			return [];
 		};
 
@@ -183,13 +196,29 @@ vi.mock("@dokploy/server/db", () => {
 				if (state.freezeBatchQueue.length > 0) {
 					return state.freezeBatchQueue.shift() ?? [];
 				}
-				return state.batchFreezes;
+				if (state.freezeSingleQueue.length > 0) {
+					return state.freezeSingleQueue.shift() ?? [];
+				}
+				if (state.batchFreezes.length > 0) {
+					return state.batchFreezes;
+				}
+				return state.singleFreeze ? [state.singleFreeze] : [];
 			}
 			if (table === applications) {
-				return state.overviewRows.application;
+				if (state.overviewRows.application.length > 0) {
+					return state.overviewRows.application;
+				}
+				return state.environmentEntity.applications.map((a) => ({
+					id: a.applicationId,
+				}));
 			}
 			if (table === compose) {
-				return state.overviewRows.compose;
+				if (state.overviewRows.compose.length > 0) {
+					return state.overviewRows.compose;
+				}
+				return state.environmentEntity.compose.map((c) => ({
+					id: c.composeId,
+				}));
 			}
 			if (
 				table === deployments ||
@@ -207,17 +236,15 @@ vi.mock("@dokploy/server/db", () => {
 
 		const limit = vi.fn(resolveSingle);
 		const groupBy = vi.fn(resolveBatch);
-		const where = vi.fn(() => {
-			const promise = resolveBatch() as Promise<
-				Array<Record<string, unknown>>
-			> & {
-				limit: typeof limit;
-				groupBy: typeof groupBy;
-			};
-			promise.limit = limit;
-			promise.groupBy = groupBy;
-			return promise;
-		});
+		const where = vi.fn(() => ({
+			limit,
+			groupBy,
+			// biome-ignore lint/suspicious/noThenProperty: Drizzle query mock emulates lazy thenable .where() so chained .limit() does not consume batch queues.
+			then: (
+				onFulfilled?: (value: Array<Record<string, unknown>>) => unknown,
+				onRejected?: (reason: unknown) => unknown,
+			) => resolveBatch().then(onFulfilled, onRejected),
+		}));
 		const builder: Record<string, unknown> = {
 			where,
 			limit,
@@ -359,10 +386,12 @@ vi.mock("@dokploy/server", async (importOriginal) => {
 		createPreviewDeployment: mocks.createPreviewDeployment,
 		deployApplication: mocks.deployApplication,
 		deployCompose: mocks.deployCompose,
+		deployPreviewApplication: mocks.deployPreviewApplication,
 		findApplicationById: vi.fn(async () => state.appEntity),
 		findComposeById: vi.fn(async () => state.composeEntity),
 		findComposeDeploymentOperation: mocks.findComposeDeploymentOperation,
 		findEnvironmentById: vi.fn(async () => state.environmentEntity),
+		findEnvironmentsByProjectId: vi.fn(async () => [state.environmentEntity]),
 		findPreviewDeploymentByApplicationId:
 			mocks.findPreviewDeploymentByApplicationId,
 		findPreviewDeploymentsByPullRequestIdForGithub:
@@ -373,11 +402,13 @@ vi.mock("@dokploy/server", async (importOriginal) => {
 		markDeploymentOperationDispatched: mocks.markDeploymentOperationDispatched,
 		rebuildApplication: mocks.rebuildApplication,
 		rebuildCompose: mocks.rebuildCompose,
+		rebuildPreviewApplication: mocks.rebuildPreviewApplication,
 		shouldDeploy: mocks.shouldDeploy,
 		unzipDrop: mocks.unzipDrop,
 		updateApplication: mocks.updateApplication,
 		updateApplicationStatus: mocks.updateApplicationStatus,
 		updateCompose: mocks.updateCompose,
+		updatePreviewDeployment: mocks.updatePreviewDeployment,
 		upsertApplicationEnvironment: mocks.upsertApplicationEnvironment,
 		validateRequest: mocks.validateRequest,
 	};
@@ -386,7 +417,7 @@ vi.mock("@dokploy/server", async (importOriginal) => {
 vi.mock("@dokploy/server/services/permission", () => ({
 	addNewEnvironment: vi.fn(),
 	addNewService: vi.fn(),
-	checkEnvironmentAccess: vi.fn(),
+	checkEnvironmentAccess: mocks.checkEnvironmentAccess,
 	checkEnvironmentCreationPermission: vi.fn(),
 	checkEnvironmentDeletionPermission: vi.fn(),
 	checkPermission: mocks.checkPermission,
@@ -435,8 +466,13 @@ const { processDeploymentJob } = await import(
 const { getAllServicesForOrganization } = await import(
 	"@dokploy/server/services/overview"
 );
+const { deployJobSchema } = await import("../../../api/src/schema");
+const { deploy: cloudApiDeploy } = await import("../../../api/src/utils");
 
-const createSessionCtx = (authMethod: "session" | "api-key" = "session") =>
+const createSessionCtx = (
+	authMethod: "session" | "api-key" = "session",
+	role: "owner" | "admin" | "member" = "owner",
+) =>
 	({
 		db: {},
 		req: {},
@@ -451,12 +487,14 @@ const createSessionCtx = (authMethod: "session" | "api-key" = "session") =>
 		user: {
 			id: "user-1",
 			ownerId: "user-1",
-			role: "owner",
+			role,
 			email: "alice@example.com",
 		},
 	}) as never;
 
-const makeFreezeRow = (overrides: Record<string, unknown> = {}) => ({
+const makeFreezeRow = (
+	overrides: Partial<DeploymentFreeze> = {},
+): DeploymentFreeze => ({
 	freezeId: "freeze-1",
 	scopeType: "compose",
 	scopeId: "compose-1",
@@ -465,12 +503,12 @@ const makeFreezeRow = (overrides: Record<string, unknown> = {}) => ({
 	createdByLabel: "Alice Ops",
 	createdByAuthMethod: "session",
 	createdAt: "2026-06-01T10:00:00.000Z",
-	expiresAt: null as string | null,
-	liftedAt: null as string | null,
-	liftedByUserId: null as string | null,
+	expiresAt: null,
+	liftedAt: null,
+	liftedByUserId: null,
 	skippedCount: 0,
-	lastSkippedAt: null as string | null,
-	lastSkippedSource: null as "webhook" | "api" | "queue" | null,
+	lastSkippedAt: null,
+	lastSkippedSource: null,
 	...overrides,
 });
 
@@ -595,6 +633,105 @@ describe("deployment freeze pure helpers", () => {
 			"Deploy triggered [forced during deploy freeze until 2026-06-01T15:00:00.000Z]",
 		);
 		expect(appendForcedFreezeNote("Line1\nLine2", null)).toBe("Line1\nLine2");
+
+		const envStateObj = toDeployFreezeState(
+			makeFreezeRow({
+				scopeType: "environment",
+				scopeId: "env-1",
+				expiresAt: "2026-06-01T15:00:00.000Z",
+				reason: "Release freeze",
+			}),
+			{ now: new Date(nowMs) },
+		);
+		expect(envStateObj).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+		});
+		expect(formatDeployFrozenMessage(envStateObj!)).toBe(
+			`${DEPLOY_FROZEN_CODE}: Deployments are frozen for this environment until 2026-06-01T15:00:00.000Z (reason: Release freeze)`,
+		);
+		expect(formatDeployFrozenWebhookMessage(envStateObj!)).toBe(
+			"Deployments are frozen for this environment",
+		);
+		expect(formatDeployFrozenWebhookMessage(stateObj!)).toBe(
+			"Deployments are frozen for this service",
+		);
+		expect(appendForcedFreezeNote("Deploy triggered", envStateObj)).toBe(
+			"Deploy triggered [forced during environment deploy freeze until 2026-06-01T15:00:00.000Z]",
+		);
+	});
+
+	it("pickStrictestDeployFreeze prefers indefinite/NaN, then later expiry, and breaks ties to environment", () => {
+		const svcEarly = makeFreezeRow({
+			freezeId: "svc-early",
+			scopeType: "compose",
+			scopeId: "compose-1",
+			expiresAt: "2026-06-01T13:00:00.000Z",
+		});
+		const svcLate = makeFreezeRow({
+			freezeId: "svc-late",
+			scopeType: "compose",
+			scopeId: "compose-1",
+			expiresAt: "2026-06-01T18:00:00.000Z",
+		});
+		const svcIndef = makeFreezeRow({
+			freezeId: "svc-indef",
+			scopeType: "compose",
+			scopeId: "compose-1",
+			expiresAt: null,
+		});
+		const svcNan = makeFreezeRow({
+			freezeId: "svc-nan",
+			scopeType: "compose",
+			scopeId: "compose-1",
+			expiresAt: "not-a-timestamp",
+		});
+		const envMid = makeFreezeRow({
+			freezeId: "env-mid",
+			scopeType: "environment",
+			scopeId: "env-1",
+			expiresAt: "2026-06-01T15:00:00.000Z",
+		});
+		const envSame = makeFreezeRow({
+			freezeId: "env-same",
+			scopeType: "environment",
+			scopeId: "env-1",
+			expiresAt: "2026-06-01T13:00:00.000Z",
+		});
+		const envIndef = makeFreezeRow({
+			freezeId: "env-indef",
+			scopeType: "environment",
+			scopeId: "env-1",
+			expiresAt: null,
+		});
+
+		expect(pickStrictestDeployFreeze(null, null)).toBeNull();
+		expect(pickStrictestDeployFreeze(svcEarly, null)?.freezeId).toBe(
+			"svc-early",
+		);
+		expect(pickStrictestDeployFreeze(null, envMid)?.freezeId).toBe("env-mid");
+		expect(pickStrictestDeployFreeze(svcEarly, envIndef)?.freezeId).toBe(
+			"env-indef",
+		);
+		expect(pickStrictestDeployFreeze(svcIndef, envMid)?.freezeId).toBe(
+			"svc-indef",
+		);
+		expect(pickStrictestDeployFreeze(svcLate, envMid)?.freezeId).toBe(
+			"svc-late",
+		);
+		expect(pickStrictestDeployFreeze(svcEarly, envMid)?.freezeId).toBe(
+			"env-mid",
+		);
+		expect(pickStrictestDeployFreeze(svcEarly, envSame)?.freezeId).toBe(
+			"env-same",
+		);
+		expect(pickStrictestDeployFreeze(svcIndef, envIndef)?.freezeId).toBe(
+			"env-indef",
+		);
+		expect(pickStrictestDeployFreeze(svcNan, envMid)?.freezeId).toBe("svc-nan");
+		expect(pickStrictestDeployFreeze(svcNan, envIndef)?.freezeId).toBe(
+			"env-indef",
+		);
 	});
 });
 
@@ -611,9 +748,12 @@ describe("deployment freeze router, REST, webhooks, worker, and overview integra
 		state.composeEntity.sourceType = "git";
 		state.composeEntity.serverId = null;
 		state.appEntity.serverId = null;
+		mocks.checkEnvironmentAccess.mockResolvedValue(undefined);
+		mocks.checkPermission.mockResolvedValue(true);
 		mocks.checkServicePermissionAndAccess.mockResolvedValue(undefined);
 		mocks.checkServiceAccess.mockResolvedValue(undefined);
 		mocks.hasPermission.mockResolvedValue(true);
+		mocks.findMemberByUserId.mockReset();
 		mocks.shouldDeploy.mockReturnValue(true);
 		mocks.operationFindFirst.mockResolvedValue(undefined);
 		mocks.operationInsertReturning.mockResolvedValue([
@@ -997,6 +1137,8 @@ describe("deployment freeze router, REST, webhooks, worker, and overview integra
 			gitea: null,
 		});
 		state.singleFreeze = makeFreezeRow({
+			scopeType: "application",
+			scopeId: "app-1",
 			reason: "SECRET_INTERNAL_REASON",
 			expiresAt: "2099-01-01T00:00:00.000Z",
 		});
@@ -1034,6 +1176,12 @@ describe("deployment freeze router, REST, webhooks, worker, and overview integra
 		expect(mocks.queueAdd).not.toHaveBeenCalled();
 		expect(mocks.skippedUpdate).toHaveBeenCalledTimes(1);
 
+		state.singleFreeze = makeFreezeRow({
+			scopeType: "compose",
+			scopeId: "compose-1",
+			reason: "SECRET_INTERNAL_REASON",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
 		const okComposeRes = createMockRes();
 		await composeRefreshWebhook(makeRefreshWebhookReq(payload), okComposeRes);
 		expect(okComposeRes.status).toHaveBeenCalledWith(200);
@@ -1291,6 +1439,7 @@ describe("deployment freeze router, REST, webhooks, worker, and overview integra
 			}),
 		]);
 		state.freezeBatchQueue.push([]);
+		state.freezeBatchQueue.push([]);
 
 		const services = await getAllServicesForOrganization("org-1", null);
 		const app1Overview = services.find((s) => s.id === "app-1");
@@ -1300,12 +1449,51 @@ describe("deployment freeze router, REST, webhooks, worker, and overview integra
 			toOverviewDeployFreeze(makeFreezeRow({ scopeId: "app-1" })),
 		).not.toBeNull();
 		expect(app1Overview?.deployFreeze).toMatchObject({
+			scopeType: "application",
+			scopeId: "app-1",
 			reason: "App hold",
 			skippedCount: 3,
 		});
 		expect(app2Overview?.deployFreeze).toBeNull();
 		expect(comp1Overview?.deployFreeze).toBeNull();
 
+		// Environment freeze propagates to overview services and wins on stricter lock
+		state.freezeBatchQueue.push([
+			makeFreezeRow({
+				scopeType: "application",
+				scopeId: "app-1",
+				reason: "Short app hold",
+				expiresAt: "2099-01-01T00:00:00.000Z",
+			}),
+		]);
+		state.freezeBatchQueue.push([]);
+		state.freezeBatchQueue.push([
+			makeFreezeRow({
+				scopeType: "environment",
+				scopeId: "env-1",
+				reason: "Indefinite env hold",
+				expiresAt: null,
+			}),
+		]);
+		const envFrozenOverview = await getAllServicesForOrganization(
+			"org-1",
+			null,
+		);
+		expect(
+			envFrozenOverview.find((s) => s.id === "app-1")?.deployFreeze,
+		).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+			reason: "Indefinite env hold",
+		});
+		expect(
+			envFrozenOverview.find((s) => s.id === "compose-1")?.deployFreeze,
+		).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+		});
+
+		state.freezeSingleQueue.push([]);
 		state.freezeBatchQueue.push([
 			makeFreezeRow({
 				scopeType: "application",
@@ -1323,10 +1511,421 @@ describe("deployment freeze router, REST, webhooks, worker, and overview integra
 			envOne.applications as Array<Record<string, unknown>>
 		).find((a) => a.applicationId === "app-1");
 		const envDb = (envOne.libsql as Array<Record<string, unknown>>)[0];
+		expect(envOne.canManageDeployFreeze).toBe(true);
 		expect(envApp1?.deployFreeze).toMatchObject({
+			scopeType: "application",
+			scopeId: "app-1",
 			reason: "Env hold",
 			skippedCount: 1,
 		});
+		expect(envApp1?.serviceFreeze).toMatchObject({
+			scopeType: "application",
+			scopeId: "app-1",
+		});
 		expect(envDb?.deployFreeze).toBeUndefined();
+	});
+
+	it("environment.setDeployFreeze enforces full deployable-service RBAC and environment.one/byProjectId expose dual-layer state", async () => {
+		const ownerCaller = environmentRouter.createCaller(
+			createSessionCtx("session", "owner"),
+		);
+		const apiOwnerCaller = environmentRouter.createCaller(
+			createSessionCtx("api-key", "owner"),
+		);
+		const memberCaller = environmentRouter.createCaller(
+			createSessionCtx("session", "member"),
+		);
+
+		// Missing environment:update permission
+		mocks.checkEnvironmentAccess.mockRejectedValueOnce(
+			new TRPCError({ code: "UNAUTHORIZED", message: "Permission denied" }),
+		);
+		await expect(
+			memberCaller.setDeployFreeze({ environmentId: "env-1", frozen: true }),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+		// Missing deployment:create permission
+		mocks.checkPermission.mockRejectedValueOnce(
+			new TRPCError({ code: "UNAUTHORIZED", message: "Permission denied" }),
+		);
+		await expect(
+			memberCaller.setDeployFreeze({ environmentId: "env-1", frozen: true }),
+		).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+
+		// Partial-access custom role (has app-1 only, missing app-2 and compose-1) -> FORBIDDEN
+		mocks.hasPermission.mockResolvedValue(true);
+		mocks.findMemberByUserId.mockResolvedValue({
+			role: "deployer",
+			accessedEnvironments: ["env-1"],
+			accessedServices: ["app-1"],
+		});
+		await expect(
+			memberCaller.setDeployFreeze({ environmentId: "env-1", frozen: true }),
+		).rejects.toMatchObject({
+			code: "FORBIDDEN",
+			message:
+				"You must have access to all deployable services in this environment to manage its deployment freeze",
+		});
+
+		// environment.one computes canManageDeployFreeze BEFORE filterEnvironmentServices
+		const partialEnvOne = await memberCaller.one({ environmentId: "env-1" });
+		expect(partialEnvOne.canManageDeployFreeze).toBe(false);
+		expect(partialEnvOne.applications).toHaveLength(1);
+
+		// Full deployable coverage (all apps + compose, even without db-1) -> ALLOWED
+		mocks.findMemberByUserId.mockResolvedValue({
+			role: "deployer",
+			accessedEnvironments: ["env-1"],
+			accessedServices: ["app-1", "app-2", "compose-1"],
+		});
+		const fullEnvOne = await memberCaller.one({ environmentId: "env-1" });
+		expect(fullEnvOne.canManageDeployFreeze).toBe(true);
+
+		const created = await memberCaller.setDeployFreeze({
+			environmentId: "env-1",
+			frozen: true,
+			durationMinutes: 60,
+			reason: "Release freeze",
+		});
+		expect(created).toMatchObject({
+			environmentId: "env-1",
+			deployFreeze: {
+				active: true,
+				scopeType: "environment",
+				scopeId: "env-1",
+				reason: "Release freeze",
+				frozenByLabel: "Alice Ops",
+			},
+		});
+		expect(mocks.audit).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.objectContaining({
+				action: "update",
+				resourceType: "environment",
+				resourceId: "env-1",
+				metadata: expect.objectContaining({
+					deployFreeze: true,
+					freezeScopeType: "environment",
+					freezeScopeId: "env-1",
+				}),
+			}),
+		);
+
+		// API key session redacts frozenByLabel on environment.one
+		const activeEnvRow = makeFreezeRow({
+			scopeType: "environment",
+			scopeId: "env-1",
+			reason: "Release freeze",
+			expiresAt: null,
+		});
+		state.freezeSingleQueue.push([activeEnvRow]);
+		state.freezeBatchQueue.push([
+			makeFreezeRow({
+				scopeType: "application",
+				scopeId: "app-1",
+				reason: "Short app hold",
+				expiresAt: "2099-01-01T00:00:00.000Z",
+			}),
+		]);
+		state.freezeBatchQueue.push([]);
+		const apiEnvOne = await apiOwnerCaller.one({ environmentId: "env-1" });
+		expect(apiEnvOne.deployFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+			frozenByLabel: null,
+		});
+		const apiEnvApp1 = (
+			apiEnvOne.applications as Array<Record<string, unknown>>
+		).find((a) => a.applicationId === "app-1");
+		expect(apiEnvApp1?.deployFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+		});
+		expect(apiEnvApp1?.serviceFreeze).toMatchObject({
+			scopeType: "application",
+			scopeId: "app-1",
+		});
+
+		// environment.byProjectId attaches OverviewDeployFreeze without createdByLabel
+		state.freezeBatchQueue.push([activeEnvRow]);
+		const envList = await ownerCaller.byProjectId({ projectId: "project-1" });
+		expect(envList[0]?.deployFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+			reason: "Release freeze",
+		});
+		expect("frozenByLabel" in (envList[0]?.deployFreeze ?? {})).toBe(false);
+	});
+
+	it("compose.one and application.one return dual-layer freeze fields and canManageEnvironmentFreeze", async () => {
+		const envRow = makeFreezeRow({
+			freezeId: "env-freeze",
+			scopeType: "environment",
+			scopeId: "env-1",
+			reason: "Env hold",
+			expiresAt: null,
+		});
+		const compRow = makeFreezeRow({
+			freezeId: "comp-freeze",
+			scopeType: "compose",
+			scopeId: "compose-1",
+			reason: "Compose hold",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+		state.batchFreezes = [compRow, envRow];
+
+		const composeBrowser = composeRouter.createCaller(
+			createSessionCtx("session", "owner"),
+		);
+		const composeApi = composeRouter.createCaller(
+			createSessionCtx("api-key", "owner"),
+		);
+		const composePartialMember = composeRouter.createCaller(
+			createSessionCtx("session", "member"),
+		);
+
+		const oneBrowser = await composeBrowser.one({ composeId: "compose-1" });
+		expect(oneBrowser.deployFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+			frozenByLabel: "Alice Ops",
+		});
+		expect(oneBrowser.serviceFreeze).toMatchObject({
+			scopeType: "compose",
+			scopeId: "compose-1",
+			frozenByLabel: "Alice Ops",
+		});
+		expect(oneBrowser.environmentFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+			frozenByLabel: "Alice Ops",
+		});
+		expect(oneBrowser.canManageEnvironmentFreeze).toBe(true);
+
+		const oneApi = await composeApi.one({ composeId: "compose-1" });
+		expect(oneApi.deployFreeze?.frozenByLabel).toBeNull();
+		expect(oneApi.serviceFreeze?.frozenByLabel).toBeNull();
+		expect(oneApi.environmentFreeze?.frozenByLabel).toBeNull();
+
+		mocks.findMemberByUserId.mockResolvedValue({
+			role: "deployer",
+			accessedEnvironments: ["env-1"],
+			accessedServices: ["compose-1"],
+		});
+		const onePartial = await composePartialMember.one({
+			composeId: "compose-1",
+		});
+		expect(onePartial.canManageEnvironmentFreeze).toBe(false);
+
+		const appRow = makeFreezeRow({
+			freezeId: "app-freeze",
+			scopeType: "application",
+			scopeId: "app-1",
+			reason: "App hold",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+		state.batchFreezes = [appRow, envRow];
+		const appCaller = applicationRouter.createCaller(
+			createSessionCtx("session", "owner"),
+		);
+		const appOne = await appCaller.one({ applicationId: "app-1" });
+		expect(appOne.deployFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+		});
+		expect(appOne.serviceFreeze).toMatchObject({
+			scopeType: "application",
+			scopeId: "app-1",
+		});
+		expect(appOne.environmentFreeze).toMatchObject({
+			scopeType: "environment",
+			scopeId: "env-1",
+		});
+		expect(appOne.canManageEnvironmentFreeze).toBe(true);
+	});
+
+	it("environment freeze blocks API rollouts, webhooks (without leaking reason), queue worker, and apps/api worker", async () => {
+		const envFreeze = makeFreezeRow({
+			freezeId: "env-freeze-1",
+			scopeType: "environment",
+			scopeId: "env-1",
+			reason: "INTERNAL_ENV_REASON",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+		state.batchFreezes = [envFreeze];
+
+		const composeCaller = composeRouter.createCaller(
+			createSessionCtx("api-key"),
+		);
+		const appCaller = applicationRouter.createCaller(
+			createSessionCtx("api-key"),
+		);
+		const deployCaller = deploymentRouter.createCaller(
+			createSessionCtx("api-key"),
+		);
+
+		await expect(
+			composeCaller.deploy({ composeId: "compose-1" }),
+		).rejects.toMatchObject({
+			code: "PRECONDITION_FAILED",
+			message: expect.stringContaining(
+				"DEPLOY_FROZEN: Deployments are frozen for this environment",
+			),
+		});
+		await expect(
+			appCaller.deploy({ applicationId: "app-1" }),
+		).rejects.toMatchObject({
+			code: "PRECONDITION_FAILED",
+			message: expect.stringContaining(
+				"DEPLOY_FROZEN: Deployments are frozen for this environment",
+			),
+		});
+		await expect(
+			deployCaller.reconcile({
+				composeId: "compose-1",
+				operationId: "op-1",
+				repair: true,
+			}),
+		).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+		// Forced deploy during environment freeze records freezeScopeType/freezeScopeId and env note
+		await composeCaller.deploy({ composeId: "compose-1", force: true });
+		expect(mocks.queueAdd).toHaveBeenCalledWith(
+			"deployments",
+			expect.objectContaining({
+				bypassFreeze: true,
+				descriptionLog: expect.stringContaining(
+					"[forced during environment deploy freeze until 2099-01-01T00:00:00.000Z]",
+				),
+			}),
+			expect.any(Object),
+		);
+		expect(mocks.audit).toHaveBeenCalledWith(
+			expect.any(Object),
+			expect.objectContaining({
+				metadata: expect.objectContaining({
+					forcedDuringDeployFreeze: true,
+					freezeScopeType: "environment",
+					freezeScopeId: "env-1",
+				}),
+			}),
+		);
+
+		// Webhooks under environment freeze return 200 skipped with env message and ZERO reason leak
+		mocks.webhookAppFindFirst.mockResolvedValue({
+			applicationId: "app-1",
+			environmentId: "env-1",
+			autoDeploy: true,
+			sourceType: "github",
+			branch: "main",
+			webhookSecret: WEBHOOK_SECRET,
+			github: { githubWebhookSecret: WEBHOOK_SECRET },
+			gitlab: null,
+			bitbucket: null,
+			gitea: null,
+		});
+		const payload = { ref: "refs/heads/main", head_commit: { message: "msg" } };
+		const envWebhookRes = createMockRes();
+		await appRefreshWebhook(makeRefreshWebhookReq(payload), envWebhookRes);
+		expect(envWebhookRes.status).toHaveBeenCalledWith(200);
+		expect(envWebhookRes.json).toHaveBeenCalledWith({
+			skipped: true,
+			code: DEPLOY_FROZEN_CODE,
+			message: "Deployments are frozen for this environment",
+			expiresAt: "2099-01-01T00:00:00.000Z",
+		});
+		expect(JSON.stringify(envWebhookRes.json.mock.calls)).not.toContain(
+			"INTERNAL_ENV_REASON",
+		);
+
+		// apps/api schema preserves bypassFreeze on application and compose jobs
+		const parsedApp = deployJobSchema.parse({
+			applicationId: "app-1",
+			type: "deploy",
+			applicationType: "application",
+			serverId: "srv-1",
+			bypassFreeze: true,
+		});
+		expect(
+			parsedApp.applicationType === "application" && parsedApp.bypassFreeze,
+		).toBe(true);
+		const parsedCompose = deployJobSchema.parse({
+			composeId: "compose-1",
+			type: "deploy",
+			applicationType: "compose",
+			serverId: "srv-1",
+			bypassFreeze: true,
+		});
+		expect(
+			parsedCompose.applicationType === "compose" && parsedCompose.bypassFreeze,
+		).toBe(true);
+
+		// apps/api worker blocks frozen app & compose jobs BEFORE status updates, finalizes exact op as failed,
+		// allows bypassFreeze=true, and never blocks application-preview
+		vi.clearAllMocks();
+		const appBlocked = await cloudApiDeploy({
+			applicationId: "app-1",
+			type: "deploy",
+			applicationType: "application",
+			serverId: "srv-1",
+			server: true,
+		});
+		expect(appBlocked).toBe(true);
+		expect(mocks.updateApplicationStatus).not.toHaveBeenCalled();
+		expect(mocks.deployApplication).not.toHaveBeenCalled();
+		expect(mocks.skippedUpdate).toHaveBeenCalledWith(
+			expect.objectContaining({ lastSkippedSource: "queue" }),
+		);
+
+		vi.clearAllMocks();
+		const compBlocked = await cloudApiDeploy({
+			composeId: "compose-1",
+			type: "deploy",
+			applicationType: "compose",
+			serverId: "srv-1",
+			server: true,
+			operationId: "op-cloud-1",
+			expectedRevision: TEST_SHA,
+		});
+		expect(compBlocked).toBe(true);
+		expect(mocks.updateCompose).not.toHaveBeenCalled();
+		expect(mocks.deployCompose).not.toHaveBeenCalled();
+		expect(mocks.claimDeploymentOperation).toHaveBeenCalledWith(
+			"compose-1",
+			"op-cloud-1",
+		);
+		expect(mocks.finalizeDeploymentOperation).toHaveBeenCalledWith(
+			"op-cloud-1",
+			"failed",
+		);
+
+		vi.clearAllMocks();
+		await cloudApiDeploy({
+			applicationId: "app-1",
+			type: "deploy",
+			applicationType: "application",
+			serverId: "srv-1",
+			server: true,
+			bypassFreeze: true,
+		});
+		expect(mocks.updateApplicationStatus).toHaveBeenCalledWith(
+			"app-1",
+			"running",
+		);
+		expect(mocks.deployApplication).toHaveBeenCalledOnce();
+
+		vi.clearAllMocks();
+		await cloudApiDeploy({
+			applicationId: "app-1",
+			previewDeploymentId: "prev-1",
+			type: "deploy",
+			applicationType: "application-preview",
+			serverId: "srv-1",
+			server: true,
+		});
+		expect(mocks.updatePreviewDeployment).toHaveBeenCalledWith("prev-1", {
+			previewStatus: "running",
+		});
+		expect(mocks.deployPreviewApplication).toHaveBeenCalledOnce();
 	});
 });

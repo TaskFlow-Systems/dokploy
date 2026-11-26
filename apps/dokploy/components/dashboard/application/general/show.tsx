@@ -58,6 +58,7 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 
 	const { mutateAsync: redeploy } = api.application.redeploy.useMutation();
 	const isFrozen = Boolean(data?.deployFreeze?.active);
+	const isEnvFrozen = Boolean(data?.environmentFreeze?.active);
 
 	return (
 		<>
@@ -70,7 +71,15 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 						serviceType="application"
 						serviceId={applicationId}
 						deployFreeze={data?.deployFreeze}
+						serviceFreeze={data?.serviceFreeze}
+						environmentFreeze={data?.environmentFreeze}
+						environmentId={data?.environmentId}
+						projectId={data?.environment?.projectId}
+						environmentName={data?.environment?.name}
 						canDeploy={canDeploy}
+						canManageEnvironmentFreeze={
+							data?.canManageEnvironmentFreeze ?? false
+						}
 						onChanged={() => refetch()}
 						onResumeAndDeploy={async () => {
 							await deploy({ applicationId });
@@ -91,8 +100,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 											<span>
 												Are you sure you want to deploy this application?{" "}
 												<span className="font-medium text-amber-600 dark:text-amber-400">
-													Deploys are currently frozen — confirming will run a
-													one-off forced deploy without unfreezing.
+													{isEnvFrozen
+														? `Deploys are currently frozen for environment ${data?.environment?.name ?? ""} — confirming will run a one-off forced deploy without unfreezing.`
+														: "Deploys are currently frozen — confirming will run a one-off forced deploy without unfreezing."}
 												</span>
 											</span>
 										) : (
@@ -192,8 +202,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 											<span>
 												Are you sure you want to rebuild this application?{" "}
 												<span className="font-medium text-amber-600 dark:text-amber-400">
-													Deploys are currently frozen — confirming will run a
-													one-off forced deploy without unfreezing.
+													{isEnvFrozen
+														? `Deploys are currently frozen for environment ${data?.environment?.name ?? ""} — confirming will run a one-off forced deploy without unfreezing.`
+														: "Deploys are currently frozen — confirming will run a one-off forced deploy without unfreezing."}
 												</span>
 											</span>
 										) : (
@@ -327,7 +338,9 @@ export const ShowGeneralApplication = ({ applicationId }: Props) => {
 							<DeployFreezeControl
 								serviceType="application"
 								serviceId={applicationId}
-								deployFreeze={data?.deployFreeze}
+								deployFreeze={data?.serviceFreeze}
+								inheritedFreeze={data?.environmentFreeze}
+								environmentName={data?.environment?.name}
 								onChanged={() => refetch()}
 								className="col-span-2 md:col-span-1 lg:w-auto"
 							/>

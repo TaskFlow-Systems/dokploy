@@ -39,6 +39,8 @@ import { AdvancedEnvironmentSelector } from "@/components/dashboard/project/adva
 import { DuplicateProject } from "@/components/dashboard/project/duplicate-project";
 import { EnvironmentVariables } from "@/components/dashboard/project/environment-variables";
 import { ProjectEnvironment } from "@/components/dashboard/projects/project-environment";
+import { DeployFreezeBanner } from "@/components/dashboard/shared/deploy-freeze-banner";
+import { DeployFreezeControl } from "@/components/dashboard/shared/deploy-freeze-control";
 import {
 	LibsqlIcon,
 	MariadbIcon,
@@ -144,6 +146,7 @@ export type Services = {
 	lastDeployDate?: Date | null;
 	icon?: string | null;
 	deployFreeze?: OverviewDeployFreeze | null;
+	serviceFreeze?: OverviewDeployFreeze | null;
 };
 
 type Environment = Awaited<ReturnType<typeof findEnvironmentById>>;
@@ -186,6 +189,9 @@ export const extractServicesFromEnvironment = (
 				deployFreeze:
 					(item as { deployFreeze?: OverviewDeployFreeze | null })
 						.deployFreeze ?? null,
+				serviceFreeze:
+					(item as { serviceFreeze?: OverviewDeployFreeze | null })
+						.serviceFreeze ?? null,
 			};
 		}) || [];
 
@@ -280,6 +286,9 @@ export const extractServicesFromEnvironment = (
 				deployFreeze:
 					(item as { deployFreeze?: OverviewDeployFreeze | null })
 						.deployFreeze ?? null,
+				serviceFreeze:
+					(item as { serviceFreeze?: OverviewDeployFreeze | null })
+						.serviceFreeze ?? null,
 			};
 		}) || [];
 
@@ -453,6 +462,8 @@ const EnvironmentPage = (
 	const [selectedServices, setSelectedServices] = useState<string[]>([]);
 	const [isDropdownOpen, setIsDropdownOpen] = useState(false);
 	const [isBulkDeleteDialogOpen, setIsBulkDeleteDialogOpen] = useState(false);
+	const [isBulkDeployDialogOpen, setIsBulkDeployDialogOpen] = useState(false);
+	const [bulkDeployForceFrozen, setBulkDeployForceFrozen] = useState(false);
 	const [deleteVolumes, setDeleteVolumes] = useState(false);
 	const [selectedServerId, setSelectedServerId] = useState<string>("all");
 	const [serviceToDelete, setServiceToDelete] = useState<Services | null>(null);
@@ -802,9 +813,16 @@ const EnvironmentPage = (
 		setIsBulkActionLoading(false);
 	};
 
-	const handleBulkDeploy = async () => {
+	const closeBulkDeployDialog = () => {
+		setIsBulkDeployDialogOpen(false);
+		setBulkDeployForceFrozen(false);
+	};
+
+	const handleBulkDeploy = async (forceFrozen = false) => {
 		let success = 0;
 		let failed = 0;
+		let skippedFrozen = 0;
+		closeBulkDeployDialog();
 		setIsBulkActionLoading(true);
 
 		for (const serviceId of selectedServices) {
@@ -812,17 +830,25 @@ const EnvironmentPage = (
 				const service = filteredServices.find((s) => s.id === serviceId);
 				if (!service) continue;
 
+				const isFrozenDeployable =
+					(service.type === "application" || service.type === "compose") &&
+					Boolean(service.deployFreeze);
+				if (isFrozenDeployable && !forceFrozen) {
+					skippedFrozen++;
+					continue;
+				}
+
 				switch (service.type) {
 					case "application":
 						await applicationActions.deploy.mutateAsync({
 							applicationId: serviceId,
-							...(service.deployFreeze ? { force: true } : {}),
+							...(forceFrozen && service.deployFreeze ? { force: true } : {}),
 						});
 						break;
 					case "compose":
 						await composeActions.deploy.mutateAsync({
 							composeId: serviceId,
-							...(service.deployFreeze ? { force: true } : {}),
+							...(forceFrozen && service.deployFreeze ? { force: true } : {}),
 						});
 						break;
 					case "postgres":
@@ -869,12 +895,18 @@ const EnvironmentPage = (
 				`${success} service${success !== 1 ? "s" : ""} queued for deployment`,
 			);
 		}
+		if (skippedFrozen > 0) {
+			toast.info(
+				`Skipped ${skippedFrozen} frozen service${skippedFrozen !== 1 ? "s" : ""}`,
+			);
+		}
 		if (failed > 0) {
 			toast.error(
 				`${failed} service${failed !== 1 ? "s" : ""} failed to deploy`,
 			);
 		}
 
+		await utils.environment.one.invalidate({ environmentId });
 		setSelectedServices([]);
 		setIsDropdownOpen(false);
 		setIsBulkActionLoading(false);
@@ -1046,6 +1078,34 @@ const EnvironmentPage = (
 		);
 	}, [filteredServices, selectedServices]);
 
+	const selectedServiceObjects = useMemo(() => {
+		return filteredServices.filter((service) =>
+			selectedServices.includes(service.id),
+		);
+	}, [filteredServices, selectedServices]);
+
+	const frozenSelectedCount = useMemo(() => {
+		return selectedServiceObjects.filter(
+			(service) =>
+				(service.type === "application" || service.type === "compose") &&
+				Boolean(service.deployFreeze),
+		).length;
+	}, [selectedServiceObjects]);
+
+	const allSelectedAreFrozen =
+		selectedServiceObjects.length > 0 &&
+		frozenSelectedCount === selectedServiceObjects.length;
+
+	const envFrozen = Boolean(currentEnvironment?.deployFreeze?.active);
+
+	const handleEnvironmentFreezeChanged = async () => {
+		await Promise.all([
+			utils.environment.one.invalidate({ environmentId }),
+			utils.environment.byProjectId.invalidate({ projectId }),
+			utils.overview.services.invalidate(),
+		]);
+	};
+
 	if (isLoading) {
 		return (
 			<div className="flex flex-row gap-2 items-center justify-center text-sm text-muted-foreground min-h-[60vh]">
@@ -1099,7 +1159,15 @@ const EnvironmentPage = (
 								</CardDescription>
 							</CardHeader>
 							<div className="flex flex-row gap-4 flex-wrap justify-between items-center">
-								<div className="flex flex-row gap-4 flex-wrap">
+								<div className="flex flex-row gap-4 flex-wrap items-center">
+									{currentEnvironment.canManageDeployFreeze && (
+										<DeployFreezeControl
+											serviceType="environment"
+											serviceId={environmentId}
+											deployFreeze={currentEnvironment.deployFreeze}
+											onChanged={handleEnvironmentFreezeChanged}
+										/>
+									)}
 									<ProjectEnvironment projectId={projectId}>
 										<Button variant="outline">Project Environment</Button>
 									</ProjectEnvironment>
@@ -1148,6 +1216,19 @@ const EnvironmentPage = (
 						</div>
 						<CardContent className="space-y-2 py-8 border-t gap-4 flex flex-col min-h-[60vh]">
 							<>
+								<DeployFreezeBanner
+									serviceType="environment"
+									serviceId={environmentId}
+									deployFreeze={currentEnvironment.deployFreeze}
+									environmentId={environmentId}
+									projectId={projectId}
+									environmentName={currentEnvironment.name}
+									canDeploy={permissions?.deployment.create ?? false}
+									canManageEnvironmentFreeze={
+										currentEnvironment.canManageDeployFreeze
+									}
+									onChanged={handleEnvironmentFreezeChanged}
+								/>
 								<div className="flex flex-col gap-4 2xl:flex-row 2xl:items-center 2xl:justify-between">
 									<div className="flex items-center gap-4">
 										<div className="flex items-center gap-2">
@@ -1198,47 +1279,21 @@ const EnvironmentPage = (
 														Start
 													</Button>
 												</DialogAction>
-												<DialogAction
-													title="Deploy Services"
-													description={(() => {
-														const frozenCount = filteredServices.filter(
-															(service) =>
-																selectedServices.includes(service.id) &&
-																(service.type === "application" ||
-																	service.type === "compose") &&
-																Boolean(service.deployFreeze),
-														).length;
-														const baseText = `Are you sure you want to deploy ${selectedServices.length} service${selectedServices.length !== 1 ? "s" : ""}? This will redeploy/restart the selected services.`;
-														if (frozenCount === 0) {
-															return baseText;
-														}
-														return (
-															<span>
-																{baseText}{" "}
-																<span className="font-medium text-amber-600 dark:text-amber-400">
-																	Note: {frozenCount} selected service
-																	{frozenCount !== 1 ? "s have" : " has"}{" "}
-																	deploys frozen; confirming will force-deploy{" "}
-																	{frozenCount !== 1 ? "them" : "it"} without
-																	unfreezing.
-																</span>
-															</span>
-														);
-													})()}
-													onClick={handleBulkDeploy}
-													type="default"
+												<Button
+													variant="ghost"
+													className="w-full justify-start"
 													disabled={
 														selectedServices.length === 0 || isBulkActionLoading
 													}
+													onClick={() => {
+														setBulkDeployForceFrozen(false);
+														setIsBulkDeployDialogOpen(true);
+														setIsDropdownOpen(false);
+													}}
 												>
-													<Button
-														variant="ghost"
-														className="w-full justify-start"
-													>
-														<Play className="mr-2 h-4 w-4" />
-														Deploy
-													</Button>
-												</DialogAction>
+													<Play className="mr-2 h-4 w-4" />
+													Deploy
+												</Button>
 												<DialogAction
 													title="Stop Services"
 													description={`Are you sure you want to stop ${selectedServices.length} services?`}
@@ -1710,7 +1765,14 @@ const EnvironmentPage = (
 																		{(service.type === "application" ||
 																			service.type === "compose") &&
 																			service.deployFreeze && (
-																				<Badge variant="yellow">Frozen</Badge>
+																				<Badge variant="yellow">
+																					{service.serviceFreeze
+																						? "Frozen"
+																						: service.deployFreeze.scopeType ===
+																								"environment"
+																							? "Env Frozen"
+																							: "Frozen"}
+																				</Badge>
 																			)}
 																		<StatusTooltip status={service.status} />
 																	</div>
@@ -1924,6 +1986,92 @@ const EnvironmentPage = (
 			</Dialog>
 
 			<AlertDialog
+				open={isBulkDeployDialogOpen}
+				onOpenChange={(open) => {
+					if (!open) {
+						closeBulkDeployDialog();
+					}
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Deploy Services</AlertDialogTitle>
+						<AlertDialogDescription asChild>
+							<div className="space-y-3 text-sm text-muted-foreground">
+								<p>
+									Are you sure you want to deploy{" "}
+									{selectedServiceObjects.length} service
+									{selectedServiceObjects.length !== 1 ? "s" : ""}? This will
+									redeploy/restart the selected services.
+								</p>
+								{envFrozen && frozenSelectedCount > 0 && (
+									<AlertBlock type="warning">
+										Environment{" "}
+										<span className="font-semibold">
+											{currentEnvironment.name}
+										</span>{" "}
+										has deploys frozen{" "}
+										{currentEnvironment.deployFreeze?.expiresAt
+											? `until ${new Date(currentEnvironment.deployFreeze.expiresAt).toLocaleString()}`
+											: "until resumed manually"}
+										{currentEnvironment.deployFreeze?.reason
+											? ` (reason: ${currentEnvironment.deployFreeze.reason})`
+											: ""}
+										.
+									</AlertBlock>
+								)}
+								{!envFrozen && frozenSelectedCount > 0 && (
+									<AlertBlock type="warning">
+										{frozenSelectedCount} selected service
+										{frozenSelectedCount !== 1 ? "s have" : " has"} deploys
+										frozen and will be skipped unless force-deploy is checked.
+									</AlertBlock>
+								)}
+								{frozenSelectedCount > 0 && (
+									<div className="flex items-start space-x-2 pt-1 text-foreground">
+										<Checkbox
+											id="bulkDeployForceFrozen"
+											checked={bulkDeployForceFrozen}
+											onCheckedChange={(checked) =>
+												setBulkDeployForceFrozen(checked === true)
+											}
+										/>
+										<label
+											htmlFor="bulkDeployForceFrozen"
+											className="text-sm font-medium leading-snug cursor-pointer"
+										>
+											{envFrozen
+												? `Force-deploy ${frozenSelectedCount} service${frozenSelectedCount !== 1 ? "s" : ""} while environment '${currentEnvironment.name}' stays frozen`
+												: `Also force-deploy ${frozenSelectedCount} frozen service${frozenSelectedCount !== 1 ? "s" : ""} without unfreezing`}
+										</label>
+									</div>
+								)}
+							</div>
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel onClick={closeBulkDeployDialog}>
+							Cancel
+						</AlertDialogCancel>
+						<AlertDialogAction
+							variant="default"
+							disabled={
+								selectedServiceObjects.length === 0 ||
+								isBulkActionLoading ||
+								(allSelectedAreFrozen && !bulkDeployForceFrozen)
+							}
+							onClick={() => void handleBulkDeploy(bulkDeployForceFrozen)}
+						>
+							{allSelectedAreFrozen ||
+							(bulkDeployForceFrozen && frozenSelectedCount > 0)
+								? "Force Deploy"
+								: "Confirm"}
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
+
+			<AlertDialog
 				open={!!serviceToForceDeploy}
 				onOpenChange={(open) => !open && setServiceToForceDeploy(null)}
 			>
@@ -1931,15 +2079,34 @@ const EnvironmentPage = (
 					<AlertDialogHeader>
 						<AlertDialogTitle>Deploy Frozen Service</AlertDialogTitle>
 						<AlertDialogDescription>
-							Deploys are currently frozen for{" "}
-							<span className="font-semibold">
-								{serviceToForceDeploy?.name}
-							</span>
+							{serviceToForceDeploy?.deployFreeze?.scopeType === "environment"
+								? "Deploys are currently frozen at the environment level "
+								: "Deploys are currently frozen for "}
+							{serviceToForceDeploy?.deployFreeze?.scopeType ===
+							"environment" ? (
+								<>
+									(
+									<span className="font-semibold">
+										{currentEnvironment.name}
+									</span>
+									) for{" "}
+									<span className="font-semibold">
+										{serviceToForceDeploy?.name}
+									</span>
+								</>
+							) : (
+								<span className="font-semibold">
+									{serviceToForceDeploy?.name}
+								</span>
+							)}
 							{serviceToForceDeploy?.deployFreeze?.reason
 								? ` (${serviceToForceDeploy.deployFreeze.reason})`
 								: ""}
 							. Confirming will trigger a one-off forced deploy without
-							unfreezing automated deploys.
+							unfreezing{" "}
+							{serviceToForceDeploy?.deployFreeze?.scopeType === "environment"
+								? "the environment."
+								: "automated deploys."}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
@@ -2043,9 +2210,12 @@ export async function getServerSideProps(
 				};
 			}
 
-			await helpers.environment.byProjectId.fetch({
-				projectId: params.projectId,
-			});
+			await Promise.all([
+				helpers.environment.byProjectId.fetch({
+					projectId: params.projectId,
+				}),
+				helpers.user.getPermissions.prefetch(),
+			]);
 
 			return {
 				props: {

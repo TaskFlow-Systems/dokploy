@@ -13,8 +13,8 @@ import {
 	updatePreviewDeployment,
 } from "@dokploy/server";
 import {
-	getActiveDeploymentFreeze,
-	recordSkippedDeploymentFreeze,
+	getEffectiveDeploymentFreeze,
+	recordSkippedEffectiveDeploymentFreeze,
 } from "@dokploy/server/services/deployment-freeze";
 import type { InMemoryJob } from "./in-memory-queue";
 
@@ -26,16 +26,18 @@ export const processDeploymentJob = async (job: InMemoryJob) => {
 	try {
 		if (job.data.applicationType === "application") {
 			if (!job.data.bypassFreeze) {
-				const activeFreeze = await getActiveDeploymentFreeze(
-					"application",
-					job.data.applicationId,
-				);
+				const { effective: activeFreeze, environmentId } =
+					await getEffectiveDeploymentFreeze({
+						scopeType: "application",
+						scopeId: job.data.applicationId,
+					});
 				if (activeFreeze) {
-					await recordSkippedDeploymentFreeze(
-						"application",
-						job.data.applicationId,
-						"queue",
-					);
+					await recordSkippedEffectiveDeploymentFreeze({
+						scopeType: "application",
+						scopeId: job.data.applicationId,
+						environmentId,
+						source: "queue",
+					});
 					return;
 				}
 			}
@@ -56,16 +58,18 @@ export const processDeploymentJob = async (job: InMemoryJob) => {
 			}
 		} else if (job.data.applicationType === "compose") {
 			if (!job.data.bypassFreeze) {
-				const activeFreeze = await getActiveDeploymentFreeze(
-					"compose",
-					job.data.composeId,
-				);
+				const { effective: activeFreeze, environmentId } =
+					await getEffectiveDeploymentFreeze({
+						scopeType: "compose",
+						scopeId: job.data.composeId,
+					});
 				if (activeFreeze) {
-					await recordSkippedDeploymentFreeze(
-						"compose",
-						job.data.composeId,
-						"queue",
-					);
+					await recordSkippedEffectiveDeploymentFreeze({
+						scopeType: "compose",
+						scopeId: job.data.composeId,
+						environmentId,
+						source: "queue",
+					});
 					if (job.data.operationId) {
 						const claimed = await claimDeploymentOperation(
 							job.data.composeId,

@@ -46,8 +46,8 @@ import {
 import { findBackupById } from "./backup";
 import { type Compose, findComposeById, updateCompose } from "./compose";
 import {
-	getActiveDeploymentFreeze,
-	recordSkippedDeploymentFreeze,
+	getEffectiveDeploymentFreeze,
+	recordSkippedEffectiveDeploymentFreeze,
 } from "./deployment-freeze";
 import {
 	findPreviewDeploymentById,
@@ -143,10 +143,11 @@ export const createComposeDeploymentOperation = async (input: {
 		});
 	}
 
-	const activeFreeze = await getActiveDeploymentFreeze(
-		"compose",
-		input.composeId,
-	);
+	const { effective: activeFreeze } = await getEffectiveDeploymentFreeze({
+		scopeType: "compose",
+		scopeId: input.composeId,
+		environmentId: composeEntity.environmentId,
+	});
 	if (activeFreeze && !input.force) {
 		const existingOperation = await db.query.deploymentOperations.findFirst({
 			where: and(
@@ -170,7 +171,12 @@ export const createComposeDeploymentOperation = async (input: {
 			};
 		}
 
-		await recordSkippedDeploymentFreeze("compose", input.composeId, "api");
+		await recordSkippedEffectiveDeploymentFreeze({
+			scopeType: "compose",
+			scopeId: input.composeId,
+			environmentId: composeEntity.environmentId,
+			source: "api",
+		});
 		const freezeState = toDeployFreezeState(activeFreeze, {
 			includeActorLabel: false,
 		});
@@ -178,7 +184,9 @@ export const createComposeDeploymentOperation = async (input: {
 			code: "PRECONDITION_FAILED",
 			message: freezeState
 				? formatDeployFrozenMessage(freezeState)
-				: "DEPLOY_FROZEN: Deployments are frozen for this service",
+				: activeFreeze.scopeType === "environment"
+					? "DEPLOY_FROZEN: Deployments are frozen for this environment"
+					: "DEPLOY_FROZEN: Deployments are frozen for this service",
 		});
 	}
 

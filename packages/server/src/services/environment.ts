@@ -7,6 +7,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { asc, eq } from "drizzle-orm";
 import type { z } from "zod";
+import { deleteDeploymentFreezesForScopes } from "./deployment-freeze";
 
 export type Environment = typeof environments.$inferSelect;
 type EnvironmentUpdateData = Partial<
@@ -297,13 +298,16 @@ export const deleteEnvironment = async (environmentId: string) => {
 				"Cannot delete environment: it has active services. Delete all services first.",
 		});
 	}
-	const deletedEnvironment = await db
-		.delete(environments)
-		.where(eq(environments.environmentId, environmentId))
-		.returning()
-		.then((value) => value[0]);
+	return db.transaction(async (tx) => {
+		await deleteDeploymentFreezesForScopes("environment", [environmentId], tx);
+		const deletedEnvironment = await tx
+			.delete(environments)
+			.where(eq(environments.environmentId, environmentId))
+			.returning()
+			.then((value) => value[0]);
 
-	return deletedEnvironment;
+		return deletedEnvironment;
+	});
 };
 
 export const updateEnvironmentById = async (

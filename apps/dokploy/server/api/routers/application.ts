@@ -41,7 +41,7 @@ import {
 	assertDeploymentNotFrozen,
 	deleteDeploymentFreezesForScope,
 	formatUserActorLabel,
-	getActiveDeploymentFreeze,
+	getEffectiveDeploymentFreeze,
 	setDeploymentFreeze,
 } from "@dokploy/server/services/deployment-freeze";
 import {
@@ -81,7 +81,11 @@ import {
 	isApiKeySession,
 } from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
-import { resolveForcedDeployAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
+import { canUserManageEnvironmentDeployFreeze } from "@/server/api/utils/deploy-freeze-access";
+import {
+	resolveDeployFreezeChangeAuditMetadata,
+	resolveForcedDeployAuditMetadata,
+} from "@/server/api/utils/deploy-freeze-audit";
 import { assertDeploySourceCredentialAccess } from "@/server/api/utils/deploy-source-access";
 import { assertMonitoringAccess } from "@/server/api/utils/monitoring-access";
 import { assertTargetEnvironmentAccess } from "@/server/api/utils/placement-access";
@@ -471,10 +475,22 @@ export const applicationRouter = createTRPCRouter({
 				}
 			}
 
-			const activeFreeze = await getActiveDeploymentFreeze(
-				"application",
-				input.applicationId,
-			);
+			const environmentId =
+				application.environmentId ?? application.environment?.environmentId;
+			const [
+				{ effective: effectiveFreeze, serviceFreeze, environmentFreeze },
+				canManageEnvironmentFreeze,
+			] = await Promise.all([
+				getEffectiveDeploymentFreeze({
+					scopeType: "application",
+					scopeId: input.applicationId,
+					environmentId,
+				}),
+				canUserManageEnvironmentDeployFreeze(ctx, {
+					environmentId: environmentId ?? "",
+				}),
+			]);
+			const includeActorLabel = !isApiKeySession(ctx.session);
 
 			return {
 				...redactDeployableServiceSecretsFor(
@@ -483,9 +499,16 @@ export const applicationRouter = createTRPCRouter({
 				),
 				hasGitProviderAccess,
 				unauthorizedProvider,
-				deployFreeze: toDeployFreezeState(activeFreeze, {
-					includeActorLabel: !isApiKeySession(ctx.session),
+				deployFreeze: toDeployFreezeState(effectiveFreeze, {
+					includeActorLabel,
 				}),
+				serviceFreeze: toDeployFreezeState(serviceFreeze, {
+					includeActorLabel,
+				}),
+				environmentFreeze: toDeployFreezeState(environmentFreeze, {
+					includeActorLabel,
+				}),
+				canManageEnvironmentFreeze,
 			};
 		}),
 
@@ -518,12 +541,13 @@ export const applicationRouter = createTRPCRouter({
 				resourceType: "application",
 				resourceId: application.applicationId,
 				resourceName: application.appName,
-				metadata: {
-					deployFreeze: input.frozen,
-					durationMinutes: input.durationMinutes ?? null,
-					authMethod,
-					apiKeyId: ctx.session.apiKeyId ?? null,
-				},
+				metadata: resolveDeployFreezeChangeAuditMetadata({
+					scopeType: "application",
+					scopeId: application.applicationId,
+					frozen: input.frozen,
+					durationMinutes: input.durationMinutes,
+					ctx,
+				}),
 			});
 			return {
 				serviceId: input.applicationId,
@@ -702,6 +726,7 @@ export const applicationRouter = createTRPCRouter({
 			const bypassedFreeze = await assertDeploymentNotFrozen({
 				scopeType: "application",
 				scopeId: input.applicationId,
+				environmentId: application.environmentId,
 				force: input.force,
 				source: "api",
 			});
@@ -1337,6 +1362,7 @@ export const applicationRouter = createTRPCRouter({
 			const bypassedFreeze = await assertDeploymentNotFrozen({
 				scopeType: "application",
 				scopeId: input.applicationId,
+				environmentId: application.environmentId,
 				force: input.force,
 				source: "api",
 			});
@@ -1482,6 +1508,7 @@ export const applicationRouter = createTRPCRouter({
 			const bypassedFreeze = await assertDeploymentNotFrozen({
 				scopeType: "application",
 				scopeId: applicationId,
+				environmentId: app.environmentId,
 				force: input.force,
 				source: "api",
 			});

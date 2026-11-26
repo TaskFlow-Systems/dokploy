@@ -2,6 +2,7 @@ import { db } from "@dokploy/server/db";
 import {
 	type apiCreateProject,
 	applications,
+	environments,
 	libsql,
 	mariadb,
 	mongo,
@@ -13,6 +14,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import type { z } from "zod";
+import { deleteDeploymentFreezesForScopes } from "./deployment-freeze";
 import { createProductionEnvironment } from "./environment";
 
 export type Project = typeof projects.$inferSelect;
@@ -122,13 +124,23 @@ export const findProjectById = async (projectId: string) => {
 };
 
 export const deleteProject = async (projectId: string) => {
-	const project = await db
-		.delete(projects)
-		.where(eq(projects.projectId, projectId))
-		.returning()
-		.then((value) => value[0]);
+	return db.transaction(async (tx) => {
+		const projectEnvironments = await tx
+			.select({ environmentId: environments.environmentId })
+			.from(environments)
+			.where(eq(environments.projectId, projectId));
+		const envIds = projectEnvironments.map((env) => env.environmentId);
+		await deleteDeploymentFreezesForScopes("environment", envIds, tx);
+		await deleteDeploymentFreezesForScopes("project", [projectId], tx);
 
-	return project;
+		const project = await tx
+			.delete(projects)
+			.where(eq(projects.projectId, projectId))
+			.returning()
+			.then((value) => value[0]);
+
+		return project;
+	});
 };
 
 export const updateProjectById = async (

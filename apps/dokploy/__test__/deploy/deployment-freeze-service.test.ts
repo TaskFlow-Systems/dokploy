@@ -4,6 +4,9 @@ const dbState = vi.hoisted(() => {
 	const selectRowsQueue: Array<Array<Record<string, unknown>>> = [];
 	const insertReturningQueue: Array<Array<Record<string, unknown>>> = [];
 	const updateReturningQueue: Array<Array<Record<string, unknown>>> = [];
+	const deleteReturningQueue: Array<Array<Record<string, unknown>>> = [];
+	const deleteCalls: Array<unknown> = [];
+	const envFindFirst = vi.fn();
 
 	const selectLimit = vi.fn(async () => selectRowsQueue.shift() ?? []);
 	const selectWhere = vi.fn(() => {
@@ -38,13 +41,24 @@ const dbState = vi.hoisted(() => {
 	const insertValues = vi.fn(() => ({ returning: insertReturning }));
 	const insert = vi.fn(() => ({ values: insertValues }));
 
-	const deleteWhere = vi.fn(async () => undefined);
-	const del = vi.fn(() => ({ where: deleteWhere }));
+	const deleteReturning = vi.fn(async () => deleteReturningQueue.shift() ?? []);
+	const deleteWhere = vi.fn(() => {
+		const promise = Promise.resolve(undefined) as Promise<undefined> & {
+			returning: typeof deleteReturning;
+		};
+		promise.returning = deleteReturning;
+		return promise;
+	});
+	const del = vi.fn((table?: unknown) => {
+		deleteCalls.push(table);
+		return { where: deleteWhere };
+	});
 
 	const tx = {
+		delete: del,
+		insert,
 		select,
 		update,
-		insert,
 	};
 	const transaction = vi.fn(
 		async (cb: (client: typeof tx) => Promise<unknown>) => cb(tx),
@@ -52,7 +66,11 @@ const dbState = vi.hoisted(() => {
 
 	return {
 		del,
+		deleteCalls,
+		deleteReturning,
+		deleteReturningQueue,
 		deleteWhere,
+		envFindFirst,
 		insert,
 		insertReturning,
 		insertReturningQueue,
@@ -63,6 +81,7 @@ const dbState = vi.hoisted(() => {
 		selectRowsQueue,
 		selectWhere,
 		transaction,
+		tx,
 		update,
 		updateReturning,
 		updateReturningQueue,
@@ -75,21 +94,35 @@ vi.mock("@dokploy/server/db", () => ({
 	db: {
 		delete: dbState.del,
 		insert: dbState.insert,
+		query: {
+			environments: {
+				findFirst: dbState.envFindFirst,
+			},
+		},
 		select: dbState.select,
 		transaction: dbState.transaction,
 		update: dbState.update,
 	},
 }));
 
+const { applications, compose, deploymentFreeze, environments, projects } =
+	await import("@dokploy/server/db/schema");
 const {
 	assertDeploymentNotFrozen,
 	deleteDeploymentFreezesForScope,
+	deleteDeploymentFreezesForScopes,
 	formatUserActorLabel,
 	getActiveDeploymentFreeze,
 	getActiveDeploymentFreezesByIds,
+	getEffectiveDeploymentFreeze,
 	recordSkippedDeploymentFreeze,
+	recordSkippedEffectiveDeploymentFreeze,
 	setDeploymentFreeze,
 } = await import("@dokploy/server/services/deployment-freeze");
+const { deleteEnvironment } = await import(
+	"@dokploy/server/services/environment"
+);
+const { deleteProject } = await import("@dokploy/server/services/project");
 
 const makeRow = (overrides: Record<string, unknown> = {}) => ({
 	freezeId: "freeze-1",
@@ -115,6 +148,8 @@ describe("deployment-freeze service", () => {
 		dbState.selectRowsQueue.length = 0;
 		dbState.insertReturningQueue.length = 0;
 		dbState.updateReturningQueue.length = 0;
+		dbState.deleteReturningQueue.length = 0;
+		dbState.deleteCalls.length = 0;
 	});
 
 	afterEach(() => {
@@ -138,8 +173,11 @@ describe("deployment-freeze service", () => {
 		expect(boundary).toBeNull();
 	});
 
-	it("batch-loads active freezes and skips DB query for empty scopeIds", async () => {
+	it("batch-loads active freezes (including environment scope) and skips DB query for empty scopeIds", async () => {
 		expect(await getActiveDeploymentFreezesByIds("application", [])).toEqual(
+			new Map(),
+		);
+		expect(await getActiveDeploymentFreezesByIds("environment", [])).toEqual(
 			new Map(),
 		);
 		expect(dbState.select).not.toHaveBeenCalled();
@@ -162,6 +200,89 @@ describe("deployment-freeze service", () => {
 			"app-1",
 		]);
 		expect(Array.from(map.keys())).toEqual(["app-1"]);
+	});
+
+	it("getEffectiveDeploymentFreeze resolves live environmentId when omitted and picks strictest lock", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2026-06-01T12:00:00.000Z"));
+
+		// Omitted environmentId -> 1 PK lookup on compose + 1 candidate freeze query
+		dbState.selectRowsQueue.push([{ environmentId: "env-live" }]);
+		dbState.selectRowsQueue.push([
+			makeRow({
+				freezeId: "svc-timed",
+				scopeType: "compose",
+				scopeId: "compose-1",
+				expiresAt: "2026-06-01T13:00:00.000Z",
+			}),
+			makeRow({
+				freezeId: "env-indef",
+				scopeType: "environment",
+				scopeId: "env-live",
+				expiresAt: null,
+			}),
+		]);
+
+		const res = await getEffectiveDeploymentFreeze({
+			scopeType: "compose",
+			scopeId: "compose-1",
+		});
+		expect(res.environmentId).toBe("env-live");
+		expect(res.serviceFreeze?.freezeId).toBe("svc-timed");
+		expect(res.environmentFreeze?.freezeId).toBe("env-indef");
+		expect(res.effective?.freezeId).toBe("env-indef");
+		expect(dbState.selectFrom).toHaveBeenNthCalledWith(1, compose);
+		expect(dbState.selectFrom).toHaveBeenNthCalledWith(2, deploymentFreeze);
+
+		// Provided environmentId -> skips PK lookup (1 query total); indefinite service beats timed env
+		vi.clearAllMocks();
+		dbState.selectRowsQueue.push([
+			makeRow({
+				freezeId: "app-indef",
+				scopeType: "application",
+				scopeId: "app-1",
+				expiresAt: null,
+			}),
+			makeRow({
+				freezeId: "env-timed",
+				scopeType: "environment",
+				scopeId: "env-1",
+				expiresAt: "2026-06-01T14:00:00.000Z",
+			}),
+		]);
+		const appRes = await getEffectiveDeploymentFreeze({
+			scopeType: "application",
+			scopeId: "app-1",
+			environmentId: "env-1",
+		});
+		expect(dbState.select).toHaveBeenCalledTimes(1);
+		expect(appRes.effective?.freezeId).toBe("app-indef");
+		expect(appRes.serviceFreeze?.freezeId).toBe("app-indef");
+		expect(appRes.environmentFreeze?.freezeId).toBe("env-timed");
+
+		// Omitted environmentId for application queries applications table
+		vi.clearAllMocks();
+		dbState.selectRowsQueue.push([{ environmentId: "env-app" }]);
+		dbState.selectRowsQueue.push([
+			makeRow({
+				freezeId: "env-tie",
+				scopeType: "environment",
+				scopeId: "env-app",
+				expiresAt: "2026-06-01T15:00:00.000Z",
+			}),
+			makeRow({
+				freezeId: "app-tie",
+				scopeType: "application",
+				scopeId: "app-1",
+				expiresAt: "2026-06-01T15:00:00.000Z",
+			}),
+		]);
+		const tieRes = await getEffectiveDeploymentFreeze({
+			scopeType: "application",
+			scopeId: "app-1",
+		});
+		expect(dbState.selectFrom).toHaveBeenNthCalledWith(1, applications);
+		expect(tieRes.effective?.freezeId).toBe("env-tie");
 	});
 
 	it("formats user actor labels with full name -> email -> fallback", async () => {
@@ -210,6 +331,24 @@ describe("deployment-freeze service", () => {
 				skippedCount: 0,
 			}),
 		);
+
+		// Create environment-scoped freeze
+		dbState.selectRowsQueue.push([]);
+		const createdEnvRow = makeRow({
+			freezeId: "env-freeze-1",
+			scopeType: "environment",
+			scopeId: "env-1",
+			skippedCount: 0,
+		});
+		dbState.insertReturningQueue.push([createdEnvRow]);
+		const createdEnv = await setDeploymentFreeze({
+			scopeType: "environment",
+			scopeId: "env-1",
+			frozen: true,
+			reason: "Release freeze",
+			actor: { userId: "user-1", label: "Alice Ops", authMethod: "session" },
+		});
+		expect(createdEnv?.scopeType).toBe("environment");
 
 		// Update active freeze preserves createdAt/skippedCount
 		dbState.selectRowsQueue.push([
@@ -287,7 +426,7 @@ describe("deployment-freeze service", () => {
 		});
 	});
 
-	it("assertDeploymentNotFrozen throws PRECONDITION_FAILED + increments skip count unless forced", async () => {
+	it("assertDeploymentNotFrozen throws PRECONDITION_FAILED + increments skip count across active scopes unless forced", async () => {
 		dbState.selectRowsQueue.push([
 			makeRow({ reason: "DB migration", createdByLabel: "Secret Actor" }),
 		]);
@@ -295,6 +434,7 @@ describe("deployment-freeze service", () => {
 			assertDeploymentNotFrozen({
 				scopeType: "compose",
 				scopeId: "compose-1",
+				environmentId: "env-1",
 				source: "api",
 			}),
 		).rejects.toMatchObject({
@@ -304,30 +444,114 @@ describe("deployment-freeze service", () => {
 		});
 		expect(dbState.update).toHaveBeenCalledTimes(1);
 
-		dbState.selectRowsQueue.push([makeRow({ createdByLabel: "Alice Ops" })]);
+		// Environment-level freeze produces environment message
+		dbState.selectRowsQueue.push([
+			makeRow({
+				scopeType: "environment",
+				scopeId: "env-1",
+				reason: "Prod freeze",
+			}),
+		]);
+		await expect(
+			assertDeploymentNotFrozen({
+				scopeType: "compose",
+				scopeId: "compose-1",
+				environmentId: "env-1",
+				source: "api",
+			}),
+		).rejects.toMatchObject({
+			code: "PRECONDITION_FAILED",
+			message:
+				"DEPLOY_FROZEN: Deployments are frozen for this environment (reason: Prod freeze)",
+		});
+		expect(dbState.update).toHaveBeenCalledTimes(2);
+
+		dbState.selectRowsQueue.push([
+			makeRow({
+				scopeType: "environment",
+				scopeId: "env-1",
+				createdByLabel: "Alice Ops",
+			}),
+		]);
 		const bypassed = await assertDeploymentNotFrozen({
 			scopeType: "compose",
 			scopeId: "compose-1",
+			environmentId: "env-1",
 			force: true,
 			source: "api",
 		});
 		expect(bypassed).toMatchObject({
 			active: true,
+			scopeType: "environment",
+			scopeId: "env-1",
 			frozenByLabel: null,
 		});
-		expect(dbState.update).toHaveBeenCalledTimes(1);
+		expect(dbState.update).toHaveBeenCalledTimes(2);
 	});
 
-	it("swallows DB failures inside recordSkippedDeploymentFreeze and deletes freezes on scope removal", async () => {
+	it("swallows DB failures inside skip recorders and handles empty/bulk scope deletion", async () => {
 		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 		dbState.updateWhere.mockRejectedValueOnce(new Error("transient db error"));
 		await expect(
 			recordSkippedDeploymentFreeze("application", "app-1", "webhook"),
 		).resolves.toBeUndefined();
-		expect(warnSpy).toHaveBeenCalled();
+		dbState.updateWhere.mockRejectedValueOnce(new Error("transient db error"));
+		await expect(
+			recordSkippedEffectiveDeploymentFreeze({
+				scopeType: "application",
+				scopeId: "app-1",
+				environmentId: "env-1",
+				source: "queue",
+			}),
+		).resolves.toBeUndefined();
+		expect(warnSpy).toHaveBeenCalledTimes(2);
 		warnSpy.mockRestore();
+
+		await deleteDeploymentFreezesForScopes("environment", []);
+		expect(dbState.del).not.toHaveBeenCalled();
 
 		await deleteDeploymentFreezesForScope("compose", "compose-1");
 		expect(dbState.del).toHaveBeenCalledTimes(1);
+	});
+
+	it("transactionally deletes environment and project freezes before cascading in deleteEnvironment and deleteProject", async () => {
+		dbState.envFindFirst.mockResolvedValueOnce({
+			environmentId: "env-2",
+			name: "staging",
+			isDefault: false,
+			projectId: "proj-1",
+			applications: [],
+			compose: [],
+			libsql: [],
+			mariadb: [],
+			mongo: [],
+			mysql: [],
+			postgres: [],
+			redis: [],
+			project: { projectId: "proj-1" },
+		});
+		dbState.deleteReturningQueue.push([{ environmentId: "env-2" }]);
+
+		const deletedEnv = await deleteEnvironment("env-2");
+		expect(deletedEnv).toEqual({ environmentId: "env-2" });
+		expect(dbState.transaction).toHaveBeenCalledTimes(1);
+		expect(dbState.deleteCalls).toEqual([deploymentFreeze, environments]);
+
+		vi.clearAllMocks();
+		dbState.deleteCalls.length = 0;
+		dbState.selectRowsQueue.push([
+			{ environmentId: "env-1" },
+			{ environmentId: "env-2" },
+		]);
+		dbState.deleteReturningQueue.push([{ projectId: "proj-1" }]);
+
+		const deletedProj = await deleteProject("proj-1");
+		expect(deletedProj).toEqual({ projectId: "proj-1" });
+		expect(dbState.transaction).toHaveBeenCalledTimes(1);
+		expect(dbState.deleteCalls).toEqual([
+			deploymentFreeze,
+			deploymentFreeze,
+			projects,
+		]);
 	});
 });

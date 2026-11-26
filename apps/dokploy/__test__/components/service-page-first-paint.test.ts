@@ -42,6 +42,14 @@ describe("what a service page knows at first paint", () => {
 		},
 	);
 
+	it("environment page prefetches permissions so freeze and create controls never shift after first paint", () => {
+		expect(
+			read(
+				"pages/dashboard/project/[projectId]/environment/[environmentId].tsx",
+			),
+		).toContain("helpers.user.getPermissions.prefetch()");
+	});
+
 	it("shows the application's Build Type only once the provider card's height is known", () => {
 		expect(read("components/dashboard/application/general/show.tsx")).toMatch(
 			/!isLoadingProviders && \(\s*<ShowBuildChooseForm/,
