@@ -14,7 +14,7 @@
 		"@hono/node-server": "^2.1.11",
 		"@hono/zod-validator": "^0.9.1",
 		"dotenv": "^18.0.10",
-		"hono": "^4.13.21",
+		"hono": "^4.13.23",
 		"inngest": "4.26.1",
 		"pino": "^10.4.0",
 		"pino-pretty": "^13.2.0",
@@ -23,8 +23,8 @@
 		"zod": "^4.6.7"
 	},
 	"devDependencies": {
-		"@types/node": "^26.6.7",
-		"@types/react": "^19.3.1",
+		"@types/node": "^26.6.11",
+		"@types/react": "^19.3.3",
 		"@types/react-dom": "^19.3.0",
 		"rimraf": "^6.1.4",
 		"tsx": "^4.23.15",
