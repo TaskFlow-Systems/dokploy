@@ -22,7 +22,7 @@
         "@hono/node-server": "^2.1.11",
         "@hono/zod-validator": "^0.9.1",
         "dotenv": "^18.0.10",
-        "hono": "^4.13.21",
+        "hono": "^4.13.19",
         "inngest": "4.26.1",
         "pino": "^10.4.0",
         "pino-pretty": "^13.2.0",
@@ -195,7 +195,7 @@
         "bullmq": "^5.81.6",
         "dotenv": "^18.0.10",
         "drizzle-orm": "^0.45.4",
-        "hono": "^4.13.21",
+        "hono": "^4.13.19",
         "pino": "^10.4.0",
         "pino-pretty": "^13.2.0",
         "react": "^19.3.1",
@@ -2213,7 +2213,7 @@
 
     "highlightjs-vue": ["highlightjs-vue@1.0.0", "", {}, "sha512-PDEfEF102G23vHmPhLyPboFCD+BkMGu+GuJe2d9/eH4FsCwvgBpnc9n0pGE+ffKdph38s6foEZiEjdgHdzp+IA=="],
 
-    "hono": ["hono@4.13.21", "", {}, "sha512-h9UsguqfVk4kjUwLvQpHOmOaJpW10jz9lp8bvKUUa04wJG/fabKFBqXZ06D6LFaeKQZtUZRVeg0gfkTTEsX7Mw=="],
+    "hono": ["hono@4.13.19", "", {}, "sha512-KmXvQAXwcAHV+muzbIwoJ23niEB5nMoDVr9WcRkU8mvjUECm/1+7v4Jgp7P7a+H6MLFrh+vXrGonGrGS+RQfkA=="],
 
     "html-to-text": ["html-to-text@9.0.5", "", { "dependencies": { "@selderee/plugin-htmlparser2": "^0.11.0", "deepmerge": "^4.3.1", "dom-serializer": "^2.0.0", "htmlparser2": "^8.0.2", "selderee": "^0.11.0" } }, "sha512-qY60FjREgVZL03vJU6IfMV4GDjGBIoOyvuFdpBDIX9yTlDw0TjxVBQp+P8NvpdIXNJvfWBTNul7fsAQJq2FNpg=="],
 
