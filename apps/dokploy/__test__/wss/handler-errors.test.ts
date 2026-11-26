@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
 type FakeConnection = EventEmitter & {
+	destroy: ReturnType<typeof vi.fn>;
 	end: ReturnType<typeof vi.fn>;
 	exec: ReturnType<typeof vi.fn>;
 	shell: ReturnType<typeof vi.fn>;
@@ -105,6 +106,7 @@ vi.mock("../../server/wss/server-permission", () => ({
 vi.mock("ssh2", async () => {
 	const { EventEmitter } = await import("node:events");
 	class Client extends EventEmitter {
+		destroy = vi.fn();
 		end = vi.fn();
 		exec = vi.fn();
 		shell = vi.fn();

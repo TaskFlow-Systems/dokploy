@@ -12,7 +12,7 @@ export const HANGUP_SCAN_DELAYS_MS = [500, 2_000, 5_000] as const;
  * after the last scan or after the cancel, whichever comes first.
  */
 export const runHangupScans = (
-	scan: () => Promise<boolean | undefined | void>,
+	scan: () => Promise<unknown>,
 	delays: readonly number[] = HANGUP_SCAN_DELAYS_MS,
 ) => {
 	let cancelled = false;

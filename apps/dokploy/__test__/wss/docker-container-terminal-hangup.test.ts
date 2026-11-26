@@ -1,5 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { SSH_KEEPALIVE } from "@dokploy/server/utils/process/ssh-keepalive";
 import { quoteShellArgs } from "@dokploy/server/utils/shell";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -13,6 +14,8 @@ type FakeStream = import("node:events").EventEmitter & {
 };
 type FakeConnection = import("node:events").EventEmitter & {
 	commands: string[];
+	connectConfig?: Record<string, unknown>;
+	destroy: ReturnType<typeof vi.fn>;
 	streams: FakeStream[];
 	end: ReturnType<typeof vi.fn>;
 	failNextExec: boolean;
@@ -87,6 +90,8 @@ vi.mock("ssh2", async () => {
 		});
 	class Client extends EventEmitter {
 		commands: string[] = [];
+		connectConfig?: Record<string, unknown>;
+		destroy = vi.fn();
 		streams: FakeStream[] = [];
 		end = vi.fn();
 		failNextExec = false;
@@ -95,7 +100,8 @@ vi.mock("ssh2", async () => {
 			super();
 			mocks.connections.push(this as unknown as FakeConnection);
 		}
-		connect() {
+		connect(config?: Record<string, unknown>) {
+			this.connectConfig = config;
 			if (!mocks.holdReady.value) {
 				setImmediate(() => this.emit("ready"));
 			}
@@ -146,15 +152,46 @@ const listen = async (server: http.Server) =>
 		});
 	});
 
-const openTerminal = async (port: number, query: string) => {
+const openTerminal = async (
+	port: number,
+	query: string,
+	options?: ConstructorParameters<typeof WebSocket>[2],
+) => {
 	const ws = new WebSocket(
 		`ws://127.0.0.1:${port}/docker-container-terminal?${query}`,
+		options,
 	);
 	await new Promise((resolve, reject) => {
 		ws.once("open", resolve);
 		ws.once("error", reject);
 	});
 	return ws;
+};
+
+// vi.waitFor would advance fake setTimeout on every retry.
+const until = async (condition: () => boolean) => {
+	const deadline = Date.now() + 2_000;
+	while (!condition() && Date.now() < deadline) {
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+	expect(condition()).toBe(true);
+};
+
+// Closes the hangup channels (index `from` on) while fake timers control delays.
+const answerScansWithFakeTimers = async (
+	connection: FakeConnection,
+	from: number,
+) => {
+	for (const [scan, delay] of [0, 20, 40, 60].entries()) {
+		if (delay > 0) {
+			await vi.advanceTimersByTimeAsync(delay);
+		}
+		const next = from + scan;
+		await until(() => connection.streams.length > next);
+		const stream = connection.streams[next] as FakeStream;
+		await until(() => stream.resume.mock.calls.length > 0);
+		stream.emit("close", 0);
+	}
 };
 
 const deferred = <T>() => {
@@ -240,6 +277,7 @@ describe("container terminal hangs up its shell when it closes", () => {
 	});
 
 	afterEach(async () => {
+		vi.useRealTimers();
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	});
 
@@ -500,5 +538,270 @@ describe("container terminal hangs up its shell when it closes", () => {
 		await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
 		expect(connection.commands).toHaveLength(2);
 		expect(connection.streams[0]?.end).toHaveBeenCalled();
+	});
+
+	describe("SSH lifecycle hardening and silent-client detection", () => {
+		const REMOTE = "containerId=abc123def456&serverId=server-1&activeWay=bash";
+
+		it("passes SSH_KEEPALIVE when opening a remote container terminal", async () => {
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			const connection = mocks.connections[0] as FakeConnection;
+
+			expect(connection.connectConfig).toMatchObject(SSH_KEEPALIVE);
+
+			await closeClient(ws);
+			await answerScans(connection, 1);
+			await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+		});
+
+		it("ends immediately and destroys after 3 s when ws closes before SSH ready", async () => {
+			mocks.holdReady.value = true;
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() => expect(mocks.connections).toHaveLength(1));
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			await until(() => connection.end.mock.calls.length === 1);
+			expect(connection.commands).toEqual([]);
+
+			vi.advanceTimersByTime(2_999);
+			expect(connection.destroy).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			expect(connection.destroy).toHaveBeenCalledTimes(1);
+		});
+
+		it("cancels the 3 s destroy timer if SSH closes after early ws.close", async () => {
+			mocks.holdReady.value = true;
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() => expect(mocks.connections).toHaveLength(1));
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			await until(() => connection.end.mock.calls.length === 1);
+			connection.emit("close");
+			vi.advanceTimersByTime(3_000);
+
+			expect(connection.destroy).not.toHaveBeenCalled();
+		});
+
+		it("destroys the SSH connection 3 s after hangup scans finish if it never closes", async () => {
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			await flush();
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			await answerScansWithFakeTimers(connection, 1);
+			await until(() => connection.end.mock.calls.length === 1);
+			expect(connection.commands).toHaveLength(5);
+
+			vi.advanceTimersByTime(2_999);
+			expect(connection.destroy).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			expect(connection.destroy).toHaveBeenCalledTimes(1);
+		});
+
+		it("cancels the 3 s destroy timer if SSH closes within 3 s after hangup scans finish", async () => {
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			await flush();
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			await answerScansWithFakeTimers(connection, 1);
+			await until(() => connection.end.mock.calls.length === 1);
+			connection.emit("close");
+			vi.advanceTimersByTime(3_000);
+
+			expect(connection.destroy).not.toHaveBeenCalled();
+		});
+
+		it("falls back after 30 s when conn.exec hangs after ws.close and runs no scans on a late callback", async () => {
+			mocks.holdExecCallback.value = true;
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			vi.advanceTimersByTime(29_999);
+			expect(connection.end).not.toHaveBeenCalled();
+			expect(connection.destroy).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(1);
+			expect(connection.end).toHaveBeenCalledTimes(1);
+			expect(connection.destroy).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(2_999);
+			expect(connection.destroy).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(1);
+			expect(connection.destroy).toHaveBeenCalledTimes(1);
+
+			mocks.holdExecCallback.value = false;
+			connection.releaseExecCallbacks();
+			await flush();
+
+			expect(connection.streams[0]?.end).toHaveBeenCalledTimes(1);
+			expect(connection.commands).toHaveLength(1);
+			expect(connection.end).toHaveBeenCalledTimes(1);
+		});
+
+		it("closes ws, ends SSH, and destroys after 3 s on conn.exec error", async () => {
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				mocks.holdReady.value = true;
+				const ws = await openTerminal(port, REMOTE);
+				await vi.waitFor(() => expect(mocks.connections).toHaveLength(1));
+				const connection = mocks.connections[0] as FakeConnection;
+				connection.failNextExec = true;
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+				const closed = new Promise<void>((resolve) =>
+					ws.once("close", () => resolve()),
+				);
+				connection.emit("ready");
+				await closed;
+				await until(() => connection.end.mock.calls.length === 1);
+
+				vi.advanceTimersByTime(2_999);
+				expect(connection.destroy).not.toHaveBeenCalled();
+				vi.advanceTimersByTime(1);
+				expect(connection.destroy).toHaveBeenCalledTimes(1);
+			} finally {
+				errorSpy.mockRestore();
+			}
+		});
+
+		it("notifies ws, ends stream and SSH, and destroys after 3 s on conn error during active session", async () => {
+			const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+			try {
+				const ws = await openTerminal(port, REMOTE);
+				const messages: string[] = [];
+				ws.on("message", (data) => messages.push(data.toString()));
+				await vi.waitFor(() =>
+					expect(mocks.connections[0]?.commands).toHaveLength(1),
+				);
+				await flush();
+				const connection = mocks.connections[0] as FakeConnection;
+				vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+				const closed = new Promise<void>((resolve) =>
+					ws.once("close", () => resolve()),
+				);
+				connection.emit("error", new Error("connection reset"));
+				await closed;
+
+				expect(messages.join("")).toContain("SSH error: connection reset");
+				expect(connection.streams[0]?.end).toHaveBeenCalledTimes(1);
+				expect(connection.end).toHaveBeenCalledTimes(1);
+
+				vi.advanceTimersByTime(2_999);
+				expect(connection.destroy).not.toHaveBeenCalled();
+				vi.advanceTimersByTime(1);
+				expect(connection.destroy).toHaveBeenCalledTimes(1);
+			} finally {
+				errorSpy.mockRestore();
+			}
+		});
+
+		it("cancels remaining hangup scans and destroys after 3 s on conn error during hangup", async () => {
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			await flush();
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			await until(() => connection.commands.length === 2);
+			await until(
+				() => (connection.streams[1]?.resume.mock.calls.length ?? 0) > 0,
+			);
+
+			connection.emit("error", new Error("network dropped"));
+			expect(connection.end).toHaveBeenCalledTimes(1);
+			expect(connection.streams[0]?.end).toHaveBeenCalledTimes(1);
+
+			connection.streams[1]?.emit("close", 0);
+			await vi.advanceTimersByTimeAsync(2_999);
+			expect(connection.commands).toHaveLength(2);
+			expect(connection.destroy).not.toHaveBeenCalled();
+
+			await vi.advanceTimersByTimeAsync(1);
+			expect(connection.destroy).toHaveBeenCalledTimes(1);
+			expect(connection.streams[0]?.end).toHaveBeenCalledTimes(1);
+		});
+
+		it("skips scheduling destroy when SSH already emitted close before endConnection", async () => {
+			const ws = await openTerminal(port, REMOTE);
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			await flush();
+			const connection = mocks.connections[0] as FakeConnection;
+			vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+
+			await closeClient(ws);
+			await until(() => connection.commands.length === 2);
+			connection.emit("close");
+			await until(() => connection.end.mock.calls.length === 1);
+
+			await vi.advanceTimersByTimeAsync(3_000);
+			expect(connection.end).toHaveBeenCalledTimes(1);
+			expect(connection.destroy).not.toHaveBeenCalled();
+			expect(connection.commands).toHaveLength(2);
+		});
+
+		it("terminates a silent remote client and runs hangup scans", async () => {
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			const ws = await openTerminal(port, REMOTE, { autoPong: false });
+			await vi.waitFor(() =>
+				expect(mocks.connections[0]?.commands).toHaveLength(1),
+			);
+			await flush();
+			const connection = mocks.connections[0] as FakeConnection;
+
+			vi.advanceTimersByTime(30_000);
+			await flush();
+			expect(connection.commands).toHaveLength(1);
+
+			vi.advanceTimersByTime(30_000);
+			await answerScans(connection, 1);
+			await vi.waitFor(() => expect(connection.end).toHaveBeenCalled());
+			expect(connection.commands).toHaveLength(5);
+			ws.terminate();
+		});
+
+		it("terminates a silent local client, kills PTY, and runs hangup scans", async () => {
+			vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+			const ws = await openTerminal(port, "containerId=abc123def456", {
+				autoPong: false,
+			});
+			await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalled());
+			await flush();
+
+			vi.advanceTimersByTime(30_000);
+			await flush();
+			expect(pty.kill).not.toHaveBeenCalled();
+
+			vi.advanceTimersByTime(30_000);
+			await vi.waitFor(() => expect(mocks.execFile).toHaveBeenCalled());
+			expect(pty.kill).toHaveBeenCalled();
+			ws.terminate();
+		});
 	});
 });

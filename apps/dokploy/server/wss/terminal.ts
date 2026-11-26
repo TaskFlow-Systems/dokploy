@@ -14,6 +14,7 @@ import { getDockerHost } from "../utils/docker";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessTerminalOverWss } from "./authorize";
 import {
+	createSshCloser,
 	onWebSocketConnection,
 	readUpgradePathname,
 	stopWhenClientIsSilent,
@@ -25,8 +26,6 @@ import {
 	parseTerminalSize,
 	setupLocalServerSSHKey,
 } from "./utils";
-
-const FORCE_CLOSE_MS = 3000;
 
 const COMMAND_TO_ALLOW_LOCAL_ACCESS = `
 # ----------------------------------------
@@ -219,6 +218,7 @@ export const setupTerminalWebSocketServer = (
 		}
 
 		const conn = new Client();
+		const closeSsh = createSshCloser(conn);
 		let shell: ClientChannel | undefined;
 		let released = false;
 
@@ -231,11 +231,7 @@ export const setupTerminalWebSocketServer = (
 			}
 			released = true;
 			shell?.end();
-			conn.end();
-			// end() does nothing useful while still connecting or on a dead network.
-			const forceClose = setTimeout(() => conn.destroy(), FORCE_CLOSE_MS);
-			forceClose.unref();
-			conn.once("close", () => clearTimeout(forceClose));
+			closeSsh();
 		};
 
 		ws.once("close", release);
@@ -246,7 +242,7 @@ export const setupTerminalWebSocketServer = (
 		conn
 			.once("ready", () => {
 				if (released) {
-					conn.end();
+					closeSsh();
 					return;
 				}
 
@@ -272,7 +268,7 @@ export const setupTerminalWebSocketServer = (
 					stream
 						.on("close", (code: number, _signal: string) => {
 							ws.send(`\nContainer closed with code: ${code}\n`);
-							conn.end();
+							closeSsh();
 							ws.close();
 						})
 						.on("data", (data: string) => {

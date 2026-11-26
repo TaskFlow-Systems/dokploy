@@ -1,5 +1,6 @@
 import type { IncomingMessage, Server } from "node:http";
 import type { Duplex } from "node:stream";
+import type { Client } from "ssh2";
 import type { WebSocket, WebSocketServer } from "ws";
 import { parseRequestUrl } from "../request-url";
 
@@ -129,4 +130,40 @@ export const stopWhenClientIsSilent = (
 	}, intervalMs);
 	timer.unref();
 	ws.once("close", () => clearInterval(timer));
+};
+
+export const SSH_FORCE_CLOSE_MS = 3_000;
+
+// Ending an SSH client does nothing useful while still connecting or on a dead
+// network, so force-destroy the socket if it has not closed in time.
+export const createSshCloser = (
+	conn: Pick<Client, "destroy" | "end" | "once">,
+	forceCloseMs = SSH_FORCE_CLOSE_MS,
+) => {
+	let closed = false;
+	let ending = false;
+	let forceClose: ReturnType<typeof setTimeout> | undefined;
+
+	conn.once("close", () => {
+		closed = true;
+		if (forceClose) {
+			clearTimeout(forceClose);
+			forceClose = undefined;
+		}
+	});
+
+	return () => {
+		if (ending) {
+			return;
+		}
+		ending = true;
+		conn.end();
+		if (closed) {
+			return;
+		}
+		forceClose = setTimeout(() => {
+			conn.destroy();
+		}, forceCloseMs);
+		forceClose.unref?.();
+	};
 };
