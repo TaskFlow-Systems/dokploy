@@ -1,34 +1,29 @@
 # Fixable findings in bundled tools and pinned images whose latest release
-# still carries them.
-# Each entry expires, so the image audit fails again and the tool gets checked
-# for a new release.
+# still carries them (or whose upgrade awaits a dedicated migration PR).
+# Each entry expires so the image audit fails again and the tool or image gets
+# rechecked; the daily stale-ignores job warns earlier if any rule stops
+# matching across all scanned images.
 vulnerabilities:
   - id: CVE-2026-111943
     paths:
       - usr/local/bin/railpack
-    statement: Railpack 0.43.0, the latest release (rechecked 2026-11-20), is built with Go 1.26.9; the fix needs Go 1.26.10.
-    expired_at: 2026-12-04
-  - id: CVE-2026-97054
-    paths:
-      - usr/bin/docker
-      - usr/bin/rclone
-      - usr/local/bin/railpack
-    statement: The fix is Go 1.26.11 or 1.27.4. Rechecked 2026-11-20, the image carries the Docker CLI 29.9.3 (Go 1.26.10; 29.10.0 is built with Go 1.27.4 and comes with the next pins update), rclone 1.76.0, the latest release (Go 1.27.3), and Railpack 0.43.0, the latest release (Go 1.26.9).
-    expired_at: 2026-12-04
+    statement: Railpack 0.43.0 (rechecked 2026-11-26) is built with Go 1.26.9; the fix needs Go 1.26.10. Railpack 0.44.0 fixes this and awaits a separate migration PR.
+    expired_at: 2026-12-26
   - id: CVE-2026-17106
     paths:
       - usr/libexec/docker/cli-plugins/docker-buildx
-    statement: buildx 0.39.1, the latest release (rechecked 2026-11-20), and its master branch still use moby/go-archive 0.2.0; the fix is in 0.3.0.
-    expired_at: 2026-12-04
+    statement: buildx 0.39.1, the latest release (rechecked 2026-11-26), and its master branch still use moby/go-archive 0.2.0; the fix is in 0.3.0.
+    expired_at: 2026-12-26
   - id: CVE-2026-78661
     paths:
       - usr/libexec/docker/cli-plugins/docker-compose
       - usr/local/bin/pack
       - usr/local/bin/railpack
-    statement: The fix is golang.org/x/net 0.62.0. Rechecked 2026-11-20 on the latest releases, compose 5.8.0 uses 0.60.0 (its main branch too), pack 0.40.11 uses 0.60.0 (main has 0.62.0, not released yet) and Railpack 0.43.0 uses 0.61.0. buildx 0.39.1 has the fix.
-    expired_at: 2026-12-04
-  - id: CVE-2026-85091
+    statement: The fix is golang.org/x/net 0.62.0. Rechecked 2026-11-26, compose 5.8.0 (latest, main too) uses 0.60.0, pack 0.40.11 (latest; main has 0.62.0, unreleased) uses 0.60.0, and Railpack 0.43.0 uses 0.61.0 (Railpack 0.44.0 fixes this and awaits a separate migration PR).
+    expired_at: 2026-12-26
+  - id: CVE-2026-124851
     purls:
-      - pkg:deb/debian/zlib1g@1.3.dfsg%2Breally1.3.1-1%2Bb1
-    statement: postgres 18.7, the latest official image, ships zlib1g 1:1.3.dfsg+really1.3.1-1+b1, and so does its rebuild of 2026-11-20 (rechecked 2026-11-20, no 18.8 yet); Debian's fix 1-1+deb13u1 (DSA-6613-1) waits for their next rebuild. Images built here take it through apt-get upgrade, so the entry matches only the old version.
-    expired_at: 2026-12-04
+      - pkg:deb/debian/libzstd1@1.5.7%2Bdfsg-1
+      - pkg:deb/debian/zstd@1.5.7%2Bdfsg-1
+    statement: postgres 18.7, the latest official image (rebuilt 2026-11-26, rechecked 2026-11-26), ships libzstd1 and zstd 1.5.7+dfsg-1; Debian's fix 1.5.7+dfsg-1+deb13u1 waits for their next rebuild. Images built here take it through apt-get upgrade, so the entry matches only the old version.
+    expired_at: 2026-12-26

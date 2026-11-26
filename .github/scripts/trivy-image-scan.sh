@@ -6,6 +6,7 @@
 #
 # Usage: trivy-image-scan.sh IMAGE [trivy image flags...]
 # Run from the repository root; flags such as --image-src pass through.
+# When SUPPRESSED_OUT is set, writes ignored findings as JSON to that path.
 set -euo pipefail
 
 image="$1"
@@ -93,6 +94,23 @@ fi
 
 if [ -n "${GITHUB_OUTPUT:-}" ]; then
 	echo "os-fixable=${os_fixable_count}" >>"$GITHUB_OUTPUT"
+fi
+
+if [ -n "${SUPPRESSED_OUT:-}" ]; then
+	mkdir -p "$(dirname "$SUPPRESSED_OUT")"
+	jq --arg image "$image" '{
+		image: $image,
+		suppressed: [
+			.Results[]? as $r
+			| $r.ExperimentalModifiedFindings[]?
+			| select(.Status == "ignored")
+			| {
+				id: .Finding.VulnerabilityID,
+				target: $r.Target,
+				purl: (.Finding.PkgIdentifier.PURL // "")
+			}
+		]
+	}' "$report" >"$SUPPRESSED_OUT"
 fi
 
 if [ "$fixable_count" -gt 0 ]; then

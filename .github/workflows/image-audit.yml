@@ -11,7 +11,9 @@ name: Image audit
 # A fix in a Debian package needs only a new build, since the base stage takes
 # every Debian update of the day, so the daily run of the published image
 # starts one. A fix in a bundled tool needs a new pin, which
-# pins-auto-update.yml proposes.
+# pins-auto-update.yml proposes. After all four images pass on scheduled or
+# manual runs, stale-ignores warns about any .trivyignore.yaml rule that
+# stopped matching across all four images.
 on:
   schedule:
     - cron: "53 5 * * *"
@@ -55,13 +57,25 @@ jobs:
         env:
           INPUT_IMAGE: ${{ inputs.image }}
           BUILT_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           image="${INPUT_IMAGE:-ghcr.io/agenthits/dokploy:agenthits-dev}"
           if [ -n "$BUILT_SHA" ]; then
             image="ghcr.io/agenthits/dokploy:agenthits-dev-${BUILT_SHA:0:12}"
           fi
+          if [ "$EVENT_NAME" != "workflow_run" ]; then
+            export SUPPRESSED_OUT="${RUNNER_TEMP}/trivy-suppressed-panel.json"
+          fi
           .github/scripts/trivy-image-scan.sh "$image" \
             --image-src remote --platform linux/amd64
+      - name: Upload suppressed findings
+        if: github.event_name != 'workflow_run'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-suppressed-panel
+          path: ${{ runner.temp }}/trivy-suppressed-panel.json
+          retention-days: 1
+          if-no-files-found: error
       # Only the scheduled scan: a build that still has the finding right after
       # it was made would start the next build in a loop. The build skips the
       # layer cache: with it, apt layers come from the cache and keep the old
@@ -88,13 +102,13 @@ jobs:
           - name: traefik
           - name: postgres
             # gosu only switches to the postgres user when the container
-            # starts. The Postgres 18.7 image, rebuilt on 2026-11-20 and the
-            # newest on that day, ships gosu 1.19, built with Go 1.24.6;
-            # its 27 Go stdlib advisories would each need an entry in
-            # .trivyignore.yaml. gosu 1.20 came out on 2026-10-25, so the skip
-            # ends with the date below and the scan reports gosu again.
+            # starts. The Postgres 18.7 image, rebuilt on 2026-11-26 and
+            # rechecked on 2026-11-26, now ships gosu 1.20, which is still
+            # built with Go 1.24.6 (26 Go stdlib advisories, 1 critical and
+            # 25 high); no newer gosu release exists yet. The skip ends on
+            # the date below so the scan rechecks gosu again.
             skip-files: usr/local/bin/gosu
-            skip-until: "2026-12-04"
+            skip-until: "2026-12-26"
           - name: redis
     steps:
       - uses: actions/checkout@v7
@@ -105,6 +119,7 @@ jobs:
           NAME: ${{ matrix.name }}
           SKIP_FILES: ${{ matrix.skip-files }}
           SKIP_UNTIL: ${{ matrix.skip-until }}
+          SUPPRESSED_OUT: ${{ runner.temp }}/trivy-suppressed-${{ matrix.name }}.json
         run: |
           var="$(tr '[:lower:]' '[:upper:]' <<<"$NAME")_IMAGE"
           IMAGE="$(sed -n "s/^${var}=\"\\\${${var}:-\([^}]*\)}\"\$/\1/p" install-agenthits.sh)"
@@ -118,3 +133,181 @@ jobs:
           fi
           .github/scripts/trivy-image-scan.sh "$IMAGE" \
             --image-src remote --platform linux/amd64 "${skip[@]}"
+      - name: Upload suppressed findings
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: trivy-suppressed-${{ matrix.name }}
+          path: ${{ runner.temp }}/trivy-suppressed-${{ matrix.name }}.json
+          retention-days: 1
+          if-no-files-found: error
+
+  stale-ignores:
+    name: image audit (stale ignores)
+    needs: [panel, pinned]
+    if: github.event_name != 'workflow_run' && needs.panel.result == 'success' && needs.pinned.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Download suppressed findings
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: trivy-suppressed-*
+          path: ${{ runner.temp }}/suppressed
+      - name: Check for stale .trivyignore.yaml entries
+        env:
+          SUPPRESSED_DIR: ${{ runner.temp }}/suppressed
+        run: |
+          python3 -I - "$SUPPRESSED_DIR" .trivyignore.yaml <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          import yaml
+
+          suppressed_dir = Path(sys.argv[1])
+          ignore_file = Path(sys.argv[2])
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+
+          def append_summary(lines: list[str]) -> None:
+              text = "\n".join(lines) + "\n"
+              sys.stdout.write(text)
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as fh:
+                      fh.write(text)
+
+          def normalize_path(value: str) -> str:
+              return value.lstrip("/")
+
+          def normalize_purl_for_rule(finding_purl: str, rule_purl: str) -> str:
+              if not finding_purl:
+                  return ""
+              has_query = "?" in rule_purl
+              has_subpath = "#" in rule_purl
+              if not has_query and not has_subpath:
+                  return finding_purl.split("#", 1)[0].split("?", 1)[0]
+              if not has_subpath:
+                  return finding_purl.split("#", 1)[0]
+              if not has_query:
+                  base, sep, subpath = finding_purl.partition("#")
+                  base = base.split("?", 1)[0]
+                  return f"{base}{sep}{subpath}"
+              return finding_purl
+
+          with ignore_file.open("r", encoding="utf-8") as fh:
+              doc = yaml.safe_load(fh) or {}
+
+          entries = doc.get("vulnerabilities") or []
+          if not entries:
+              append_summary([
+                  "### Stale `.trivyignore.yaml` check",
+                  "",
+                  "No vulnerability entries in `.trivyignore.yaml`.",
+              ])
+              sys.exit(0)
+
+          json_files = sorted(suppressed_dir.rglob("*.json"))
+          images: list[str] = []
+          suppressed: list[dict[str, str]] = []
+          for path in json_files:
+              data = json.loads(path.read_text(encoding="utf-8"))
+              image = str(data.get("image") or path.stem)
+              images.append(image)
+              for rec in data.get("suppressed") or []:
+                  suppressed.append(
+                      {
+                          "image": image,
+                          "id": str(rec.get("id") or ""),
+                          "target": str(rec.get("target") or ""),
+                          "purl": str(rec.get("purl") or ""),
+                      }
+                  )
+
+          if not suppressed:
+              msg = (
+                  f"ExperimentalModifiedFindings returned 0 suppressed matches across {len(images)} "
+                  f"scanned image(s) while .trivyignore.yaml has {len(entries)} entry(ies); "
+                  "skipping stale-ignore warnings in case Trivy changed its suppressed-findings schema."
+              )
+              print(f"::notice file=.trivyignore.yaml::{msg}")
+              append_summary([
+                  "### Stale `.trivyignore.yaml` check",
+                  "",
+                  f"- Scanned images: {len(images)}",
+                  "- Total suppressed findings: 0",
+                  "",
+                  f"Notice: {msg}",
+              ])
+              sys.exit(0)
+
+          stale: list[tuple[str, str, str, str]] = []
+          checked = 0
+
+          for entry in entries:
+              vid = str(entry.get("id") or "")
+              paths = [str(p) for p in (entry.get("paths") or [])]
+              purls = [str(p) for p in (entry.get("purls") or [])]
+              expired_at = str(entry.get("expired_at") or "")
+
+              if paths:
+                  for rule_path in paths:
+                      checked += 1
+                      norm_rule = normalize_path(rule_path)
+                      matched = any(
+                          rec["id"] == vid and normalize_path(rec["target"]) == norm_rule
+                          for rec in suppressed
+                      )
+                      if not matched:
+                          stale.append((vid, "path", rule_path, expired_at))
+
+              if purls:
+                  for rule_purl in purls:
+                      checked += 1
+                      matched = any(
+                          rec["id"] == vid and normalize_purl_for_rule(rec["purl"], rule_purl) == rule_purl
+                          for rec in suppressed
+                      )
+                      if not matched:
+                          stale.append((vid, "purl", rule_purl, expired_at))
+
+              if not paths and not purls:
+                  checked += 1
+                  matched = any(rec["id"] == vid for rec in suppressed)
+                  if not matched:
+                      stale.append((vid, "id", "-", expired_at))
+
+          summary_lines = [
+              "### Stale `.trivyignore.yaml` check",
+              "",
+              f"- Scanned images ({len(images)}): " + ", ".join(f"`{img}`" for img in images),
+              f"- Total suppressed findings: {len(suppressed)}",
+              f"- Rules checked: {checked}",
+              f"- Stale rules: {len(stale)}",
+          ]
+
+          if stale:
+              for vid, scope, value, expired_at in stale:
+                  print(
+                      f"::warning file=.trivyignore.yaml::Stale ignore rule: {vid} "
+                      f"({scope}: {value}, expires {expired_at or 'none'}) matched 0 findings across all scanned images."
+                  )
+              summary_lines.extend([
+                  "",
+                  "| ID | Scope | Rule | Expires |",
+                  "|---|---|---|---|",
+              ])
+              for vid, scope, value, expired_at in stale:
+                  safe_val = value.replace("|", "\\|")
+                  summary_lines.append(f"| `{vid}` | {scope} | `{safe_val}` | {expired_at or '-'} |")
+          else:
+              summary_lines.extend([
+                  "",
+                  "All `.trivyignore.yaml` entries matched at least one finding across the scanned images.",
+              ])
+
+          append_summary(summary_lines)
+          PY
