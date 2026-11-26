@@ -27,6 +27,14 @@ pkg.exports = {
 		import: "./dist/utils/deployments/signed-job.js",
 		require: "./dist/utils/deployments/signed-job.js",
 	},
+	"./utils/deployments/deploy-freeze-shared": {
+		import: "./dist/utils/deployments/deploy-freeze-shared.js",
+		require: "./dist/utils/deployments/deploy-freeze-shared.js",
+	},
+	"./services/deployment-freeze": {
+		import: "./dist/services/deployment-freeze.js",
+		require: "./dist/services/deployment-freeze.js",
+	},
 	"./*": {
 		import: "./dist/*",
 		require: "./dist/*.cjs",

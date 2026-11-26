@@ -47,6 +47,16 @@ vi.mock("@dokploy/server/services/compose", () => ({
 	findComposeById: mocks.findComposeById,
 }));
 
+vi.mock("@dokploy/server/services/deployment-freeze", () => ({
+	assertDeploymentNotFrozen: vi.fn(async () => null),
+	deleteDeploymentFreezesForScope: vi.fn(async () => undefined),
+	formatUserActorLabel: vi.fn(async () => null),
+	getActiveDeploymentFreeze: vi.fn(async () => null),
+	getActiveDeploymentFreezesByIds: vi.fn(async () => new Map()),
+	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+	setDeploymentFreeze: vi.fn(async () => null),
+}));
+
 const revision = "0123456789abcdef0123456789abcdef01234567";
 const operation = {
 	operationId: "operation-1",

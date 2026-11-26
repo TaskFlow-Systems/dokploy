@@ -5,12 +5,15 @@ import {
 	validateRequest,
 } from "@dokploy/server";
 import { apiUpsertApplicationEnv } from "@dokploy/server/db/schema";
+import { assertDeploymentNotFrozen } from "@dokploy/server/services/deployment-freeze";
 import { resetKnownSecretMatcherCache } from "@dokploy/server/services/known-secrets";
 import { checkServicePermissionAndAccess } from "@dokploy/server/services/permission";
+import { appendForcedFreezeNote } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { TRPCError } from "@trpc/server";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { ZodError } from "zod";
 import { audit } from "@/server/api/utils/audit";
+import { resolveForcedDeployAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
 import type { DeploymentJob } from "@/server/queues/queue-types";
 import { myQueue } from "@/server/queues/queueSetup";
 import { deploy } from "@/server/utils/deploy";
@@ -33,6 +36,8 @@ const getErrorStatus = (error: unknown) => {
 			return 404;
 		case "CONFLICT":
 			return 409;
+		case "PRECONDITION_FAILED":
+			return 412;
 		default:
 			return 500;
 	}
@@ -94,6 +99,16 @@ export const handleApplicationEnvUpsert = async (
 					},
 		);
 
+		const bypassedFreeze =
+			input.redeploy && !input.dryRun
+				? await assertDeploymentNotFrozen({
+						scopeType: "application",
+						scopeId: input.applicationId,
+						force: input.force,
+						source: "api",
+					})
+				: null;
+
 		const result = await upsertApplicationEnvironment(input);
 		let redeployed = false;
 
@@ -109,13 +124,23 @@ export const handleApplicationEnvUpsert = async (
 			});
 
 			if (input.redeploy) {
+				const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+					"application.env.upsert",
+					input.applicationId,
+					ctx,
+					bypassedFreeze,
+				);
 				const jobData: DeploymentJob = {
 					applicationId: input.applicationId,
 					titleLog: "Rebuild deployment",
-					descriptionLog: "Environment variables updated",
+					descriptionLog: appendForcedFreezeNote(
+						"Environment variables updated",
+						bypassedFreeze,
+					),
 					type: "redeploy",
 					applicationType: "application",
 					server: !!application.serverId,
+					...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 				};
 
 				if (IS_CLOUD && application.serverId) {
@@ -139,6 +164,7 @@ export const handleApplicationEnvUpsert = async (
 					resourceType: "application",
 					resourceId: application.applicationId,
 					resourceName: application.appName,
+					...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 				});
 				redeployed = true;
 			}

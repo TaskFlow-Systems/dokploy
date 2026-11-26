@@ -402,6 +402,23 @@ table deployment {
   volumeBackupId text
 }
 
+table deployment_freeze {
+  freezeId text [pk, not null]
+  scopeType text [not null]
+  scopeId text [not null]
+  reason text
+  createdByUserId text
+  createdByLabel text
+  createdByAuthMethod text [not null, default: 'session']
+  createdAt text [not null]
+  expiresAt text
+  liftedAt text
+  liftedByUserId text
+  skippedCount integer [not null, default: 0]
+  lastSkippedAt text
+  lastSkippedSource text
+}
+
 table destination {
   destinationId text [pk, not null]
   name text [not null]

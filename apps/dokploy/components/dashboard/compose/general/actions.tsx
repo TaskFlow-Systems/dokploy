@@ -2,6 +2,7 @@ import { Ban, CheckCircle2, RefreshCcw, Rocket, Terminal } from "lucide-react";
 import { useRouter } from "next/router";
 import { Tooltip as TooltipPrimitive } from "radix-ui";
 import { toast } from "sonner";
+import { DeployFreezeControl } from "@/components/dashboard/shared/deploy-freeze-control";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -35,17 +36,31 @@ export const ComposeActions = ({ composeId }: Props) => {
 		api.compose.start.useMutation();
 	const { mutateAsync: stop, isPending: isStopping } =
 		api.compose.stop.useMutation();
+	const isFrozen = Boolean(data?.deployFreeze?.active);
 	return (
 		<div className="flex flex-row gap-4 w-full flex-wrap ">
 			<TooltipProvider delayDuration={0} disableHoverableContent={false}>
 				{canDeploy && (
 					<DialogAction
 						title="Deploy Compose"
-						description="Are you sure you want to deploy this compose?"
+						description={
+							isFrozen ? (
+								<span>
+									Are you sure you want to deploy this compose?{" "}
+									<span className="font-medium text-amber-600 dark:text-amber-400">
+										Deploys are currently frozen — confirming will run a one-off
+										forced deploy without unfreezing.
+									</span>
+								</span>
+							) : (
+								"Are you sure you want to deploy this compose?"
+							)
+						}
 						type="default"
 						onClick={async () => {
 							await deploy({
 								composeId: composeId,
+								...(isFrozen ? { force: true } : {}),
 							})
 								.then(() => {
 									toast.success("Compose deployed successfully");
@@ -54,8 +69,9 @@ export const ComposeActions = ({ composeId }: Props) => {
 										`/dashboard/project/${data?.environment.projectId}/environment/${data?.environmentId}/services/compose/${composeId}?tab=deployments`,
 									);
 								})
-								.catch(() => {
-									toast.error("Error deploying compose");
+								.catch((err) => {
+									toast.error(err?.message || "Error deploying compose");
+									void refetch();
 								});
 						}}
 					>
@@ -85,18 +101,32 @@ export const ComposeActions = ({ composeId }: Props) => {
 				{canDeploy && (
 					<DialogAction
 						title="Rebuild Compose"
-						description="Are you sure you want to rebuild this compose?"
+						description={
+							isFrozen ? (
+								<span>
+									Are you sure you want to rebuild this compose?{" "}
+									<span className="font-medium text-amber-600 dark:text-amber-400">
+										Deploys are currently frozen — confirming will run a one-off
+										forced deploy without unfreezing.
+									</span>
+								</span>
+							) : (
+								"Are you sure you want to rebuild this compose?"
+							)
+						}
 						type="default"
 						onClick={async () => {
 							await redeploy({
 								composeId: composeId,
+								...(isFrozen ? { force: true } : {}),
 							})
 								.then(() => {
 									toast.success("Compose rebuilt successfully");
 									refetch();
 								})
-								.catch(() => {
-									toast.error("Error rebuilding compose");
+								.catch((err) => {
+									toast.error(err?.message || "Error rebuilding compose");
+									void refetch();
 								});
 						}}
 					>
@@ -204,6 +234,14 @@ export const ComposeActions = ({ composeId }: Props) => {
 						</DialogAction>
 					))}
 			</TooltipProvider>
+			{canDeploy && (
+				<DeployFreezeControl
+					serviceType="compose"
+					serviceId={composeId}
+					deployFreeze={data?.deployFreeze}
+					onChanged={() => refetch()}
+				/>
+			)}
 			<DockerTerminalModal
 				appName={data?.appName || ""}
 				serverId={data?.serverId || ""}

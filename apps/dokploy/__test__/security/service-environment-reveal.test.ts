@@ -161,6 +161,16 @@ vi.mock("@dokploy/server/services/git-provider", () => ({
 	redactGitProviderSecrets: vi.fn((value) => value),
 }));
 
+vi.mock("@dokploy/server/services/deployment-freeze", () => ({
+	assertDeploymentNotFrozen: vi.fn(async () => null),
+	deleteDeploymentFreezesForScope: vi.fn(async () => undefined),
+	formatUserActorLabel: vi.fn(async () => null),
+	getActiveDeploymentFreeze: vi.fn(async () => null),
+	getActiveDeploymentFreezesByIds: vi.fn(async () => new Map()),
+	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+	setDeploymentFreeze: vi.fn(async () => null),
+}));
+
 vi.mock("@dokploy/server/services/permission", () => ({
 	addNewService: permissionMocks.addNewService,
 	checkPermission: permissionMocks.checkPermission,

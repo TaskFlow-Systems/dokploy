@@ -479,6 +479,7 @@ export const apiDeployApplication = createSchema
 		applicationId: z.string().min(1),
 		title: z.string().optional(),
 		description: z.string().optional(),
+		force: z.boolean().optional(),
 	});
 
 export const apiRedeployApplication = createSchema
@@ -489,6 +490,7 @@ export const apiRedeployApplication = createSchema
 		applicationId: z.string().min(1),
 		title: z.string().optional(),
 		description: z.string().optional(),
+		force: z.boolean().optional(),
 	});
 
 export const apiReloadApplication = createSchema
@@ -626,6 +628,7 @@ export const apiUpsertApplicationEnv = z.object({
 	redeploy: z.boolean().optional(),
 	dryRun: z.boolean().optional(),
 	expectedRevision: z.string().optional(),
+	force: z.boolean().optional(),
 });
 
 export const apiUpsertApplicationEnvResponse = z.object({

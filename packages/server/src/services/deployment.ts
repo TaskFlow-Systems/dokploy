@@ -19,6 +19,10 @@ import {
 	projects,
 } from "@dokploy/server/db/schema";
 import { isBackupScheduleTargetBound } from "@dokploy/server/utils/backups/invariant";
+import {
+	formatDeployFrozenMessage,
+	toDeployFreezeState,
+} from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { removeDirectoryIfExistsContent } from "@dokploy/server/utils/filesystem/directory";
 import { quoteShellArg } from "@dokploy/server/utils/filesystem/safe-path";
@@ -41,6 +45,10 @@ import {
 } from "./application";
 import { findBackupById } from "./backup";
 import { type Compose, findComposeById, updateCompose } from "./compose";
+import {
+	getActiveDeploymentFreeze,
+	recordSkippedDeploymentFreeze,
+} from "./deployment-freeze";
 import {
 	findPreviewDeploymentById,
 	type PreviewDeployment,
@@ -103,6 +111,7 @@ export const createComposeDeploymentOperation = async (input: {
 	composeId: string;
 	sourceRevision: string;
 	idempotencyKey: string;
+	force?: boolean;
 }) => {
 	const composeEntity = await findComposeById(input.composeId);
 	const idempotencyKeyHash = hashDeploymentIdempotencyKey(input.idempotencyKey);
@@ -121,13 +130,61 @@ export const createComposeDeploymentOperation = async (input: {
 						"Idempotency key is already bound to another source revision",
 				});
 			}
-			return { operation, deduplicated: true, compose: composeEntity };
+			return {
+				operation,
+				deduplicated: true,
+				compose: composeEntity,
+				bypassedFreeze: null,
+			};
 		}
 		throw new TRPCError({
 			code: "BAD_REQUEST",
 			message: "Exact deployment requires a Git-based Compose source",
 		});
 	}
+
+	const activeFreeze = await getActiveDeploymentFreeze(
+		"compose",
+		input.composeId,
+	);
+	if (activeFreeze && !input.force) {
+		const existingOperation = await db.query.deploymentOperations.findFirst({
+			where: and(
+				eq(deploymentOperations.composeId, input.composeId),
+				eq(deploymentOperations.idempotencyKeyHash, idempotencyKeyHash),
+			),
+		});
+		if (existingOperation) {
+			if (existingOperation.sourceRevision !== input.sourceRevision) {
+				throw new TRPCError({
+					code: "CONFLICT",
+					message:
+						"Idempotency key is already bound to another source revision",
+				});
+			}
+			return {
+				operation: existingOperation,
+				deduplicated: true,
+				compose: composeEntity,
+				bypassedFreeze: null,
+			};
+		}
+
+		await recordSkippedDeploymentFreeze("compose", input.composeId, "api");
+		const freezeState = toDeployFreezeState(activeFreeze, {
+			includeActorLabel: false,
+		});
+		throw new TRPCError({
+			code: "PRECONDITION_FAILED",
+			message: freezeState
+				? formatDeployFrozenMessage(freezeState)
+				: "DEPLOY_FROZEN: Deployments are frozen for this service",
+		});
+	}
+
+	const bypassedFreeze = activeFreeze
+		? toDeployFreezeState(activeFreeze, { includeActorLabel: false })
+		: null;
 
 	const inserted = await db
 		.insert(deploymentOperations)
@@ -172,6 +229,7 @@ export const createComposeDeploymentOperation = async (input: {
 		operation,
 		deduplicated: inserted.length === 0,
 		compose: composeEntity,
+		bypassedFreeze: inserted.length === 0 ? null : bypassedFreeze,
 	};
 };
 

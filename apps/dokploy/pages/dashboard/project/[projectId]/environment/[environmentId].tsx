@@ -1,5 +1,6 @@
 import type { findEnvironmentById } from "@dokploy/server";
 import { validateRequest } from "@dokploy/server/lib/auth";
+import type { OverviewDeployFreeze } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { createServerSideHelpers } from "@trpc/react-query/server";
 import {
 	Ban,
@@ -53,6 +54,17 @@ import { DateTooltip } from "@/components/shared/date-tooltip";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { FocusShortcutInput } from "@/components/shared/focus-shortcut-input";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
+import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
 	Card,
@@ -131,6 +143,7 @@ export type Services = {
 	status?: "idle" | "running" | "done" | "error";
 	lastDeployDate?: Date | null;
 	icon?: string | null;
+	deployFreeze?: OverviewDeployFreeze | null;
 };
 
 type Environment = Awaited<ReturnType<typeof findEnvironmentById>>;
@@ -170,6 +183,9 @@ export const extractServicesFromEnvironment = (
 				serverName: item?.server?.name || null,
 				lastDeployDate,
 				icon: item.icon || null,
+				deployFreeze:
+					(item as { deployFreeze?: OverviewDeployFreeze | null })
+						.deployFreeze ?? null,
 			};
 		}) || [];
 
@@ -261,6 +277,9 @@ export const extractServicesFromEnvironment = (
 				serverName: item?.server?.name || null,
 				lastDeployDate,
 				icon: item.icon || null,
+				deployFreeze:
+					(item as { deployFreeze?: OverviewDeployFreeze | null })
+						.deployFreeze ?? null,
 			};
 		}) || [];
 
@@ -437,6 +456,8 @@ const EnvironmentPage = (
 	const [deleteVolumes, setDeleteVolumes] = useState(false);
 	const [selectedServerId, setSelectedServerId] = useState<string>("all");
 	const [serviceToDelete, setServiceToDelete] = useState<Services | null>(null);
+	const [serviceToForceDeploy, setServiceToForceDeploy] =
+		useState<Services | null>(null);
 
 	const handleSelectAll = () => {
 		if (selectedServices.length === filteredServices.length) {
@@ -795,11 +816,13 @@ const EnvironmentPage = (
 					case "application":
 						await applicationActions.deploy.mutateAsync({
 							applicationId: serviceId,
+							...(service.deployFreeze ? { force: true } : {}),
 						});
 						break;
 					case "compose":
 						await composeActions.deploy.mutateAsync({
 							composeId: serviceId,
+							...(service.deployFreeze ? { force: true } : {}),
 						});
 						break;
 					case "postgres":
@@ -902,6 +925,7 @@ const EnvironmentPage = (
 	const handleServiceAction = async (
 		service: Services,
 		action: "start" | "stop" | "deploy",
+		options?: { force?: boolean },
 	) => {
 		const actions = getServiceActions(service);
 		const idKey = getServiceIdKey(service);
@@ -918,11 +942,16 @@ const EnvironmentPage = (
 		};
 
 		const labels = actionLabels[action];
+		const forceDeploy =
+			action === "deploy" &&
+			options?.force === true &&
+			(service.type === "application" || service.type === "compose");
 
 		toast.promise(
 			(async () => {
 				await actions[action].mutateAsync({
 					[idKey]: service.id,
+					...(forceDeploy ? { force: true } : {}),
 				} as any);
 			})(),
 			{
@@ -931,8 +960,10 @@ const EnvironmentPage = (
 					utils.environment.one.invalidate({ environmentId });
 					return `${service.name} ${labels.success} successfully`;
 				},
-				error: (error) =>
-					`Error ${labels.error} ${service.name}: ${error instanceof Error ? error.message : "Unknown error"}`,
+				error: (error) => {
+					utils.environment.one.invalidate({ environmentId });
+					return `Error ${labels.error} ${service.name}: ${error instanceof Error ? error.message : "Unknown error"}`;
+				},
 			},
 		);
 	};
@@ -1169,7 +1200,31 @@ const EnvironmentPage = (
 												</DialogAction>
 												<DialogAction
 													title="Deploy Services"
-													description={`Are you sure you want to deploy ${selectedServices.length} service${selectedServices.length !== 1 ? "s" : ""}? This will redeploy/restart the selected services.`}
+													description={(() => {
+														const frozenCount = filteredServices.filter(
+															(service) =>
+																selectedServices.includes(service.id) &&
+																(service.type === "application" ||
+																	service.type === "compose") &&
+																Boolean(service.deployFreeze),
+														).length;
+														const baseText = `Are you sure you want to deploy ${selectedServices.length} service${selectedServices.length !== 1 ? "s" : ""}? This will redeploy/restart the selected services.`;
+														if (frozenCount === 0) {
+															return baseText;
+														}
+														return (
+															<span>
+																{baseText}{" "}
+																<span className="font-medium text-amber-600 dark:text-amber-400">
+																	Note: {frozenCount} selected service
+																	{frozenCount !== 1 ? "s have" : " has"}{" "}
+																	deploys frozen; confirming will force-deploy{" "}
+																	{frozenCount !== 1 ? "them" : "it"} without
+																	unfreezing.
+																</span>
+															</span>
+														);
+													})()}
 													onClick={handleBulkDeploy}
 													type="default"
 													disabled={
@@ -1651,7 +1706,12 @@ const EnvironmentPage = (
 																			<ServerIcon className="size-4 text-muted-foreground" />
 																		</div>
 																	)}
-																	<div className="absolute -right-1 -top-2">
+																	<div className="absolute -right-1 -top-2 flex items-center gap-1.5">
+																		{(service.type === "application" ||
+																			service.type === "compose") &&
+																			service.deployFreeze && (
+																				<Badge variant="yellow">Frozen</Badge>
+																			)}
 																		<StatusTooltip status={service.status} />
 																	</div>
 
@@ -1768,9 +1828,17 @@ const EnvironmentPage = (
 																</ContextMenuItem>
 																<ContextMenuItem
 																	className="flex items-center gap-2"
-																	onClick={() =>
-																		handleServiceAction(service, "deploy")
-																	}
+																	onClick={() => {
+																		if (
+																			(service.type === "application" ||
+																				service.type === "compose") &&
+																			service.deployFreeze
+																		) {
+																			setServiceToForceDeploy(service);
+																			return;
+																		}
+																		handleServiceAction(service, "deploy");
+																	}}
 																>
 																	<RefreshCw className="size-4" />
 																	Deploy
@@ -1854,6 +1922,44 @@ const EnvironmentPage = (
 					</DialogFooter>
 				</DialogContent>
 			</Dialog>
+
+			<AlertDialog
+				open={!!serviceToForceDeploy}
+				onOpenChange={(open) => !open && setServiceToForceDeploy(null)}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Deploy Frozen Service</AlertDialogTitle>
+						<AlertDialogDescription>
+							Deploys are currently frozen for{" "}
+							<span className="font-semibold">
+								{serviceToForceDeploy?.name}
+							</span>
+							{serviceToForceDeploy?.deployFreeze?.reason
+								? ` (${serviceToForceDeploy.deployFreeze.reason})`
+								: ""}
+							. Confirming will trigger a one-off forced deploy without
+							unfreezing automated deploys.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction
+							variant="default"
+							onClick={() => {
+								if (serviceToForceDeploy) {
+									handleServiceAction(serviceToForceDeploy, "deploy", {
+										force: true,
+									});
+									setServiceToForceDeploy(null);
+								}
+							}}
+						>
+							Confirm Force Deploy
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</div>
 	);
 };

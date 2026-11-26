@@ -42,6 +42,13 @@ import {
 import { paths } from "@dokploy/server/constants";
 import { db } from "@dokploy/server/db";
 import {
+	assertDeploymentNotFrozen,
+	deleteDeploymentFreezesForScope,
+	formatUserActorLabel,
+	getActiveDeploymentFreeze,
+	setDeploymentFreeze,
+} from "@dokploy/server/services/deployment-freeze";
+import {
 	canEditDeployGitSource,
 	redactGitProviderSecrets,
 } from "@dokploy/server/services/git-provider";
@@ -61,6 +68,10 @@ import {
 	fetchTemplatesList,
 } from "@dokploy/server/templates/github";
 import { processTemplate } from "@dokploy/server/templates/processors";
+import {
+	appendForcedFreezeNote,
+	toDeployFreezeState,
+} from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { assertCustomGitUrlAllowed } from "@dokploy/server/utils/providers/git";
 import {
 	preserveSecretPlaceholderFields,
@@ -78,7 +89,11 @@ import { parse } from "toml";
 import { stringify } from "yaml";
 import { z } from "zod";
 import { slugify } from "@/lib/slug";
-import { assertBrowserSession } from "@/server/api/utils/api-key-session";
+import {
+	assertBrowserSession,
+	isApiKeySession,
+} from "@/server/api/utils/api-key-session";
+import { resolveForcedDeployAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
 import {
 	apiCreateCompose,
 	apiDeleteCompose,
@@ -90,6 +105,8 @@ import {
 	apiRandomizeCompose,
 	apiRedeployCompose,
 	apiSaveEnvironmentVariablesCompose,
+	apiSetComposeDeployFreeze,
+	apiSetDeployFreezeResponse,
 	apiUpdateCompose,
 	apiUpsertComposeEnv,
 	apiUpsertComposeEnvResponse,
@@ -369,6 +386,10 @@ export const composeRouter = createTRPCRouter({
 
 			const canReadEnvVars = await hasPermission(ctx, { envVars: ["read"] });
 			const sharedEnvAccess = await getSharedEnvReadAccess(ctx);
+			const activeFreeze = await getActiveDeploymentFreeze(
+				"compose",
+				input.composeId,
+			);
 
 			return {
 				// The compose file editor loads composeFile from this response.
@@ -378,6 +399,54 @@ export const composeRouter = createTRPCRouter({
 				}),
 				hasGitProviderAccess,
 				unauthorizedProvider,
+				deployFreeze: toDeployFreezeState(activeFreeze, {
+					includeActorLabel: !isApiKeySession(ctx.session),
+				}),
+			};
+		}),
+
+	setDeployFreeze: protectedProcedure
+		.input(apiSetComposeDeployFreeze)
+		.output(apiSetDeployFreezeResponse)
+		.mutation(async ({ input, ctx }) => {
+			await checkServicePermissionAndAccess(ctx, input.composeId, {
+				deployment: ["create"],
+			});
+			const compose = await findComposeById(input.composeId);
+			const authMethod = isApiKeySession(ctx.session) ? "api-key" : "session";
+			const label = input.frozen
+				? await formatUserActorLabel(ctx.user.id, ctx.user.email)
+				: null;
+			const row = await setDeploymentFreeze({
+				scopeType: "compose",
+				scopeId: input.composeId,
+				frozen: input.frozen,
+				durationMinutes: input.durationMinutes,
+				reason: input.reason,
+				actor: {
+					userId: ctx.user.id,
+					label,
+					authMethod,
+				},
+			});
+			await audit(ctx, {
+				action: "update",
+				resourceType: "compose",
+				resourceId: input.composeId,
+				resourceName: compose.name,
+				metadata: {
+					deployFreeze: input.frozen,
+					durationMinutes: input.durationMinutes ?? null,
+					authMethod,
+					apiKeyId: ctx.session.apiKeyId ?? null,
+				},
+			});
+			return {
+				serviceId: input.composeId,
+				serviceType: "compose" as const,
+				deployFreeze: toDeployFreezeState(row, {
+					includeActorLabel: authMethod !== "api-key",
+				}),
 			};
 		}),
 
@@ -484,6 +553,7 @@ export const composeRouter = createTRPCRouter({
 			}
 
 			await cancelScheduleJobsByOwner({ composeId: input.composeId });
+			await deleteDeploymentFreezesForScope("compose", input.composeId);
 
 			const result = await db
 				.delete(composeTable)
@@ -674,16 +744,32 @@ export const composeRouter = createTRPCRouter({
 				deployment: ["create"],
 			});
 			const compose = await findComposeById(input.composeId);
+			const bypassedFreeze = await assertDeploymentNotFrozen({
+				scopeType: "compose",
+				scopeId: input.composeId,
+				force: input.force,
+				source: "api",
+			});
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"compose.deploy",
+				input.composeId,
+				ctx,
+				bypassedFreeze,
+			);
 
 			const jobData: DeploymentJob = {
 				composeId: input.composeId,
 				titleLog: input.title || "Manual deployment",
 				type: "deploy",
 				applicationType: "compose",
-				descriptionLog: input.description || "",
+				descriptionLog: appendForcedFreezeNote(
+					input.description,
+					bypassedFreeze,
+				),
 				server: !!compose.serverId,
 				serverId: compose.serverId ?? undefined,
 				freshVolumes: input.freshVolumes,
+				...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 			};
 
 			if (IS_CLOUD && compose.serverId) {
@@ -695,6 +781,7 @@ export const composeRouter = createTRPCRouter({
 					resourceType: "compose",
 					resourceId: input.composeId,
 					resourceName: compose.name,
+					...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 				});
 				return true;
 			}
@@ -711,6 +798,7 @@ export const composeRouter = createTRPCRouter({
 				resourceType: "compose",
 				resourceId: input.composeId,
 				resourceName: compose.name,
+				...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 			});
 			return {
 				success: true,
@@ -735,6 +823,7 @@ export const composeRouter = createTRPCRouter({
 				composeId: input.composeId,
 				sourceRevision: input.expectedRevision,
 				idempotencyKey: input.idempotencyKey,
+				force: input.force,
 			});
 			if (created.deduplicated) {
 				return {
@@ -747,16 +836,29 @@ export const composeRouter = createTRPCRouter({
 				};
 			}
 
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"compose.deployExact",
+				input.composeId,
+				ctx,
+				created.bypassedFreeze,
+			);
+
 			const jobData: DeploymentJob = {
 				composeId: input.composeId,
 				titleLog: "Exact deployment",
-				descriptionLog: "Immutable source recovery deployment",
+				descriptionLog: appendForcedFreezeNote(
+					"Immutable source recovery deployment",
+					created.bypassedFreeze,
+				),
 				type: "deploy",
 				applicationType: "compose",
 				server: !!created.compose.serverId,
 				serverId: created.compose.serverId ?? undefined,
 				operationId: created.operation.operationId,
 				expectedRevision: created.operation.sourceRevision,
+				...(created.bypassedFreeze || input.force
+					? { bypassFreeze: true }
+					: {}),
 			};
 			try {
 				if (IS_CLOUD && created.compose.serverId) {
@@ -778,6 +880,13 @@ export const composeRouter = createTRPCRouter({
 					"dispatch_unknown",
 				);
 			}
+			await audit(ctx, {
+				action: "deploy",
+				resourceType: "compose",
+				resourceId: input.composeId,
+				resourceName: created.compose.name,
+				...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
+			});
 			const operation = await findComposeDeploymentOperation(
 				input.composeId,
 				created.operation.operationId,
@@ -798,15 +907,31 @@ export const composeRouter = createTRPCRouter({
 				deployment: ["create"],
 			});
 			const compose = await findComposeById(input.composeId);
+			const bypassedFreeze = await assertDeploymentNotFrozen({
+				scopeType: "compose",
+				scopeId: input.composeId,
+				force: input.force,
+				source: "api",
+			});
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"compose.redeploy",
+				input.composeId,
+				ctx,
+				bypassedFreeze,
+			);
 			const jobData: DeploymentJob = {
 				composeId: input.composeId,
 				titleLog: input.title || "Rebuild deployment",
 				type: "redeploy",
 				applicationType: "compose",
-				descriptionLog: input.description || "",
+				descriptionLog: appendForcedFreezeNote(
+					input.description,
+					bypassedFreeze,
+				),
 				server: !!compose.serverId,
 				serverId: compose.serverId ?? undefined,
 				freshVolumes: input.freshVolumes,
+				...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 			};
 			if (IS_CLOUD && compose.serverId) {
 				deploy(jobData).catch((error) => {
@@ -817,6 +942,7 @@ export const composeRouter = createTRPCRouter({
 					resourceType: "compose",
 					resourceId: input.composeId,
 					resourceName: compose.name,
+					...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 				});
 				return true;
 			}
@@ -833,6 +959,7 @@ export const composeRouter = createTRPCRouter({
 				resourceType: "compose",
 				resourceId: input.composeId,
 				resourceName: compose.name,
+				...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 			});
 			return {
 				success: true,
