@@ -1367,6 +1367,9 @@ create_dokploy_traefik() {
 	docker create \
 		--name dokploy-traefik \
 		--restart "$restart" \
+		--log-driver json-file \
+		--log-opt max-size=20m \
+		--log-opt max-file=5 \
 		-v "$TRAEFIK_CONFIG_FILE:/etc/traefik/traefik.yml" \
 		-v /etc/dokploy/traefik/dynamic:/etc/dokploy/traefik/dynamic \
 		-v /var/run/docker.sock:/var/run/docker.sock:ro \

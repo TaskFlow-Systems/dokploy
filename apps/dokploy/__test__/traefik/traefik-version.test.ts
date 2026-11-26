@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import {
 	getTraefikOverview,
 	parseTraefikImageVersion,
@@ -5,8 +7,14 @@ import {
 	readEnvironmentVariableList,
 	readEnvironmentVariables,
 } from "@dokploy/server/services/settings";
-import { TRAEFIK_VERSION } from "@dokploy/server/setup/traefik-setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	initializeStandaloneTraefik,
+	initializeTraefikService,
+	TRAEFIK_LOG_CONFIG,
+	TRAEFIK_SWARM_LOG_DRIVER,
+	TRAEFIK_VERSION,
+} from "@dokploy/server/setup/traefik-setup";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	execAsync: vi.fn(),
@@ -301,5 +309,120 @@ describe("readEnvironmentVariableList", () => {
 		await expect(readEnvironmentVariables("dokploy-traefik")).resolves.toBe(
 			"A=1\nB=2",
 		);
+	});
+});
+
+describe("Traefik log rotation", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		vi.spyOn(console, "log").mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("configures json-file log rotation in initializeStandaloneTraefik", async () => {
+		const created = {
+			id: "created-traefik",
+			inspect: vi.fn().mockResolvedValue({
+				State: { Running: true, StartedAt: "2026-10-26T00:00:00Z" },
+			}),
+			remove: vi.fn().mockResolvedValue(undefined),
+			rename: vi.fn().mockResolvedValue(undefined),
+			start: vi.fn().mockResolvedValue(undefined),
+		};
+		const createContainer = vi.fn().mockResolvedValue(created);
+		mocks.getRemoteDocker.mockResolvedValue({
+			createContainer,
+			getContainer: () => ({
+				inspect: vi.fn().mockRejectedValue(new Error("no such container")),
+			}),
+			getImage: () => ({ inspect: vi.fn().mockResolvedValue({}) }),
+		});
+
+		await initializeStandaloneTraefik();
+
+		expect(createContainer).toHaveBeenCalledOnce();
+		const settings = createContainer.mock.calls[0]?.[0];
+		expect(settings.HostConfig.LogConfig).toEqual({
+			Type: "json-file",
+			Config: {
+				"max-size": "20m",
+				"max-file": "5",
+			},
+		});
+		expect(settings.HostConfig.LogConfig).toEqual(TRAEFIK_LOG_CONFIG);
+		expect(settings.HostConfig.PortBindings).not.toHaveProperty("80/tcp");
+	});
+
+	it("configures json-file log rotation when initializeTraefikService creates a service", async () => {
+		const createService = vi.fn().mockResolvedValue(undefined);
+		mocks.getRemoteDocker.mockResolvedValue({
+			createService,
+			getService: () => ({
+				inspect: vi.fn().mockRejectedValue(new Error("service not found")),
+			}),
+		});
+
+		await initializeTraefikService({});
+
+		expect(createService).toHaveBeenCalledOnce();
+		const settings = createService.mock.calls[0]?.[0];
+		expect(settings.TaskTemplate.LogDriver).toEqual({
+			Name: "json-file",
+			Options: {
+				"max-size": "20m",
+				"max-file": "5",
+			},
+		});
+		expect(settings.TaskTemplate.LogDriver).toEqual(TRAEFIK_SWARM_LOG_DRIVER);
+	});
+
+	it("configures json-file log rotation when initializeTraefikService updates a service", async () => {
+		const update = vi.fn().mockResolvedValue(undefined);
+		mocks.getRemoteDocker.mockResolvedValue({
+			createService: vi.fn(),
+			getService: () => ({
+				inspect: vi.fn().mockResolvedValue({
+					Version: { Index: "3" },
+					Spec: { TaskTemplate: { ForceUpdate: 1 } },
+				}),
+				update,
+			}),
+		});
+
+		await initializeTraefikService({});
+
+		expect(update).toHaveBeenCalledOnce();
+		const settings = update.mock.calls[0]?.[0];
+		expect(settings.TaskTemplate.LogDriver).toEqual({
+			Name: "json-file",
+			Options: {
+				"max-size": "20m",
+				"max-file": "5",
+			},
+		});
+		expect(settings.TaskTemplate.LogDriver).toEqual(TRAEFIK_SWARM_LOG_DRIVER);
+	});
+
+	it("configures json-file log rotation in install-agenthits.sh create_dokploy_traefik", () => {
+		const installerPath = path.resolve(
+			process.cwd(),
+			"../..",
+			"install-agenthits.sh",
+		);
+		const installer = readFileSync(installerPath, "utf8");
+		const createFn = installer.match(
+			/create_dokploy_traefik\(\) \{[\s\S]*?\n\}/,
+		)?.[0];
+
+		expect(createFn).toBeDefined();
+		expect(createFn).toContain("--log-driver json-file");
+		expect(createFn).toContain("--log-opt max-size=20m");
+		expect(createFn).toContain("--log-opt max-file=5");
+		expect(createFn).toContain("-p 443:443/tcp");
+		expect(createFn).toContain("-p 443:443/udp");
+		expect(createFn).not.toMatch(/(?:-p|--publish)[=\s]+\S*\b80\b/);
 	});
 });
