@@ -145,7 +145,7 @@ RUN github-release-asset railwayapp/nixpacks "v$NIXPACKS_VERSION" "nixpacks-v$NI
     && bun install -g tsx
 
 # Install Railpack
-ARG RAILPACK_VERSION=0.43.0
+ARG RAILPACK_VERSION=0.44.0
 RUN github-release-asset railwayapp/railpack "v$RAILPACK_VERSION" "railpack-v$RAILPACK_VERSION-$(uname -m | sed s/aarch64/arm64/)-unknown-linux-musl.tar.gz" /tmp/railpack.tar.gz \
     && tar -xzf /tmp/railpack.tar.gz -C /usr/local/bin railpack \
     && rm /tmp/railpack.tar.gz
@@ -154,7 +154,7 @@ RUN github-release-asset railwayapp/railpack "v$RAILPACK_VERSION" "railpack-v$RA
 # release) from github.com on its first build and keeps it at
 # /tmp/railpack/mise/mise-<version>. Placed there beforehand, builds on the
 # panel do not depend on github.com. Keep this at Railpack's version.
-ARG MISE_VERSION=2026.10.14
+ARG MISE_VERSION=2026.11.12
 RUN mise_arch="$(uname -m | sed 's/x86_64/x64/; s/aarch64/arm64/')" \
     && github-release-asset jdx/mise "v$MISE_VERSION" "mise-v$MISE_VERSION-linux-$mise_arch-musl.tar.gz" /tmp/mise.tar.gz \
     && mkdir -p /tmp/railpack/mise \

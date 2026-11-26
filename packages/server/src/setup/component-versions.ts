@@ -9,7 +9,7 @@ export const PINNED_VERSIONS = {
 	postgres: "18.7",
 	redis: "8.10.3",
 	nixpacks: "1.41.0",
-	railpack: "0.43.0",
+	railpack: "0.44.0",
 	buildpacks: "0.40.11",
 	rclone: "1.76.0",
 } as const;

@@ -4,11 +4,6 @@
 # rechecked; the daily stale-ignores job warns earlier if any rule stops
 # matching across all scanned images.
 vulnerabilities:
-  - id: CVE-2026-111943
-    paths:
-      - usr/local/bin/railpack
-    statement: Railpack 0.43.0 (rechecked 2026-11-26) is built with Go 1.26.9; the fix needs Go 1.26.10. Railpack 0.44.0 fixes this and awaits a separate migration PR.
-    expired_at: 2026-12-26
   - id: CVE-2026-17106
     paths:
       - usr/libexec/docker/cli-plugins/docker-buildx
@@ -18,8 +13,7 @@ vulnerabilities:
     paths:
       - usr/libexec/docker/cli-plugins/docker-compose
       - usr/local/bin/pack
-      - usr/local/bin/railpack
-    statement: The fix is golang.org/x/net 0.62.0. Rechecked 2026-11-26, compose 5.8.0 (latest, main too) uses 0.60.0, pack 0.40.11 (latest; main has 0.62.0, unreleased) uses 0.60.0, and Railpack 0.43.0 uses 0.61.0 (Railpack 0.44.0 fixes this and awaits a separate migration PR).
+    statement: The fix is golang.org/x/net 0.62.0. Rechecked 2026-11-26, docker-compose 5.8.0 (latest, main too) uses 0.60.0 and pack 0.40.11 (latest; main has 0.62.0, unreleased) uses 0.60.0.
     expired_at: 2026-12-26
   - id: CVE-2026-124851
     purls:
