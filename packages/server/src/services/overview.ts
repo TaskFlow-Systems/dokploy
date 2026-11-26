@@ -20,7 +20,10 @@ import {
 } from "@dokploy/server/db/schema";
 import { and, desc, eq, inArray, isNull, max, or } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
-import { toOverviewDeployFreeze } from "../utils/deployments/deploy-freeze-shared";
+import {
+	pickStrictestDeployFreeze,
+	toOverviewDeployFreeze,
+} from "../utils/deployments/deploy-freeze-shared";
 import { getActiveDeploymentFreezesByIds } from "./deployment-freeze";
 import type {
 	OverviewBackup,
@@ -175,8 +178,16 @@ async function attachDeployMetadata(
 	const composeIds = services
 		.filter((s) => s.type === "compose")
 		.map((s) => s.id);
+	const environmentIds = Array.from(
+		new Set(
+			services
+				.filter((s) => s.type === "application" || s.type === "compose")
+				.map((s) => s.environmentId)
+				.filter(Boolean),
+		),
+	);
 
-	const [appDeploys, composeDeploys, appFreezes, composeFreezes] =
+	const [appDeploys, composeDeploys, appFreezes, composeFreezes, envFreezes] =
 		await Promise.all([
 			applicationIds.length > 0
 				? db
@@ -200,6 +211,7 @@ async function attachDeployMetadata(
 				: Promise.resolve([]),
 			getActiveDeploymentFreezesByIds("application", applicationIds),
 			getActiveDeploymentFreezesByIds("compose", composeIds),
+			getActiveDeploymentFreezesByIds("environment", environmentIds),
 		]);
 
 	const lastAppDeploy = new Map<string, string>();
@@ -220,14 +232,24 @@ async function attachDeployMetadata(
 			return {
 				...service,
 				lastDeployAt: lastAppDeploy.get(service.id) ?? null,
-				deployFreeze: toOverviewDeployFreeze(appFreezes.get(service.id)),
+				deployFreeze: toOverviewDeployFreeze(
+					pickStrictestDeployFreeze(
+						appFreezes.get(service.id),
+						envFreezes.get(service.environmentId),
+					),
+				),
 			};
 		}
 		if (service.type === "compose") {
 			return {
 				...service,
 				lastDeployAt: lastComposeDeploy.get(service.id) ?? null,
-				deployFreeze: toOverviewDeployFreeze(composeFreezes.get(service.id)),
+				deployFreeze: toOverviewDeployFreeze(
+					pickStrictestDeployFreeze(
+						composeFreezes.get(service.id),
+						envFreezes.get(service.environmentId),
+					),
+				),
 			};
 		}
 		return service;

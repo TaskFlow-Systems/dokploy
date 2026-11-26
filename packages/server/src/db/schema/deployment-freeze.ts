@@ -57,6 +57,8 @@ export type DeploymentFreeze = typeof deploymentFreeze.$inferSelect;
 
 export const apiDeployFreezeState = z.object({
 	active: z.literal(true),
+	scopeType: z.enum(["application", "compose", "environment", "project"]),
+	scopeId: z.string().min(1),
 	frozenAt: z.string(),
 	expiresAt: z.string().nullable(),
 	reason: z.string().nullable(),
@@ -95,5 +97,23 @@ export const apiSetApplicationDeployFreeze = z.object({
 export const apiSetDeployFreezeResponse = z.object({
 	serviceId: z.string(),
 	serviceType: z.enum(["compose", "application"]),
+	deployFreeze: apiDeployFreezeState.nullable(),
+});
+
+export const apiSetEnvironmentDeployFreeze = z.object({
+	environmentId: z.string().min(1),
+	frozen: z.boolean(),
+	durationMinutes: z
+		.number()
+		.int()
+		.min(1)
+		.max(MAX_FREEZE_DURATION_MINUTES)
+		.nullable()
+		.optional(),
+	reason: z.string().trim().max(MAX_FREEZE_REASON_LENGTH).nullable().optional(),
+});
+
+export const apiSetEnvironmentDeployFreezeResponse = z.object({
+	environmentId: z.string().min(1),
 	deployFreeze: apiDeployFreezeState.nullable(),
 });

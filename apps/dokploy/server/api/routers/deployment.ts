@@ -318,6 +318,7 @@ export const deploymentRouter = createTRPCRouter({
 				const bypassedFreeze = await assertDeploymentNotFrozen({
 					scopeType: "compose",
 					scopeId: input.composeId,
+					environmentId: compose.environmentId,
 					force: input.force,
 					source: "api",
 				});

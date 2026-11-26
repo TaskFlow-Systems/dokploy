@@ -45,7 +45,7 @@ import {
 	assertDeploymentNotFrozen,
 	deleteDeploymentFreezesForScope,
 	formatUserActorLabel,
-	getActiveDeploymentFreeze,
+	getEffectiveDeploymentFreeze,
 	setDeploymentFreeze,
 } from "@dokploy/server/services/deployment-freeze";
 import {
@@ -93,7 +93,11 @@ import {
 	assertBrowserSession,
 	isApiKeySession,
 } from "@/server/api/utils/api-key-session";
-import { resolveForcedDeployAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
+import { canUserManageEnvironmentDeployFreeze } from "@/server/api/utils/deploy-freeze-access";
+import {
+	resolveDeployFreezeChangeAuditMetadata,
+	resolveForcedDeployAuditMetadata,
+} from "@/server/api/utils/deploy-freeze-audit";
 import {
 	apiCreateCompose,
 	apiDeleteCompose,
@@ -386,10 +390,22 @@ export const composeRouter = createTRPCRouter({
 
 			const canReadEnvVars = await hasPermission(ctx, { envVars: ["read"] });
 			const sharedEnvAccess = await getSharedEnvReadAccess(ctx);
-			const activeFreeze = await getActiveDeploymentFreeze(
-				"compose",
-				input.composeId,
-			);
+			const environmentId =
+				compose.environmentId ?? compose.environment?.environmentId;
+			const [
+				{ effective: effectiveFreeze, serviceFreeze, environmentFreeze },
+				canManageEnvironmentFreeze,
+			] = await Promise.all([
+				getEffectiveDeploymentFreeze({
+					scopeType: "compose",
+					scopeId: input.composeId,
+					environmentId,
+				}),
+				canUserManageEnvironmentDeployFreeze(ctx, {
+					environmentId: environmentId ?? "",
+				}),
+			]);
+			const includeActorLabel = !isApiKeySession(ctx.session);
 
 			return {
 				// The compose file editor loads composeFile from this response.
@@ -399,9 +415,16 @@ export const composeRouter = createTRPCRouter({
 				}),
 				hasGitProviderAccess,
 				unauthorizedProvider,
-				deployFreeze: toDeployFreezeState(activeFreeze, {
-					includeActorLabel: !isApiKeySession(ctx.session),
+				deployFreeze: toDeployFreezeState(effectiveFreeze, {
+					includeActorLabel,
 				}),
+				serviceFreeze: toDeployFreezeState(serviceFreeze, {
+					includeActorLabel,
+				}),
+				environmentFreeze: toDeployFreezeState(environmentFreeze, {
+					includeActorLabel,
+				}),
+				canManageEnvironmentFreeze,
 			};
 		}),
 
@@ -434,12 +457,13 @@ export const composeRouter = createTRPCRouter({
 				resourceType: "compose",
 				resourceId: input.composeId,
 				resourceName: compose.name,
-				metadata: {
-					deployFreeze: input.frozen,
-					durationMinutes: input.durationMinutes ?? null,
-					authMethod,
-					apiKeyId: ctx.session.apiKeyId ?? null,
-				},
+				metadata: resolveDeployFreezeChangeAuditMetadata({
+					scopeType: "compose",
+					scopeId: input.composeId,
+					frozen: input.frozen,
+					durationMinutes: input.durationMinutes,
+					ctx,
+				}),
 			});
 			return {
 				serviceId: input.composeId,
@@ -747,6 +771,7 @@ export const composeRouter = createTRPCRouter({
 			const bypassedFreeze = await assertDeploymentNotFrozen({
 				scopeType: "compose",
 				scopeId: input.composeId,
+				environmentId: compose.environmentId,
 				force: input.force,
 				source: "api",
 			});
@@ -910,6 +935,7 @@ export const composeRouter = createTRPCRouter({
 			const bypassedFreeze = await assertDeploymentNotFrozen({
 				scopeType: "compose",
 				scopeId: input.composeId,
+				environmentId: compose.environmentId,
 				force: input.force,
 				source: "api",
 			});

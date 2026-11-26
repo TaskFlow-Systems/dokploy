@@ -59,7 +59,14 @@ vi.mock("@/server/utils/deploy", () => ({
 
 vi.mock("@dokploy/server/services/deployment-freeze", () => ({
 	getActiveDeploymentFreeze: vi.fn(async () => null),
+	getEffectiveDeploymentFreeze: vi.fn(async () => ({
+		effective: null,
+		serviceFreeze: null,
+		environmentFreeze: null,
+		environmentId: null,
+	})),
 	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+	recordSkippedEffectiveDeploymentFreeze: vi.fn(async () => undefined),
 }));
 
 const { default: applicationDeployHandler } = await import(

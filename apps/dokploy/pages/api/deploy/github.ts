@@ -11,8 +11,8 @@ import {
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
 import {
-	getActiveDeploymentFreeze,
-	recordSkippedDeploymentFreeze,
+	getEffectiveDeploymentFreeze,
+	recordSkippedEffectiveDeploymentFreeze,
 } from "@dokploy/server/services/deployment-freeze";
 import { DEPLOY_FROZEN_CODE } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { Webhooks } from "@octokit/webhooks";
@@ -31,12 +31,23 @@ import {
 const enqueueGithubDeployJob = async (
 	scopeType: "application" | "compose",
 	scopeId: string,
+	environmentId: string | null | undefined,
 	serverId: string | null | undefined,
 	jobData: DeploymentJob,
 ): Promise<"deployed" | "skipped"> => {
-	const activeFreeze = await getActiveDeploymentFreeze(scopeType, scopeId);
+	const { effective: activeFreeze, environmentId: resolvedEnvId } =
+		await getEffectiveDeploymentFreeze({
+			scopeType,
+			scopeId,
+			environmentId,
+		});
 	if (activeFreeze) {
-		await recordSkippedDeploymentFreeze(scopeType, scopeId, "webhook");
+		await recordSkippedEffectiveDeploymentFreeze({
+			scopeType,
+			scopeId,
+			environmentId: resolvedEnvId,
+			source: "webhook",
+		});
 		return "skipped";
 	}
 	if (IS_CLOUD && serverId) {
@@ -206,6 +217,7 @@ export default async function handler(
 				const outcome = await enqueueGithubDeployJob(
 					"application",
 					app.applicationId as string,
+					app.environmentId,
 					app.serverId,
 					jobData,
 				);
@@ -242,6 +254,7 @@ export default async function handler(
 				const outcome = await enqueueGithubDeployJob(
 					"compose",
 					composeApp.composeId as string,
+					composeApp.environmentId,
 					composeApp.serverId,
 					jobData,
 				);
@@ -344,6 +357,7 @@ export default async function handler(
 				const outcome = await enqueueGithubDeployJob(
 					"application",
 					app.applicationId as string,
+					app.environmentId,
 					app.serverId,
 					jobData,
 				);
@@ -389,6 +403,7 @@ export default async function handler(
 				const outcome = await enqueueGithubDeployJob(
 					"compose",
 					composeApp.composeId as string,
+					composeApp.environmentId,
 					composeApp.serverId,
 					jobData,
 				);

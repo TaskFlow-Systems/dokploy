@@ -10,6 +10,7 @@ export const deployJobSchema = z
 			type: z.enum(["deploy", "redeploy"]),
 			applicationType: z.literal("application"),
 			serverId: z.string().min(1),
+			bypassFreeze: z.boolean().optional(),
 		}),
 		z.object({
 			composeId: z.string(),
@@ -24,6 +25,7 @@ export const deployJobSchema = z
 				.string()
 				.regex(/^[0-9a-f]{40}$/)
 				.optional(),
+			bypassFreeze: z.boolean().optional(),
 		}),
 		z.object({
 			applicationId: z.string(),

@@ -49,7 +49,15 @@ export const ShowGeneralCompose = ({ composeId }: Props) => {
 						serviceType="compose"
 						serviceId={composeId}
 						deployFreeze={data?.deployFreeze}
+						serviceFreeze={data?.serviceFreeze}
+						environmentFreeze={data?.environmentFreeze}
+						environmentId={data?.environmentId}
+						projectId={data?.environment?.projectId}
+						environmentName={data?.environment?.name}
 						canDeploy={canDeploy}
+						canManageEnvironmentFreeze={
+							data?.canManageEnvironmentFreeze ?? false
+						}
 						onChanged={() => refetch()}
 						onResumeAndDeploy={async () => {
 							await deployCompose({ composeId });

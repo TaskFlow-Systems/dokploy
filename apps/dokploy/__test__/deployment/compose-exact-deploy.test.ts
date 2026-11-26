@@ -50,10 +50,18 @@ vi.mock("@dokploy/server/services/compose", () => ({
 vi.mock("@dokploy/server/services/deployment-freeze", () => ({
 	assertDeploymentNotFrozen: vi.fn(async () => null),
 	deleteDeploymentFreezesForScope: vi.fn(async () => undefined),
+	deleteDeploymentFreezesForScopes: vi.fn(async () => undefined),
 	formatUserActorLabel: vi.fn(async () => null),
 	getActiveDeploymentFreeze: vi.fn(async () => null),
 	getActiveDeploymentFreezesByIds: vi.fn(async () => new Map()),
+	getEffectiveDeploymentFreeze: vi.fn(async () => ({
+		effective: null,
+		serviceFreeze: null,
+		environmentFreeze: null,
+		environmentId: null,
+	})),
 	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+	recordSkippedEffectiveDeploymentFreeze: vi.fn(async () => undefined),
 	setDeploymentFreeze: vi.fn(async () => null),
 }));
 

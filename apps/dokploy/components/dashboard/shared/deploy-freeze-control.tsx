@@ -52,9 +52,11 @@ const formatShortExpiryBadge = (expiresAt: string | null) => {
 };
 
 interface Props {
-	serviceType: "compose" | "application";
+	serviceType: "compose" | "application" | "environment";
 	serviceId: string;
 	deployFreeze: DeployFreezeState | null | undefined;
+	inheritedFreeze?: DeployFreezeState | null | undefined;
+	environmentName?: string;
 	onChanged?: () => unknown;
 	disabled?: boolean;
 	className?: string;
@@ -64,10 +66,13 @@ export const DeployFreezeControl = ({
 	serviceType,
 	serviceId,
 	deployFreeze,
+	inheritedFreeze,
+	environmentName,
 	onChanged,
 	disabled,
 	className,
 }: Props) => {
+	const utils = api.useUtils();
 	const [popoverOpen, setPopoverOpen] = useState(false);
 	const [tooltipOpen, setTooltipOpen] = useState(false);
 	const [durationMinutes, setDurationMinutes] = useState<number | null>(null);
@@ -79,27 +84,56 @@ export const DeployFreezeControl = ({
 		api.compose.setDeployFreeze.useMutation();
 	const { mutateAsync: setApplicationFreeze, isPending: isAppPending } =
 		api.application.setDeployFreeze.useMutation();
-	const isPending = isComposePending || isAppPending;
-	const isFrozen = Boolean(deployFreeze?.active);
+	const { mutateAsync: setEnvironmentFreeze, isPending: isEnvPending } =
+		api.environment.setDeployFreeze.useMutation();
+	const isPending = isComposePending || isAppPending || isEnvPending;
+
+	const hasOwnFreeze = Boolean(deployFreeze?.active);
+	const hasInheritedFreeze =
+		serviceType !== "environment" && Boolean(inheritedFreeze?.active);
+	const isEffectivelyFrozen = hasOwnFreeze || hasInheritedFreeze;
 
 	useEffect(() => {
-		const timeoutMs = getNextFreezeExpiryTimeoutMs(
-			deployFreeze?.expiresAt ?? null,
-		);
-		if (timeoutMs === null) {
+		const timeouts = [
+			getNextFreezeExpiryTimeoutMs(deployFreeze?.expiresAt ?? null),
+			getNextFreezeExpiryTimeoutMs(inheritedFreeze?.expiresAt ?? null),
+		].filter((ms): ms is number => ms !== null);
+		if (timeouts.length === 0) {
 			return;
 		}
-		const timer = setTimeout(() => {
-			void onChangedRef.current?.();
-		}, timeoutMs);
+		const timer = setTimeout(
+			() => {
+				void onChangedRef.current?.();
+			},
+			Math.min(...timeouts),
+		);
 		return () => clearTimeout(timer);
-	}, [deployFreeze?.expiresAt]);
+	}, [deployFreeze?.expiresAt, inheritedFreeze?.expiresAt]);
+
+	const invalidateEnvironmentCaches = async () => {
+		if (serviceType !== "environment") {
+			return;
+		}
+		await Promise.all([
+			utils.environment.one.invalidate({ environmentId: serviceId }),
+			utils.environment.byProjectId.invalidate(),
+			utils.overview.services.invalidate(),
+		]);
+	};
 
 	const mutateFreeze = async (payload: {
 		frozen: boolean;
 		durationMinutes?: number | null;
 		reason?: string | null;
 	}) => {
+		if (serviceType === "environment") {
+			const result = await setEnvironmentFreeze({
+				environmentId: serviceId,
+				...payload,
+			});
+			await invalidateEnvironmentCaches();
+			return result;
+		}
 		if (serviceType === "compose") {
 			return setComposeFreeze({
 				composeId: serviceId,
@@ -112,25 +146,47 @@ export const DeployFreezeControl = ({
 		});
 	};
 
+	const resumeSuccessMessage = () => {
+		if (serviceType === "environment") {
+			return "Environment deploys resumed";
+		}
+		if (hasInheritedFreeze) {
+			return "Service deploy freeze resumed (environment freeze still active)";
+		}
+		return "Deploys resumed";
+	};
+
 	const handleQuickToggle = async () => {
+		if (!hasOwnFreeze && hasInheritedFreeze) {
+			setTooltipOpen(false);
+			setReason("");
+			setDurationMinutes(null);
+			setPopoverOpen(true);
+			return;
+		}
+
 		try {
-			if (isFrozen) {
+			if (hasOwnFreeze) {
 				await mutateFreeze({ frozen: false });
-				toast.success("Deploys resumed");
+				toast.success(resumeSuccessMessage());
 			} else {
 				await mutateFreeze({
 					frozen: true,
 					durationMinutes: null,
 					reason: null,
 				});
-				toast.success("Deploys frozen");
+				toast.success(
+					serviceType === "environment"
+						? "Environment deploys frozen"
+						: "Deploys frozen",
+				);
 			}
 			await onChangedRef.current?.();
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: isFrozen
+					: hasOwnFreeze
 						? "Failed to resume deploys"
 						: "Failed to freeze deploys",
 			);
@@ -154,7 +210,13 @@ export const DeployFreezeControl = ({
 				durationMinutes,
 				reason: sanitized,
 			});
-			toast.success(isFrozen ? "Deploy freeze updated" : "Deploys frozen");
+			toast.success(
+				hasOwnFreeze
+					? "Deploy freeze updated"
+					: serviceType === "environment"
+						? "Environment deploys frozen"
+						: "Deploys frozen",
+			);
 			setPopoverOpen(false);
 			await onChangedRef.current?.();
 		} catch (error) {
@@ -167,7 +229,7 @@ export const DeployFreezeControl = ({
 	const handleResumeFromPopover = async () => {
 		try {
 			await mutateFreeze({ frozen: false });
-			toast.success("Deploys resumed");
+			toast.success(resumeSuccessMessage());
 			setPopoverOpen(false);
 			await onChangedRef.current?.();
 		} catch (error) {
@@ -202,14 +264,18 @@ export const DeployFreezeControl = ({
 							onClick={handleQuickToggle}
 							className={cn(
 								"rounded-r-none border-r-0 flex items-center gap-1.5 flex-1",
-								isFrozen &&
+								isEffectivelyFrozen &&
 									"border-amber-500/60 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300",
 							)}
 						>
-							{isFrozen ? (
+							{hasOwnFreeze ? (
 								<>
 									<PlayCircle className="size-4 shrink-0" />
-									<span>Deploys Frozen</span>
+									<span>
+										{serviceType === "environment"
+											? "Environment Frozen"
+											: "Deploys Frozen"}
+									</span>
 									<Badge
 										variant="outline"
 										className="ml-1 border-amber-500/50 text-[11px] font-normal px-1.5 py-0"
@@ -217,19 +283,36 @@ export const DeployFreezeControl = ({
 										{formatShortExpiryBadge(deployFreeze?.expiresAt ?? null)}
 									</Badge>
 								</>
+							) : hasInheritedFreeze ? (
+								<>
+									<Snowflake className="size-4 shrink-0" />
+									<span>Frozen (Env)</span>
+									<Badge
+										variant="outline"
+										className="ml-1 border-amber-500/50 text-[11px] font-normal px-1.5 py-0"
+									>
+										{formatShortExpiryBadge(inheritedFreeze?.expiresAt ?? null)}
+									</Badge>
+								</>
 							) : (
 								<>
 									<Snowflake className="size-4 shrink-0" />
-									<span>Freeze Deploys</span>
+									<span>
+										{serviceType === "environment"
+											? "Freeze Environment"
+											: "Freeze Deploys"}
+									</span>
 								</>
 							)}
 						</Button>
 					</TooltipTrigger>
 					<TooltipContent sideOffset={5} className="z-60 max-w-xs text-xs">
-						{isFrozen && deployFreeze ? (
+						{hasOwnFreeze && deployFreeze ? (
 							<div className="space-y-1">
 								<p className="font-medium">
-									Automated deploys are frozen{" "}
+									{serviceType === "environment"
+										? "Environment automated deploys are frozen "
+										: "Automated deploys are frozen "}
 									{deployFreeze.expiresAt
 										? `until ${new Date(deployFreeze.expiresAt).toLocaleString()}`
 										: "until resumed manually"}
@@ -239,8 +322,43 @@ export const DeployFreezeControl = ({
 								{deployFreeze.skippedCount > 0 && (
 									<p>{deployFreeze.skippedCount} skipped while frozen</p>
 								)}
-								<p>Click to resume automated deploys.</p>
+								{hasInheritedFreeze && (
+									<p>
+										Parent environment
+										{environmentName ? ` (${environmentName})` : ""} is also
+										frozen.
+									</p>
+								)}
+								<p>
+									{hasInheritedFreeze
+										? "Click to lift the service-level freeze (environment freeze remains active)."
+										: "Click to resume automated deploys."}
+								</p>
 							</div>
+						) : hasInheritedFreeze && inheritedFreeze ? (
+							<div className="space-y-1">
+								<p className="font-medium">
+									Deploys are frozen at the environment level
+									{environmentName ? ` (${environmentName})` : ""}{" "}
+									{inheritedFreeze.expiresAt
+										? `until ${new Date(inheritedFreeze.expiresAt).toLocaleString()}`
+										: "until resumed manually"}
+									.
+								</p>
+								{inheritedFreeze.reason && (
+									<p>Reason: {inheritedFreeze.reason}</p>
+								)}
+								{inheritedFreeze.skippedCount > 0 && (
+									<p>{inheritedFreeze.skippedCount} skipped while frozen</p>
+								)}
+								<p>Click to add an independent service-level freeze.</p>
+							</div>
+						) : serviceType === "environment" ? (
+							<p>
+								Block automated webhook and API deploys for all services in this
+								environment while leaving manual panel deploys available with
+								confirmation.
+							</p>
 						) : (
 							<p>
 								Block automated webhook and API deploys while leaving manual
@@ -271,7 +389,7 @@ export const DeployFreezeControl = ({
 						aria-label="Configure deploy freeze options"
 						className={cn(
 							"rounded-l-none px-2",
-							isFrozen &&
+							isEffectivelyFrozen &&
 								"border-amber-500/60 bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-300",
 						)}
 					>
@@ -281,10 +399,20 @@ export const DeployFreezeControl = ({
 				<PopoverContent align="end" className="w-80 space-y-3">
 					<div className="space-y-1">
 						<p className="text-sm font-medium">
-							{isFrozen ? "Update deploy freeze" : "Freeze deployments"}
+							{hasOwnFreeze
+								? serviceType === "environment"
+									? "Update environment freeze"
+									: "Update deploy freeze"
+								: hasInheritedFreeze
+									? "Add service deploy freeze"
+									: serviceType === "environment"
+										? "Freeze environment deployments"
+										: "Freeze deployments"}
 						</p>
 						<p className="text-xs text-muted-foreground">
-							Select a freeze duration and optional reason.
+							{hasInheritedFreeze && !hasOwnFreeze
+								? "This service is already frozen by its parent environment. Adding a service freeze keeps it frozen even if the environment is unfrozen."
+								: "Select a freeze duration and optional reason."}
 						</p>
 					</div>
 
@@ -321,7 +449,7 @@ export const DeployFreezeControl = ({
 					</div>
 
 					<div className="flex items-center justify-end gap-2 pt-1">
-						{isFrozen && (
+						{hasOwnFreeze && (
 							<Button
 								type="button"
 								size="sm"
@@ -338,7 +466,7 @@ export const DeployFreezeControl = ({
 							disabled={isPending}
 							onClick={handlePopoverSubmit}
 						>
-							{isFrozen ? "Update freeze" : "Freeze"}
+							{hasOwnFreeze ? "Update freeze" : "Freeze"}
 						</Button>
 					</div>
 				</PopoverContent>

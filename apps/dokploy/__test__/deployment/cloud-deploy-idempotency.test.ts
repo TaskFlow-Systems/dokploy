@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
 	getComposeContainer: vi.fn(),
 	getContainerLogs: vi.fn(),
 	getContainersByAppNameMatch: vi.fn(),
+	getEffectiveDeploymentFreeze: vi.fn(),
 	getWebServerSettings: vi.fn(),
 	loadServices: vi.fn(),
 	markDeploymentOperationDispatched: vi.fn(),
@@ -45,6 +46,7 @@ const mocks = vi.hoisted(() => ({
 	rebuildApplication: vi.fn(),
 	rebuildCompose: vi.fn(),
 	rebuildPreviewApplication: vi.fn(),
+	recordSkippedEffectiveDeploymentFreeze: vi.fn(),
 	removeCompose: vi.fn(),
 	removeComposeDirectory: vi.fn(),
 	removeDeploymentsByComposeId: vi.fn(),
@@ -135,14 +137,23 @@ vi.mock("@dokploy/server/services/permission", () => ({
 	checkServiceAccess: vi.fn(),
 	checkServicePermissionAndAccess: routerMocks.checkServicePermissionAndAccess,
 	findMemberByUserId: vi.fn(),
+	hasPermission: vi.fn(async () => true),
 }));
 vi.mock("@dokploy/server/services/deployment-freeze", () => ({
 	assertDeploymentNotFrozen: vi.fn(async () => null),
 	deleteDeploymentFreezesForScope: vi.fn(async () => undefined),
+	deleteDeploymentFreezesForScopes: vi.fn(async () => undefined),
 	formatUserActorLabel: vi.fn(async () => null),
 	getActiveDeploymentFreeze: vi.fn(async () => null),
 	getActiveDeploymentFreezesByIds: vi.fn(async () => new Map()),
+	getEffectiveDeploymentFreeze: vi.fn(async () => ({
+		effective: null,
+		serviceFreeze: null,
+		environmentFreeze: null,
+		environmentId: null,
+	})),
 	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+	recordSkippedEffectiveDeploymentFreeze: vi.fn(async () => undefined),
 	setDeploymentFreeze: vi.fn(async () => null),
 }));
 vi.mock("@/server/api/utils/audit", () => ({ audit: routerMocks.audit }));
@@ -187,6 +198,13 @@ const createCaller = () =>
 describe("exact deployment worker claim", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		mocks.getEffectiveDeploymentFreeze.mockResolvedValue({
+			effective: null,
+			serviceFreeze: null,
+			environmentFreeze: null,
+			environmentId: null,
+		});
+		mocks.recordSkippedEffectiveDeploymentFreeze.mockResolvedValue(undefined);
 	});
 
 	it("does not execute a duplicate local or cloud delivery when claim is false", async () => {
