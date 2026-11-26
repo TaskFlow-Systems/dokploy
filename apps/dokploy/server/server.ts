@@ -18,6 +18,7 @@ import {
 	sendDokployRestartNotifications,
 	setupDirectories,
 	startDiskHistorySampler,
+	startTraefikAfterFailedBoot,
 } from "@dokploy/server";
 import { warnAboutInterruptedTraefikDeletion } from "@dokploy/server/services/domain-overview";
 import { notifyInBackground } from "@dokploy/server/utils/notifications/background";
@@ -140,6 +141,9 @@ void app.prepare().then(async () => {
 			await initializeNetwork();
 			await restoreInterruptedTraefik().catch((error) => {
 				console.error("Failed to restore Traefik:", error);
+			});
+			await startTraefikAfterFailedBoot().catch((error) => {
+				console.error("Failed to start Traefik:", error);
 			});
 			await initCronJobs();
 			await initSchedules();
