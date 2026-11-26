@@ -153,10 +153,20 @@ jobs:
       pull-requests: write
       actions: write
     steps:
+      - name: Mint GitHub App token for PR
+        id: app-token
+        if: vars.BOT_APP_CLIENT_ID != ''
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.BOT_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token || github.token }}
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: pins-auto-update
@@ -341,67 +351,39 @@ jobs:
           pushed_sha="$(git rev-parse HEAD)"
           echo "pushed_sha=$pushed_sha" >> "$GITHUB_OUTPUT"
           echo "action=pushed" >> "$GITHUB_OUTPUT"
-      - name: PR and checks of the branch
+      - name: PR of the branch
+        id: pr_update
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         env:
           ACTION: ${{ steps.branch.outputs.action }}
-          PUSHED_SHA: ${{ steps.branch.outputs.pushed_sha }}
           PR: ${{ steps.pr.outputs.number }}
-          IS_REDISPATCH: ${{ inputs.redispatch == true && 'true' || 'false' }}
+          HAS_APP_TOKEN: ${{ steps.app-token.outputs.token != '' && 'true' || 'false' }}
         with:
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
           script: |
             const fs = require('node:fs');
-            const { setTimeout } = require('node:timers/promises');
             const {
               ACTION: action,
               BRANCH: branch,
               BASE: base,
-              CI_WORKFLOWS: ciWorkflows,
-              PUSHED_SHA: pushedSha,
               RUNNER_TEMP: tmp,
-              IS_REDISPATCH: isRedispatch,
+              HAS_APP_TOKEN: hasAppToken,
             } = process.env;
             const repo = context.repo;
             let pr = process.env.PR ? Number(process.env.PR) : null;
             const summary = (text) => core.summary.addRaw(`${text}\n`).write();
 
+            if (action === 'redispatch') {
+              return;
+            }
             if (action === 'skip') {
               await summary(`PR #${pr}: the branch has commits of others, not rebuilt.`);
               return;
             }
             if (action === 'workflow_perm') {
-              const msg = `Push to branch ${branch} rejected: GITHUB_TOKEN lacks workflows permission (or server refused .github/workflows/ modification).`;
+              const msg = `Push to branch ${branch} rejected: token lacks workflows permission (or server refused .github/workflows/ modification).`;
               await summary(msg);
               core.setFailed(msg);
-              return;
-            }
-            if (action === 'redispatch') {
-              if (isRedispatch === 'true') {
-                await summary(`Branch ${base} changed again during redispatch; deferred to next scheduled run to avoid loops.`);
-                return;
-              }
-              const { data } = await github.rest.actions.listWorkflowRuns({
-                ...repo,
-                workflow_id: 'pins-auto-update.yml',
-                per_page: 20,
-              });
-              const activeStatuses = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
-              const already = (data.workflow_runs || []).some(
-                (r) => r.id !== context.runId && activeStatuses.has(r.status) && r.head_branch === base
-              );
-              if (already) {
-                await summary(`Branch ${base} updated pin files during update, and an active pins-auto-update.yml run already exists.`);
-                return;
-              }
-              await github.rest.actions.createWorkflowDispatch({
-                ...repo,
-                workflow_id: 'pins-auto-update.yml',
-                ref: base,
-                inputs: {
-                  redispatch: 'true',
-                },
-              });
-              await summary(`Branch ${base} updated pin files during update; redispatched pins-auto-update.yml on ${base}.`);
               return;
             }
             if (action === 'close') {
@@ -442,27 +424,88 @@ jobs:
                 return;
               }
             }
-            if (action === 'pushed') {
-              if (pushedSha) {
-                let propagated = false;
-                for (let attempt = 0; attempt < 4; attempt += 1) {
-                  await setTimeout(attempt === 0 ? 3000 : 2000);
-                  try {
-                    const { data: refData } = await github.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
-                    if (refData && refData.object && refData.object.sha === pushedSha) {
-                      propagated = true;
-                      break;
-                    }
-                  } catch (refErr) {
-                    core.info(`Waiting for ref ${branch}: ${refErr.message}`);
+            core.setOutput('pr_number', pr ? String(pr) : '');
+            if (action === 'pushed' && hasAppToken !== 'true') {
+              core.setOutput('needs_dispatch', 'true');
+              return;
+            }
+            await summary(
+              pr
+                ? `PR #${pr}: ${action === 'pushed' ? 'branch updated via GitHub App, pull_request checks will run automatically' : 'branch unchanged, description updated'}.`
+                : `Branch ${branch} updated, no PR.`
+            );
+      - name: Redispatch or fallback workflow_dispatch
+        if: steps.branch.outputs.action == 'redispatch' || steps.pr_update.outputs.needs_dispatch == 'true'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          ACTION: ${{ steps.branch.outputs.action }}
+          PUSHED_SHA: ${{ steps.branch.outputs.pushed_sha }}
+          PR: ${{ steps.pr_update.outputs.pr_number || steps.pr.outputs.number }}
+          IS_REDISPATCH: ${{ inputs.redispatch == true && 'true' || 'false' }}
+        with:
+          script: |
+            const { setTimeout } = require('node:timers/promises');
+            const {
+              ACTION: action,
+              BRANCH: branch,
+              BASE: base,
+              CI_WORKFLOWS: ciWorkflows,
+              PUSHED_SHA: pushedSha,
+              IS_REDISPATCH: isRedispatch,
+            } = process.env;
+            const repo = context.repo;
+            const pr = process.env.PR ? Number(process.env.PR) : null;
+            const summary = (text) => core.summary.addRaw(`${text}\n`).write();
+
+            if (action === 'redispatch') {
+              if (isRedispatch === 'true') {
+                await summary(`Branch ${base} changed again during redispatch; deferred to next scheduled run to avoid loops.`);
+                return;
+              }
+              const { data } = await github.rest.actions.listWorkflowRuns({
+                ...repo,
+                workflow_id: 'pins-auto-update.yml',
+                per_page: 20,
+              });
+              const activeStatuses = new Set(['queued', 'in_progress', 'waiting', 'requested', 'pending']);
+              const already = (data.workflow_runs || []).some(
+                (r) => r.id !== context.runId && activeStatuses.has(r.status) && r.head_branch === base
+              );
+              if (already) {
+                await summary(`Branch ${base} updated pin files during update, and an active pins-auto-update.yml run already exists.`);
+                return;
+              }
+              await github.rest.actions.createWorkflowDispatch({
+                ...repo,
+                workflow_id: 'pins-auto-update.yml',
+                ref: base,
+                inputs: {
+                  redispatch: 'true',
+                },
+              });
+              await summary(`Branch ${base} updated pin files during update; redispatched pins-auto-update.yml on ${base}.`);
+              return;
+            }
+
+            if (pushedSha) {
+              let propagated = false;
+              for (let attempt = 0; attempt < 4; attempt += 1) {
+                await setTimeout(attempt === 0 ? 3000 : 2000);
+                try {
+                  const { data: refData } = await github.rest.git.getRef({ ...repo, ref: `heads/${branch}` });
+                  if (refData && refData.object && refData.object.sha === pushedSha) {
+                    propagated = true;
+                    break;
                   }
-                }
-                if (!propagated) {
-                  throw new Error(`ref ${branch} did not confirm SHA ${pushedSha} within 9s after git push.`);
+                } catch (refErr) {
+                  core.info(`Waiting for ref ${branch}: ${refErr.message}`);
                 }
               }
-              for (const workflow of ciWorkflows.split(/\s+/).filter(Boolean)) {
-                await github.rest.actions.createWorkflowDispatch({ ...repo, workflow_id: workflow, ref: branch });
+              if (!propagated) {
+                throw new Error(`ref ${branch} did not confirm SHA ${pushedSha} within 9s after git push.`);
               }
             }
-            await summary(pr ? `PR #${pr}: ${action === 'pushed' ? `branch updated, started ${ciWorkflows}` : 'branch unchanged, description updated'}.` : `Branch ${branch} updated, no PR.`);
+            for (const workflow of ciWorkflows.split(/\s+/).filter(Boolean)) {
+              await github.rest.actions.createWorkflowDispatch({ ...repo, workflow_id: workflow, ref: branch });
+            }
+            await summary(pr ? `PR #${pr}: branch updated, started fallback workflow_dispatch: ${ciWorkflows}.` : `Branch ${branch} updated, no PR.`);
