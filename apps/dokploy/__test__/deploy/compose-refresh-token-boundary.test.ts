@@ -63,6 +63,11 @@ vi.mock("@/server/utils/deploy", () => ({
 	deploy: vi.fn(),
 }));
 
+vi.mock("@dokploy/server/services/deployment-freeze", () => ({
+	getActiveDeploymentFreeze: vi.fn(async () => null),
+	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+}));
+
 const { default: composeDeployHandler } = await import(
 	"../../pages/api/deploy/compose/[refreshToken]"
 );

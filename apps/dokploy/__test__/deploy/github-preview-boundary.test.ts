@@ -96,6 +96,11 @@ vi.mock("@/server/utils/deploy", () => ({
 	deploy: vi.fn(),
 }));
 
+vi.mock("@dokploy/server/services/deployment-freeze", () => ({
+	getActiveDeploymentFreeze: vi.fn(async () => null),
+	recordSkippedDeploymentFreeze: vi.fn(async () => undefined),
+}));
+
 vi.mock("../../pages/api/deploy/[refreshToken]", () => ({
 	extractCommitMessage: vi.fn(() => "Preview Deployment"),
 	extractHash: vi.fn(() => "sha-preview"),

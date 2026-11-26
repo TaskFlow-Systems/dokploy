@@ -16,6 +16,7 @@ export type DeploymentQueueJob =
 			type: "deploy" | "redeploy";
 			applicationType: "application";
 			serverId: string;
+			bypassFreeze?: boolean;
 	  }
 	| {
 			composeId: string;
@@ -25,6 +26,7 @@ export type DeploymentQueueJob =
 			type: "deploy" | "redeploy";
 			applicationType: "compose";
 			serverId: string;
+			bypassFreeze?: boolean;
 	  }
 	| {
 			composeId: string;
@@ -36,6 +38,7 @@ export type DeploymentQueueJob =
 			serverId: string;
 			operationId: string;
 			expectedRevision: string;
+			bypassFreeze?: boolean;
 	  }
 	| {
 			applicationId: string;

@@ -10,6 +10,11 @@ import {
 	shouldDeploy,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
+import {
+	getActiveDeploymentFreeze,
+	recordSkippedDeploymentFreeze,
+} from "@dokploy/server/services/deployment-freeze";
+import { DEPLOY_FROZEN_CODE } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { Webhooks } from "@octokit/webhooks";
 import { and, eq } from "drizzle-orm";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -22,6 +27,34 @@ import {
 	extractHash,
 	logWebhookError,
 } from "./[refreshToken]";
+
+const enqueueGithubDeployJob = async (
+	scopeType: "application" | "compose",
+	scopeId: string,
+	serverId: string | null | undefined,
+	jobData: DeploymentJob,
+): Promise<"deployed" | "skipped"> => {
+	const activeFreeze = await getActiveDeploymentFreeze(scopeType, scopeId);
+	if (activeFreeze) {
+		await recordSkippedDeploymentFreeze(scopeType, scopeId, "webhook");
+		return "skipped";
+	}
+	if (IS_CLOUD && serverId) {
+		deploy(jobData).catch((error) => {
+			console.error("Background deployment failed:", error);
+		});
+		return "deployed";
+	}
+	await myQueue.add(
+		"deployments",
+		{ ...jobData },
+		{
+			removeOnComplete: true,
+			removeOnFail: true,
+		},
+	);
+	return "deployed";
+};
 
 export const hasSensitivePreviewConfiguration = (application: {
 	previewEnv?: string | null;
@@ -156,6 +189,9 @@ export default async function handler(
 				),
 			});
 
+			let deployedCount = 0;
+			let skippedFrozenCount = 0;
+
 			for (const app of apps) {
 				const jobData: DeploymentJob = {
 					applicationId: app.applicationId as string,
@@ -167,20 +203,17 @@ export default async function handler(
 					serverId: app.serverId ?? undefined,
 				};
 
-				if (IS_CLOUD && app.serverId) {
-					deploy(jobData).catch((error) => {
-						console.error("Background deployment failed:", error);
-					});
-					continue;
-				}
-				await myQueue.add(
-					"deployments",
-					{ ...jobData },
-					{
-						removeOnComplete: true,
-						removeOnFail: true,
-					},
+				const outcome = await enqueueGithubDeployJob(
+					"application",
+					app.applicationId as string,
+					app.serverId,
+					jobData,
 				);
+				if (outcome === "skipped") {
+					skippedFrozenCount++;
+				} else {
+					deployedCount++;
+				}
 			}
 
 			// Find compose apps configured to deploy on tag
@@ -206,21 +239,17 @@ export default async function handler(
 					serverId: composeApp.serverId ?? undefined,
 				};
 
-				if (IS_CLOUD && composeApp.serverId) {
-					deploy(jobData).catch((error) => {
-						console.error("Background deployment failed:", error);
-					});
-					continue;
-				}
-
-				await myQueue.add(
-					"deployments",
-					{ ...jobData },
-					{
-						removeOnComplete: true,
-						removeOnFail: true,
-					},
+				const outcome = await enqueueGithubDeployJob(
+					"compose",
+					composeApp.composeId as string,
+					composeApp.serverId,
+					jobData,
 				);
+				if (outcome === "skipped") {
+					skippedFrozenCount++;
+				} else {
+					deployedCount++;
+				}
 			}
 
 			const totalApps = apps.length + composeApps.length;
@@ -229,6 +258,26 @@ export default async function handler(
 				res
 					.status(200)
 					.json({ message: "No apps configured to deploy on tag" });
+				return;
+			}
+
+			if (deployedCount === 0 && skippedFrozenCount > 0) {
+				res.status(200).json({
+					skipped: true,
+					code: DEPLOY_FROZEN_CODE,
+					message: "Deployments skipped: matching services are frozen",
+					deployedCount: 0,
+					skippedFrozenCount,
+				});
+				return;
+			}
+
+			if (deployedCount > 0 && skippedFrozenCount > 0) {
+				res.status(200).json({
+					message: `Deployed ${deployedCount} apps (${skippedFrozenCount} skipped due to deploy freeze)`,
+					deployedCount,
+					skippedFrozenCount,
+				});
 				return;
 			}
 
@@ -269,6 +318,9 @@ export default async function handler(
 				),
 			});
 
+			let deployedCount = 0;
+			let skippedFrozenCount = 0;
+
 			for (const app of apps) {
 				const jobData: DeploymentJob = {
 					applicationId: app.applicationId as string,
@@ -289,20 +341,17 @@ export default async function handler(
 					continue;
 				}
 
-				if (IS_CLOUD && app.serverId) {
-					deploy(jobData).catch((error) => {
-						console.error("Background deployment failed:", error);
-					});
-					continue;
-				}
-				await myQueue.add(
-					"deployments",
-					{ ...jobData },
-					{
-						removeOnComplete: true,
-						removeOnFail: true,
-					},
+				const outcome = await enqueueGithubDeployJob(
+					"application",
+					app.applicationId as string,
+					app.serverId,
+					jobData,
 				);
+				if (outcome === "skipped") {
+					skippedFrozenCount++;
+				} else {
+					deployedCount++;
+				}
 			}
 
 			const composeApps = await db.query.compose.findMany({
@@ -336,21 +385,18 @@ export default async function handler(
 				if (!shouldDeployPaths) {
 					continue;
 				}
-				if (IS_CLOUD && composeApp.serverId) {
-					deploy(jobData).catch((error) => {
-						console.error("Background deployment failed:", error);
-					});
-					continue;
-				}
 
-				await myQueue.add(
-					"deployments",
-					{ ...jobData },
-					{
-						removeOnComplete: true,
-						removeOnFail: true,
-					},
+				const outcome = await enqueueGithubDeployJob(
+					"compose",
+					composeApp.composeId as string,
+					composeApp.serverId,
+					jobData,
 				);
+				if (outcome === "skipped") {
+					skippedFrozenCount++;
+				} else {
+					deployedCount++;
+				}
 			}
 
 			const totalApps = apps.length + composeApps.length;
@@ -358,6 +404,24 @@ export default async function handler(
 
 			if (emptyApps) {
 				res.status(200).json({ message: "No apps to deploy" });
+				return;
+			}
+			if (deployedCount === 0 && skippedFrozenCount > 0) {
+				res.status(200).json({
+					skipped: true,
+					code: DEPLOY_FROZEN_CODE,
+					message: "Deployments skipped: matching services are frozen",
+					deployedCount: 0,
+					skippedFrozenCount,
+				});
+				return;
+			}
+			if (deployedCount > 0 && skippedFrozenCount > 0) {
+				res.status(200).json({
+					message: `Deployed ${deployedCount} apps (${skippedFrozenCount} skipped due to deploy freeze)`,
+					deployedCount,
+					skippedFrozenCount,
+				});
 				return;
 			}
 			res.status(200).json({ message: `Deployed ${totalApps} apps` });

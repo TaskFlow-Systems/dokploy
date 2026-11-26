@@ -1,5 +1,7 @@
 // No db/schema imports here — client components import this file directly, and dockerode/ssh2 (child_process) would break the browser bundle.
 
+import type { OverviewDeployFreeze } from "../utils/deployments/deploy-freeze-shared";
+
 export type OverviewServiceType =
 	| "application"
 	| "postgres"
@@ -25,6 +27,7 @@ export interface OverviewService {
 	environmentId: string;
 	environmentName: string;
 	lastDeployAt: string | null;
+	deployFreeze?: OverviewDeployFreeze | null;
 }
 
 export type OverviewSortBy =

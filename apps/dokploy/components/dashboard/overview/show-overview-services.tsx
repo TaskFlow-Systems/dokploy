@@ -20,6 +20,7 @@ import { DB_ENGINE_ICONS } from "@/components/icons/data-tools-icons";
 import { DateTooltip } from "@/components/shared/date-tooltip";
 import { DialogAction } from "@/components/shared/dialog-action";
 import { StatusTooltip } from "@/components/shared/status-tooltip";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -45,6 +46,12 @@ import {
 	TableHeader,
 	TableRow,
 } from "@/components/ui/table";
+import {
+	Tooltip,
+	TooltipContent,
+	TooltipProvider,
+	TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { useSortPreference } from "@/hooks/use-sort-preference";
 import { api } from "@/utils/api";
 
@@ -177,9 +184,17 @@ export const ShowOverviewServices = () => {
 					}
 				: { loading: "Stopping", success: "stopped", error: "stopping" };
 
+		const forceDeploy =
+			action === "deploy" &&
+			(service.type === "application" || service.type === "compose") &&
+			Boolean(service.deployFreeze);
+
 		toast.promise(
 			(async () => {
-				await actions[action].mutateAsync({ [idKey]: service.id });
+				await actions[action].mutateAsync({
+					[idKey]: service.id,
+					...(forceDeploy ? { force: true } : {}),
+				});
 			})(),
 			{
 				loading: `${labels.loading} ${service.name}...`,
@@ -187,8 +202,10 @@ export const ShowOverviewServices = () => {
 					utils.overview.services.invalidate();
 					return `${service.name} ${labels.success} successfully`;
 				},
-				error: (error) =>
-					`Error ${labels.error} ${service.name}: ${error instanceof Error ? error.message : "Unknown error"}`,
+				error: (error) => {
+					utils.overview.services.invalidate();
+					return `Error ${labels.error} ${service.name}: ${error instanceof Error ? error.message : "Unknown error"}`;
+				},
 			},
 		);
 	};
@@ -419,10 +436,42 @@ export const ShowOverviewServices = () => {
 											</TableCell>
 											<TableCell>{TYPE_LABELS[service.type]}</TableCell>
 											<TableCell>
-												<StatusTooltip
-													status={service.status as any}
-													className="size-2.5"
-												/>
+												<div className="flex items-center gap-2">
+													<StatusTooltip
+														status={service.status as any}
+														className="size-2.5"
+													/>
+													{(service.type === "application" ||
+														service.type === "compose") &&
+														service.deployFreeze && (
+															<TooltipProvider delayDuration={0}>
+																<Tooltip>
+																	<TooltipTrigger asChild>
+																		<Badge variant="yellow">Frozen</Badge>
+																	</TooltipTrigger>
+																	<TooltipContent className="max-w-xs text-xs">
+																		<p className="font-medium">
+																			Deploys frozen{" "}
+																			{service.deployFreeze.expiresAt
+																				? `until ${new Date(service.deployFreeze.expiresAt).toLocaleString()}`
+																				: "until resumed manually"}
+																		</p>
+																		{service.deployFreeze.reason && (
+																			<p>
+																				Reason: {service.deployFreeze.reason}
+																			</p>
+																		)}
+																		{service.deployFreeze.skippedCount > 0 && (
+																			<p>
+																				{service.deployFreeze.skippedCount}{" "}
+																				skipped while frozen
+																			</p>
+																		)}
+																	</TooltipContent>
+																</Tooltip>
+															</TooltipProvider>
+														)}
+												</div>
 											</TableCell>
 											<TableCell>
 												<div className="flex items-center gap-1.5 text-muted-foreground">
@@ -457,7 +506,23 @@ export const ShowOverviewServices = () => {
 															</DropdownMenuLabel>
 															<DialogAction
 																title="Deploy Service"
-																description={`Are you sure you want to deploy "${service.name}"?`}
+																description={
+																	(service.type === "application" ||
+																		service.type === "compose") &&
+																	service.deployFreeze ? (
+																		<span>
+																			Are you sure you want to deploy "
+																			{service.name}"?{" "}
+																			<span className="font-medium text-amber-600 dark:text-amber-400">
+																				Deploys are currently frozen —
+																				confirming will run a forced deploy
+																				without unfreezing.
+																			</span>
+																		</span>
+																	) : (
+																		`Are you sure you want to deploy "${service.name}"?`
+																	)
+																}
 																type="default"
 																onClick={() => handleAction(service, "deploy")}
 															>

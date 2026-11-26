@@ -12,6 +12,10 @@ import {
 	updateCompose,
 	updatePreviewDeployment,
 } from "@dokploy/server";
+import {
+	getActiveDeploymentFreeze,
+	recordSkippedDeploymentFreeze,
+} from "@dokploy/server/services/deployment-freeze";
 import type { InMemoryJob } from "./in-memory-queue";
 
 /**
@@ -21,6 +25,20 @@ import type { InMemoryJob } from "./in-memory-queue";
 export const processDeploymentJob = async (job: InMemoryJob) => {
 	try {
 		if (job.data.applicationType === "application") {
+			if (!job.data.bypassFreeze) {
+				const activeFreeze = await getActiveDeploymentFreeze(
+					"application",
+					job.data.applicationId,
+				);
+				if (activeFreeze) {
+					await recordSkippedDeploymentFreeze(
+						"application",
+						job.data.applicationId,
+						"queue",
+					);
+					return;
+				}
+			}
 			await updateApplicationStatus(job.data.applicationId, "running");
 
 			if (job.data.type === "redeploy") {
@@ -37,6 +55,29 @@ export const processDeploymentJob = async (job: InMemoryJob) => {
 				});
 			}
 		} else if (job.data.applicationType === "compose") {
+			if (!job.data.bypassFreeze) {
+				const activeFreeze = await getActiveDeploymentFreeze(
+					"compose",
+					job.data.composeId,
+				);
+				if (activeFreeze) {
+					await recordSkippedDeploymentFreeze(
+						"compose",
+						job.data.composeId,
+						"queue",
+					);
+					if (job.data.operationId) {
+						const claimed = await claimDeploymentOperation(
+							job.data.composeId,
+							job.data.operationId,
+						);
+						if (claimed) {
+							await finalizeDeploymentOperation(job.data.operationId, "failed");
+						}
+					}
+					return;
+				}
+			}
 			if (job.data.operationId) {
 				const claimed = await claimDeploymentOperation(
 					job.data.composeId,

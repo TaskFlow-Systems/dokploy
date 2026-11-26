@@ -20,6 +20,8 @@ import {
 } from "@dokploy/server/db/schema";
 import { and, desc, eq, inArray, isNull, max, or } from "drizzle-orm";
 import type { AnyPgColumn } from "drizzle-orm/pg-core";
+import { toOverviewDeployFreeze } from "../utils/deployments/deploy-freeze-shared";
+import { getActiveDeploymentFreezesByIds } from "./deployment-freeze";
 import type {
 	OverviewBackup,
 	OverviewDomain,
@@ -100,6 +102,7 @@ async function getServicesOfType(
 		icon: "icon" in row ? (row.icon as string | null) : null,
 		type: config.type,
 		lastDeployAt: null,
+		deployFreeze: null,
 	}));
 }
 
@@ -162,8 +165,8 @@ const SERVICE_TYPE_CONFIGS: TypeQueryConfig[] = [
 	},
 ];
 
-// Only application/compose have a deployments FK, so lastDeployAt only applies to those.
-async function attachLastDeployAt(
+// Only application/compose support deployments and deploy freezes, so populate both in one parallel batch.
+async function attachDeployMetadata(
 	services: OverviewService[],
 ): Promise<OverviewService[]> {
 	const applicationIds = services
@@ -173,28 +176,31 @@ async function attachLastDeployAt(
 		.filter((s) => s.type === "compose")
 		.map((s) => s.id);
 
-	const [appDeploys, composeDeploys] = await Promise.all([
-		applicationIds.length > 0
-			? db
-					.select({
-						applicationId: deployments.applicationId,
-						lastDeployAt: max(deployments.createdAt),
-					})
-					.from(deployments)
-					.where(inArray(deployments.applicationId, applicationIds))
-					.groupBy(deployments.applicationId)
-			: Promise.resolve([]),
-		composeIds.length > 0
-			? db
-					.select({
-						composeId: deployments.composeId,
-						lastDeployAt: max(deployments.createdAt),
-					})
-					.from(deployments)
-					.where(inArray(deployments.composeId, composeIds))
-					.groupBy(deployments.composeId)
-			: Promise.resolve([]),
-	]);
+	const [appDeploys, composeDeploys, appFreezes, composeFreezes] =
+		await Promise.all([
+			applicationIds.length > 0
+				? db
+						.select({
+							applicationId: deployments.applicationId,
+							lastDeployAt: max(deployments.createdAt),
+						})
+						.from(deployments)
+						.where(inArray(deployments.applicationId, applicationIds))
+						.groupBy(deployments.applicationId)
+				: Promise.resolve([]),
+			composeIds.length > 0
+				? db
+						.select({
+							composeId: deployments.composeId,
+							lastDeployAt: max(deployments.createdAt),
+						})
+						.from(deployments)
+						.where(inArray(deployments.composeId, composeIds))
+						.groupBy(deployments.composeId)
+				: Promise.resolve([]),
+			getActiveDeploymentFreezesByIds("application", applicationIds),
+			getActiveDeploymentFreezesByIds("compose", composeIds),
+		]);
 
 	const lastAppDeploy = new Map<string, string>();
 	for (const row of appDeploys) {
@@ -214,12 +220,14 @@ async function attachLastDeployAt(
 			return {
 				...service,
 				lastDeployAt: lastAppDeploy.get(service.id) ?? null,
+				deployFreeze: toOverviewDeployFreeze(appFreezes.get(service.id)),
 			};
 		}
 		if (service.type === "compose") {
 			return {
 				...service,
 				lastDeployAt: lastComposeDeploy.get(service.id) ?? null,
+				deployFreeze: toOverviewDeployFreeze(composeFreezes.get(service.id)),
 			};
 		}
 		return service;
@@ -240,7 +248,7 @@ export const getAllServicesForOrganization = async (
 		),
 	);
 
-	return attachLastDeployAt(results.flat());
+	return attachDeployMetadata(results.flat());
 };
 
 type Owner = {

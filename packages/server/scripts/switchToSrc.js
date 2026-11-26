@@ -35,6 +35,14 @@ pkg.exports = {
 		import: "./src/utils/deployments/signed-job.ts",
 		require: "./dist/utils/deployments/signed-job.js",
 	},
+	"./utils/deployments/deploy-freeze-shared": {
+		import: "./src/utils/deployments/deploy-freeze-shared.ts",
+		require: "./dist/utils/deployments/deploy-freeze-shared.js",
+	},
+	"./services/deployment-freeze": {
+		import: "./src/services/deployment-freeze.ts",
+		require: "./dist/services/deployment-freeze.js",
+	},
 };
 
 // Guardar los cambios en package.json

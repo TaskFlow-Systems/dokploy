@@ -7,6 +7,7 @@ type DeployJob =
 			type: "deploy" | "redeploy";
 			applicationType: "application";
 			serverId?: string;
+			bypassFreeze?: boolean;
 	  }
 	| {
 			composeId: string;
@@ -19,6 +20,7 @@ type DeployJob =
 			operationId?: string;
 			expectedRevision?: string;
 			freshVolumes?: boolean;
+			bypassFreeze?: boolean;
 	  }
 	| {
 			applicationId: string;

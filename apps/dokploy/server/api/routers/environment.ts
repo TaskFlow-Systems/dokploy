@@ -8,6 +8,7 @@ import {
 	updateEnvironmentById,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
+import { getActiveDeploymentFreezesByIds } from "@dokploy/server/services/deployment-freeze";
 import { redactGitProviderSecrets } from "@dokploy/server/services/git-provider";
 import {
 	addNewEnvironment,
@@ -18,6 +19,7 @@ import {
 	findMemberByUserId,
 	hasPermission,
 } from "@dokploy/server/services/permission";
+import { toOverviewDeployFreeze } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { environmentHasServices } from "@dokploy/server/utils/environments/has-services";
 import {
 	preserveSecretPlaceholderFields,
@@ -177,6 +179,48 @@ const redactEnvironmentForPermissions = <T extends SecretRecord>(
 	return redactedEnvironment;
 };
 
+const attachEnvironmentDeployFreezes = async <
+	T extends {
+		applications?: Array<{ applicationId: string } & SecretRecord>;
+		compose?: Array<{ composeId: string } & SecretRecord>;
+	},
+>(
+	environment: T,
+): Promise<T> => {
+	const applicationIds = (environment.applications ?? []).map(
+		(app) => app.applicationId,
+	);
+	const composeIds = (environment.compose ?? []).map((comp) => comp.composeId);
+	const [appFreezes, composeFreezes] = await Promise.all([
+		getActiveDeploymentFreezesByIds("application", applicationIds),
+		getActiveDeploymentFreezesByIds("compose", composeIds),
+	]);
+
+	return {
+		...environment,
+		...(Array.isArray(environment.applications)
+			? {
+					applications: environment.applications.map((app) => ({
+						...app,
+						deployFreeze: toOverviewDeployFreeze(
+							appFreezes.get(app.applicationId),
+						),
+					})),
+				}
+			: {}),
+		...(Array.isArray(environment.compose)
+			? {
+					compose: environment.compose.map((comp) => ({
+						...comp,
+						deployFreeze: toOverviewDeployFreeze(
+							composeFreezes.get(comp.composeId),
+						),
+					})),
+				}
+			: {}),
+	};
+};
+
 const filterEnvironmentServices = (
 	environment: any,
 	accessedServices: string[],
@@ -286,20 +330,22 @@ export const environmentRouter = createTRPCRouter({
 				const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
 				const canReadProjectEnv = await canReadProjectEnvVars(ctx);
 
-				return redactEnvironmentForPermissions(
+				const redacted = redactEnvironmentForPermissions(
 					filteredEnvironment,
 					canReadEnvironmentEnv,
 					canReadProjectEnv,
 				);
+				return attachEnvironmentDeployFreezes(redacted);
 			}
 
 			const canReadEnvironmentEnv = await canReadEnvironmentEnvVars(ctx);
 			const canReadProjectEnv = await canReadProjectEnvVars(ctx);
-			return redactEnvironmentForPermissions(
+			const redacted = redactEnvironmentForPermissions(
 				environment,
 				canReadEnvironmentEnv,
 				canReadProjectEnv,
 			);
+			return attachEnvironmentDeployFreezes(redacted);
 		}),
 
 	byProjectId: protectedProcedure

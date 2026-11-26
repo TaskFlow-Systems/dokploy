@@ -20,6 +20,7 @@ import {
 	updateDeploymentStatus,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
+import { assertDeploymentNotFrozen } from "@dokploy/server/services/deployment-freeze";
 import {
 	checkDeploymentLogOwnerAccess,
 	type DeploymentOwnerCandidate,
@@ -31,12 +32,14 @@ import {
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
 import { assertHostScheduleAccess } from "@dokploy/server/services/schedule";
+import { appendForcedFreezeNote } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { getDeploymentLogServerId } from "@dokploy/server/utils/deployments/log-server";
 import { buildKillScheduleRunCommand } from "@dokploy/server/utils/schedules/run-process";
 import { TRPCError } from "@trpc/server";
 import { desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { audit } from "@/server/api/utils/audit";
+import { resolveForcedDeployAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
 import { assertTargetServerAccess } from "@/server/api/utils/placement-access";
 import {
 	apiFindAllByApplication,
@@ -312,16 +315,32 @@ export const deploymentRouter = createTRPCRouter({
 				operation.status !== "running" &&
 				!operation.deploymentId
 			) {
+				const bypassedFreeze = await assertDeploymentNotFrozen({
+					scopeType: "compose",
+					scopeId: input.composeId,
+					force: input.force,
+					source: "api",
+				});
+				const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+					"deployment.reconcile",
+					input.composeId,
+					ctx,
+					bypassedFreeze,
+				);
 				const jobData: DeploymentJob = {
 					composeId: input.composeId,
 					titleLog: "Exact deployment repair",
-					descriptionLog: "Redispatched immutable source recovery deployment",
+					descriptionLog: appendForcedFreezeNote(
+						"Redispatched immutable source recovery deployment",
+						bypassedFreeze,
+					),
 					type: "deploy",
 					applicationType: "compose",
 					server: !!compose.serverId,
 					serverId: compose.serverId ?? undefined,
 					operationId: operation.operationId,
 					expectedRevision: operation.sourceRevision,
+					...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 				};
 				try {
 					if (IS_CLOUD && compose.serverId) {
@@ -345,6 +364,15 @@ export const deploymentRouter = createTRPCRouter({
 						"dispatch_unknown",
 					);
 					queue = { state: "queue-unavailable", reasonCode: "network-error" };
+				}
+				if (forcedAuditMetadata) {
+					await audit(ctx, {
+						action: "deploy",
+						resourceType: "compose",
+						resourceId: input.composeId,
+						resourceName: compose.name,
+						metadata: forcedAuditMetadata,
+					});
 				}
 				operation = await findComposeDeploymentOperation(
 					input.composeId,

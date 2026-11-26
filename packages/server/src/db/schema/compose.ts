@@ -264,6 +264,7 @@ export const apiDeployCompose = z.object({
 	title: z.string().optional(),
 	description: z.string().optional(),
 	freshVolumes: z.boolean().optional(),
+	force: z.boolean().optional(),
 });
 
 export const apiDeployComposeExact = z.object({
@@ -275,6 +276,7 @@ export const apiDeployComposeExact = z.object({
 			"Expected revision must be a full lowercase Git SHA",
 		),
 	idempotencyKey: z.string().min(8).max(200),
+	force: z.boolean().optional(),
 });
 
 export const apiDeployComposeExactResponse = z.object({
@@ -298,6 +300,7 @@ export const apiRedeployCompose = z.object({
 	title: z.string().optional(),
 	description: z.string().optional(),
 	freshVolumes: z.boolean().optional(),
+	force: z.boolean().optional(),
 });
 
 export const apiDeleteCompose = z.object({

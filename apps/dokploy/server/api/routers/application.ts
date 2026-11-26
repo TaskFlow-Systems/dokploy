@@ -38,6 +38,13 @@ import {
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
 import {
+	assertDeploymentNotFrozen,
+	deleteDeploymentFreezesForScope,
+	formatUserActorLabel,
+	getActiveDeploymentFreeze,
+	setDeploymentFreeze,
+} from "@dokploy/server/services/deployment-freeze";
+import {
 	canEditDeployGitSource,
 	redactGitProviderSecrets,
 } from "@dokploy/server/services/git-provider";
@@ -49,6 +56,10 @@ import {
 	checkServicePermissionAndAccess,
 	findMemberByUserId,
 } from "@dokploy/server/services/permission";
+import {
+	appendForcedFreezeNote,
+	toDeployFreezeState,
+} from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { assertCustomGitUrlAllowed } from "@dokploy/server/utils/providers/git";
 import {
 	preserveSecretPlaceholderFields,
@@ -65,8 +76,12 @@ import {
 	protectedProcedure,
 	withPermission,
 } from "@/server/api/trpc";
-import { assertBrowserSession } from "@/server/api/utils/api-key-session";
+import {
+	assertBrowserSession,
+	isApiKeySession,
+} from "@/server/api/utils/api-key-session";
 import { audit } from "@/server/api/utils/audit";
+import { resolveForcedDeployAuditMetadata } from "@/server/api/utils/deploy-freeze-audit";
 import { assertDeploySourceCredentialAccess } from "@/server/api/utils/deploy-source-access";
 import { assertMonitoringAccess } from "@/server/api/utils/monitoring-access";
 import { assertTargetEnvironmentAccess } from "@/server/api/utils/placement-access";
@@ -89,6 +104,8 @@ import {
 	apiSaveGithubProvider,
 	apiSaveGitlabProvider,
 	apiSaveGitProvider,
+	apiSetApplicationDeployFreeze,
+	apiSetDeployFreezeResponse,
 	apiUpdateApplication,
 	apiUpsertApplicationEnv,
 	apiUpsertApplicationEnvResponse,
@@ -454,6 +471,11 @@ export const applicationRouter = createTRPCRouter({
 				}
 			}
 
+			const activeFreeze = await getActiveDeploymentFreeze(
+				"application",
+				input.applicationId,
+			);
+
 			return {
 				...redactDeployableServiceSecretsFor(
 					redactGitProviderSecrets(application),
@@ -461,6 +483,54 @@ export const applicationRouter = createTRPCRouter({
 				),
 				hasGitProviderAccess,
 				unauthorizedProvider,
+				deployFreeze: toDeployFreezeState(activeFreeze, {
+					includeActorLabel: !isApiKeySession(ctx.session),
+				}),
+			};
+		}),
+
+	setDeployFreeze: protectedProcedure
+		.input(apiSetApplicationDeployFreeze)
+		.output(apiSetDeployFreezeResponse)
+		.mutation(async ({ input, ctx }) => {
+			await checkServicePermissionAndAccess(ctx, input.applicationId, {
+				deployment: ["create"],
+			});
+			const application = await findApplicationById(input.applicationId);
+			const authMethod = isApiKeySession(ctx.session) ? "api-key" : "session";
+			const label = input.frozen
+				? await formatUserActorLabel(ctx.user.id, ctx.user.email)
+				: null;
+			const row = await setDeploymentFreeze({
+				scopeType: "application",
+				scopeId: input.applicationId,
+				frozen: input.frozen,
+				durationMinutes: input.durationMinutes,
+				reason: input.reason,
+				actor: {
+					userId: ctx.user.id,
+					label,
+					authMethod,
+				},
+			});
+			await audit(ctx, {
+				action: "update",
+				resourceType: "application",
+				resourceId: application.applicationId,
+				resourceName: application.appName,
+				metadata: {
+					deployFreeze: input.frozen,
+					durationMinutes: input.durationMinutes ?? null,
+					authMethod,
+					apiKeyId: ctx.session.apiKeyId ?? null,
+				},
+			});
+			return {
+				serviceId: input.applicationId,
+				serviceType: "application" as const,
+				deployFreeze: toDeployFreezeState(row, {
+					includeActorLabel: authMethod !== "api-key",
+				}),
 			};
 		}),
 
@@ -536,6 +606,7 @@ export const applicationRouter = createTRPCRouter({
 			await cancelScheduleJobsByOwner({
 				applicationId: input.applicationId,
 			});
+			await deleteDeploymentFreezesForScope("application", input.applicationId);
 
 			const result = await db
 				.delete(applications)
@@ -628,14 +699,30 @@ export const applicationRouter = createTRPCRouter({
 				deployment: ["create"],
 			});
 			const application = await findApplicationById(input.applicationId);
+			const bypassedFreeze = await assertDeploymentNotFrozen({
+				scopeType: "application",
+				scopeId: input.applicationId,
+				force: input.force,
+				source: "api",
+			});
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"application.redeploy",
+				input.applicationId,
+				ctx,
+				bypassedFreeze,
+			);
 			const jobData: DeploymentJob = {
 				applicationId: input.applicationId,
 				titleLog: input.title || "Rebuild deployment",
-				descriptionLog: input.description || "",
+				descriptionLog: appendForcedFreezeNote(
+					input.description,
+					bypassedFreeze,
+				),
 				type: "redeploy",
 				applicationType: "application",
 				server: !!application.serverId,
 				serverId: application.serverId ?? undefined,
+				...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 			};
 
 			if (IS_CLOUD && application.serverId) {
@@ -647,6 +734,7 @@ export const applicationRouter = createTRPCRouter({
 					resourceType: "application",
 					resourceId: application.applicationId,
 					resourceName: application.appName,
+					...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 				});
 				return true;
 			}
@@ -663,6 +751,7 @@ export const applicationRouter = createTRPCRouter({
 				resourceType: "application",
 				resourceId: application.applicationId,
 				resourceName: application.appName,
+				...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 			});
 		}),
 	envUpsert: protectedProcedure
@@ -688,6 +777,22 @@ export const applicationRouter = createTRPCRouter({
 						},
 			);
 
+			const bypassedFreeze =
+				input.redeploy && !input.dryRun
+					? await assertDeploymentNotFrozen({
+							scopeType: "application",
+							scopeId: input.applicationId,
+							force: input.force,
+							source: "api",
+						})
+					: null;
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"application.envUpsert",
+				input.applicationId,
+				ctx,
+				bypassedFreeze,
+			);
+
 			const result = await upsertApplicationEnvironment(input);
 			let redeployed = false;
 
@@ -705,10 +810,14 @@ export const applicationRouter = createTRPCRouter({
 					const jobData: DeploymentJob = {
 						applicationId: input.applicationId,
 						titleLog: "Rebuild deployment",
-						descriptionLog: "Environment variables updated",
+						descriptionLog: appendForcedFreezeNote(
+							"Environment variables updated",
+							bypassedFreeze,
+						),
 						type: "redeploy",
 						applicationType: "application",
 						server: !!application.serverId,
+						...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 					};
 
 					if (IS_CLOUD && application.serverId) {
@@ -732,6 +841,7 @@ export const applicationRouter = createTRPCRouter({
 						resourceType: "application",
 						resourceId: application.applicationId,
 						resourceName: application.appName,
+						...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 					});
 					redeployed = true;
 				}
@@ -1224,14 +1334,30 @@ export const applicationRouter = createTRPCRouter({
 				deployment: ["create"],
 			});
 			const application = await findApplicationById(input.applicationId);
+			const bypassedFreeze = await assertDeploymentNotFrozen({
+				scopeType: "application",
+				scopeId: input.applicationId,
+				force: input.force,
+				source: "api",
+			});
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"application.deploy",
+				input.applicationId,
+				ctx,
+				bypassedFreeze,
+			);
 			const jobData: DeploymentJob = {
 				applicationId: input.applicationId,
 				titleLog: input.title || "Manual deployment",
-				descriptionLog: input.description || "",
+				descriptionLog: appendForcedFreezeNote(
+					input.description,
+					bypassedFreeze,
+				),
 				type: "deploy",
 				applicationType: "application",
 				server: !!application.serverId,
 				serverId: application.serverId ?? undefined,
+				...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 			};
 			if (IS_CLOUD && application.serverId) {
 				deploy(jobData).catch((error) => {
@@ -1242,6 +1368,7 @@ export const applicationRouter = createTRPCRouter({
 					resourceType: "application",
 					resourceId: application.applicationId,
 					resourceName: application.appName,
+					...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 				});
 				return true;
 			}
@@ -1258,6 +1385,7 @@ export const applicationRouter = createTRPCRouter({
 				resourceType: "application",
 				resourceId: application.applicationId,
 				resourceName: application.appName,
+				...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 			});
 		}),
 
@@ -1332,6 +1460,10 @@ export const applicationRouter = createTRPCRouter({
 					.string()
 					.refine(isSafeBuildPath, BUILD_PATH_MESSAGE)
 					.optional(),
+				force: z
+					.enum(["true", "false"])
+					.optional()
+					.transform((value) => value === "true"),
 			}),
 		)
 		.mutation(async ({ input, ctx }) => {
@@ -1347,6 +1479,18 @@ export const applicationRouter = createTRPCRouter({
 				ctx.session,
 			);
 			const app = await findApplicationById(applicationId);
+			const bypassedFreeze = await assertDeploymentNotFrozen({
+				scopeType: "application",
+				scopeId: applicationId,
+				force: input.force,
+				source: "api",
+			});
+			const forcedAuditMetadata = resolveForcedDeployAuditMetadata(
+				"application.dropDeployment",
+				applicationId,
+				ctx,
+				bypassedFreeze,
+			);
 
 			await updateApplication(applicationId, {
 				sourceType: "drop",
@@ -1357,16 +1501,26 @@ export const applicationRouter = createTRPCRouter({
 			const jobData: DeploymentJob = {
 				applicationId: app.applicationId,
 				titleLog: "Manual deployment",
-				descriptionLog: "",
+				descriptionLog: appendForcedFreezeNote("", bypassedFreeze),
 				type: "deploy",
 				applicationType: "application",
 				server: !!app.serverId,
 				serverId: app.serverId ?? undefined,
+				...(bypassedFreeze || input.force ? { bypassFreeze: true } : {}),
 			};
 			if (IS_CLOUD && app.serverId) {
 				deploy(jobData).catch((error) => {
 					console.error("Background deployment failed:", error);
 				});
+				if (forcedAuditMetadata) {
+					await audit(ctx, {
+						action: "deploy",
+						resourceType: "application",
+						resourceId: app.applicationId,
+						resourceName: app.appName,
+						metadata: forcedAuditMetadata,
+					});
+				}
 				return true;
 			}
 
@@ -1383,6 +1537,7 @@ export const applicationRouter = createTRPCRouter({
 				resourceType: "application",
 				resourceId: app.applicationId,
 				resourceName: app.appName,
+				...(forcedAuditMetadata ? { metadata: forcedAuditMetadata } : {}),
 			});
 			return true;
 		}),

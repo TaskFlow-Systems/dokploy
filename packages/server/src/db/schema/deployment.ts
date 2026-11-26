@@ -298,6 +298,7 @@ export const apiReconcileDeployment = z.object({
 	composeId: z.string().min(1),
 	operationId: z.string().min(1),
 	repair: z.boolean().optional().default(false),
+	force: z.boolean().optional(),
 });
 
 export const apiReconcileDeploymentResponse = z.object({

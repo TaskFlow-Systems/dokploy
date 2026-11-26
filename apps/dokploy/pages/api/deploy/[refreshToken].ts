@@ -6,6 +6,11 @@ import {
 	shouldDeploy,
 } from "@dokploy/server";
 import { db } from "@dokploy/server/db";
+import {
+	getActiveDeploymentFreeze,
+	recordSkippedDeploymentFreeze,
+} from "@dokploy/server/services/deployment-freeze";
+import { DEPLOY_FROZEN_CODE } from "@dokploy/server/utils/deployments/deploy-freeze-shared";
 import { Webhooks } from "@octokit/webhooks";
 import { eq } from "drizzle-orm";
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -328,6 +333,25 @@ export default async function handler(
 				},
 			})
 		) {
+			return;
+		}
+
+		const activeFreeze = await getActiveDeploymentFreeze(
+			"application",
+			application.applicationId,
+		);
+		if (activeFreeze) {
+			await recordSkippedDeploymentFreeze(
+				"application",
+				application.applicationId,
+				"webhook",
+			);
+			res.status(200).json({
+				skipped: true,
+				code: DEPLOY_FROZEN_CODE,
+				message: "Deployments are frozen for this service",
+				expiresAt: activeFreeze.expiresAt,
+			});
 			return;
 		}
 
