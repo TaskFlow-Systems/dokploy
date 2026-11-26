@@ -1,7 +1,14 @@
+import {
+	getBackupDownloadUrl,
+	getBackupServerId,
+	listBackupFilesByBackupId,
+	resolveBackupAccess,
+} from "@dokploy/server/utils/backups/files";
 import { ExecError } from "@dokploy/server/utils/process/execAsync";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+	isCloud: false,
 	findBackupById: vi.fn(),
 	findDestinationById: vi.fn(),
 	findServerById: vi.fn(),
@@ -11,6 +18,12 @@ const mocks = vi.hoisted(() => ({
 	execAsyncRemote: vi.fn(),
 }));
 
+vi.mock("@dokploy/server/constants", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@dokploy/server/constants")>()),
+	get IS_CLOUD() {
+		return mocks.isCloud;
+	},
+}));
 vi.mock("@dokploy/server/services/backup", () => ({
 	findBackupById: mocks.findBackupById,
 }));
@@ -57,17 +70,9 @@ const destination = {
 	additionalFlags: [],
 };
 
-const loadModule = async (isCloud: boolean) => {
-	vi.resetModules();
-	vi.doMock("@dokploy/server/constants", async (importOriginal) => ({
-		...(await importOriginal<object>()),
-		IS_CLOUD: isCloud,
-	}));
-	return await import("@dokploy/server/utils/backups/files");
-};
-
 beforeEach(() => {
 	vi.clearAllMocks();
+	mocks.isCloud = false;
 	mocks.findBackupById.mockResolvedValue(baseBackup);
 	mocks.findDestinationById.mockResolvedValue(destination);
 	mocks.findServerById.mockResolvedValue({
@@ -79,8 +84,7 @@ beforeEach(() => {
 });
 
 describe("getBackupServerId", () => {
-	it("returns the serverId of the backed up service", async () => {
-		const { getBackupServerId } = await loadModule(false);
+	it("returns the serverId of the backed up service", () => {
 		const backup = baseBackup as Parameters<typeof getBackupServerId>[0];
 		expect(getBackupServerId(backup)).toBeNull();
 		for (const type of [
@@ -100,7 +104,7 @@ describe("getBackupServerId", () => {
 
 describe("resolveBackupAccess", () => {
 	it("rejects backups without a server on cloud", async () => {
-		const { resolveBackupAccess } = await loadModule(true);
+		mocks.isCloud = true;
 		await expect(resolveBackupAccess(ctx, "backup-1")).rejects.toMatchObject({
 			code: "NOT_FOUND",
 			message: "Server not found",
@@ -108,7 +112,6 @@ describe("resolveBackupAccess", () => {
 	});
 
 	it("rejects a destination from another organization", async () => {
-		const { resolveBackupAccess } = await loadModule(false);
 		mocks.findDestinationById.mockResolvedValue({
 			...destination,
 			organizationId: "org-2",
@@ -120,7 +123,6 @@ describe("resolveBackupAccess", () => {
 	});
 
 	it("rejects a server from another organization", async () => {
-		const { resolveBackupAccess } = await loadModule(false);
 		mocks.findBackupById.mockResolvedValue({
 			...baseBackup,
 			postgres: { appName: "pg-app", serverId: "server-1" },
@@ -136,7 +138,6 @@ describe("resolveBackupAccess", () => {
 	});
 
 	it("only lets owners and admins reach web-server backups", async () => {
-		const { resolveBackupAccess } = await loadModule(false);
 		mocks.findBackupById.mockResolvedValue({
 			...baseBackup,
 			databaseType: "web-server",
@@ -157,7 +158,6 @@ describe("resolveBackupAccess", () => {
 
 describe("listBackupFilesByBackupId", () => {
 	it("lists on the service server sorted by ModTime", async () => {
-		const { listBackupFilesByBackupId } = await loadModule(false);
 		mocks.findBackupById.mockResolvedValue({
 			...baseBackup,
 			postgres: { appName: "pg-app", serverId: "server-1" },
@@ -190,7 +190,6 @@ describe("listBackupFilesByBackupId", () => {
 	});
 
 	it("returns an empty list when the folder does not exist", async () => {
-		const { listBackupFilesByBackupId } = await loadModule(false);
 		mocks.execAsync.mockRejectedValue(
 			new ExecError("Command execution failed", {
 				command: "rclone",
@@ -207,7 +206,6 @@ describe("getBackupDownloadUrl", () => {
 	it.each(["../x.sql.gz", "a/b.sql.gz", ".hidden.sql.gz", "x.txt"])(
 		"rejects %s",
 		async (fileName) => {
-			const { getBackupDownloadUrl } = await loadModule(false);
 			await expect(
 				getBackupDownloadUrl(ctx, "backup-1", fileName),
 			).rejects.toMatchObject({ code: "BAD_REQUEST" });
@@ -216,7 +214,6 @@ describe("getBackupDownloadUrl", () => {
 	);
 
 	it("returns the presigned url from rclone link", async () => {
-		const { getBackupDownloadUrl } = await loadModule(false);
 		mocks.execAsync.mockResolvedValue({
 			stdout: "https://s3.local/bucket/pg-app/db/x.sql.gz?X-Amz-Signature=1\n",
 			stderr: "",
@@ -234,7 +231,6 @@ describe("getBackupDownloadUrl", () => {
 	});
 
 	it("maps object not found to NOT_FOUND", async () => {
-		const { getBackupDownloadUrl } = await loadModule(false);
 		mocks.execAsync.mockRejectedValue(
 			new ExecError("Command execution failed", {
 				command: "rclone",
@@ -247,7 +243,6 @@ describe("getBackupDownloadUrl", () => {
 	});
 
 	it("never logs the command on other failures", async () => {
-		const { getBackupDownloadUrl } = await loadModule(false);
 		const consoleError = vi
 			.spyOn(console, "error")
 			.mockImplementation(() => {});

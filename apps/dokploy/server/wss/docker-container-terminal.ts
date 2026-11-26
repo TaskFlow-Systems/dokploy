@@ -1,13 +1,19 @@
 import { execFile } from "node:child_process";
 import type http from "node:http";
 import { findServerById, IS_CLOUD, validateRequest } from "@dokploy/server";
+import { SSH_KEEPALIVE } from "@dokploy/server/utils/process/ssh-keepalive";
 import { resolveServerDestinationHost } from "@dokploy/server/utils/servers/destination";
 import { quoteShellArgs } from "@dokploy/server/utils/shell";
-import { Client } from "ssh2";
+import { Client, type ClientChannel } from "ssh2";
 import { WebSocketServer } from "ws";
 import { rejectApiKeySession } from "./api-key";
 import { canAccessDockerOverWss } from "./authorize";
-import { onWebSocketConnection, readUpgradePathname } from "./connection";
+import {
+	createSshCloser,
+	onWebSocketConnection,
+	readUpgradePathname,
+	stopWhenClientIsSilent,
+} from "./connection";
 import { containerBelongsToService } from "./container-ownership";
 import { canAccessDockerTerminalWebSocket } from "./docker-permission";
 import { runHangupScans } from "./hangup-scans";
@@ -21,6 +27,18 @@ import {
 	parseResizeMessage,
 	parseTerminalSize,
 } from "./utils";
+
+const EXEC_PENDING_FALLBACK_MS = 30_000;
+const HANGUP_SCAN_TIMEOUT_MS = 10_000;
+const HANGUP_FALLBACK_MS = 30_000;
+
+type RemotePhase =
+	| "connecting"
+	| "opening-exec"
+	| "closing-while-opening"
+	| "open"
+	| "hanging-up"
+	| "closed";
 
 export const setupDockerContainerTerminalWebSocketServer = (
 	server: http.Server<typeof http.IncomingMessage, typeof http.ServerResponse>,
@@ -130,14 +148,111 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				}
 
 				const conn = new Client();
+				const closeSsh = createSshCloser(conn);
+				const state: {
+					phase: RemotePhase;
+					stream?: ClientChannel;
+					scans?: ReturnType<typeof runHangupScans>;
+					execPendingFallback?: ReturnType<typeof setTimeout>;
+				} = { phase: "connecting" };
+				const clearExecPendingFallback = () => {
+					if (state.execPendingFallback) {
+						clearTimeout(state.execPendingFallback);
+						state.execPendingFallback = undefined;
+					}
+				};
+				conn.once("close", clearExecPendingFallback);
+
 				let _stdout = "";
 				let _stderr = "";
+
+				const hangUp = (stream: ClientChannel) => {
+					if (state.phase === "hanging-up" || state.phase === "closed") {
+						return;
+					}
+					state.phase = "hanging-up";
+					state.stream = stream;
+					// Ending the connection first would kill the hangup with it. The
+					// connection stays up for the repeated scans, and goes at the latest
+					// when the fallback fires.
+					const scan = () =>
+						new Promise<boolean>((resolve) => {
+							const limit = setTimeout(
+								() => resolve(true),
+								HANGUP_SCAN_TIMEOUT_MS,
+							);
+							limit.unref?.();
+							const settle = (usable = true) => {
+								clearTimeout(limit);
+								resolve(usable);
+							};
+							try {
+								conn.exec(
+									quoteShellArgs(["docker", ...hangupArgs]),
+									(hangupError, hangup) => {
+										if (hangupError) {
+											settle(false);
+											return;
+										}
+										hangup.on("close", () => settle());
+										hangup.resume();
+										hangup.stderr.resume();
+									},
+								);
+							} catch {
+								settle(false);
+							}
+						});
+					const scans = runHangupScans(scan);
+					state.scans = scans;
+					const fallback = setTimeout(() => {
+						scans.cancel();
+					}, HANGUP_FALLBACK_MS);
+					fallback.unref?.();
+					conn.once("close", scans.cancel);
+					void scans.done.then(() => {
+						clearTimeout(fallback);
+						state.scans = undefined;
+						const pendingStream = state.stream;
+						state.stream = undefined;
+						state.phase = "closed";
+						pendingStream?.end();
+						closeSsh();
+					});
+				};
+
+				ws.once("close", () => {
+					if (state.phase === "connecting") {
+						state.phase = "closed";
+						closeSsh();
+						return;
+					}
+					if (state.phase === "opening-exec") {
+						state.phase = "closing-while-opening";
+						state.execPendingFallback = setTimeout(() => {
+							state.execPendingFallback = undefined;
+							if (state.phase === "closing-while-opening") {
+								state.phase = "closed";
+								closeSsh();
+							}
+						}, EXEC_PENDING_FALLBACK_MS);
+						state.execPendingFallback.unref?.();
+						return;
+					}
+					if (state.phase === "open" && state.stream) {
+						hangUp(state.stream);
+					}
+				});
+				stopWhenClientIsSilent(ws);
+
 				conn
 					.once("ready", () => {
-						if (ws.readyState !== ws.OPEN) {
-							conn.end();
+						if (state.phase !== "connecting" || ws.readyState !== ws.OPEN) {
+							state.phase = "closed";
+							closeSsh();
 							return;
 						}
+						state.phase = "opening-exec";
 						// Use array-style arguments to prevent shell injection
 						const dockerCommand = [
 							"docker",
@@ -151,29 +266,55 @@ export const setupDockerContainerTerminalWebSocketServer = (
 							shell,
 						].join(" ");
 						conn.exec(dockerCommand, { pty: { cols, rows } }, (err, stream) => {
+							clearExecPendingFallback();
 							if (err) {
 								console.error("SSH exec error:", err);
+								state.phase = "closed";
 								ws.close();
-								conn.end();
+								closeSsh();
 								return;
 							}
 
-							let hangingUp = false;
+							if (state.phase === "closed") {
+								stream.end();
+								closeSsh();
+								return;
+							}
+
+							state.stream = stream;
+							// The shell is already running if the client left while it was opening.
+							if (
+								state.phase === "closing-while-opening" ||
+								ws.readyState !== ws.OPEN
+							) {
+								hangUp(stream);
+								return;
+							}
+
+							state.phase = "open";
 							stream
 								.on("close", (code: number, _signal: string) => {
-									ws.send(`\nContainer closed with code: ${code}\n`);
-									if (!hangingUp) {
-										conn.end();
+									if (ws.readyState === ws.OPEN) {
+										ws.send(`\nContainer closed with code: ${code}\n`);
+									}
+									if (state.phase === "open") {
+										state.phase = "closed";
+										state.stream = undefined;
+										closeSsh();
 										ws.close();
 									}
 								})
 								.on("data", (data: string) => {
 									_stdout += data.toString();
-									ws.send(data.toString());
+									if (ws.readyState === ws.OPEN) {
+										ws.send(data.toString());
+									}
 								})
 								.stderr.on("data", (data) => {
 									_stderr += data.toString();
-									ws.send(data.toString());
+									if (ws.readyState === ws.OPEN) {
+										ws.send(data.toString());
+									}
 									console.error("Error: ", data.toString());
 								});
 
@@ -198,73 +339,37 @@ export const setupDockerContainerTerminalWebSocketServer = (
 									ws.send(errorMessage);
 								}
 							});
-
-							const hangUp = () => {
-								hangingUp = true;
-								const endConnection = () => {
-									stream.end();
-									conn.end();
-								};
-								// Ending the connection first would kill the hangup with it. The
-								// connection stays up for the repeated scans, and goes at the latest
-								// when the fallback fires.
-								const scan = () =>
-									new Promise<boolean>((resolve) => {
-										const limit = setTimeout(() => resolve(true), 10_000);
-										const settle = (usable = true) => {
-											clearTimeout(limit);
-											resolve(usable);
-										};
-										try {
-											conn.exec(
-												quoteShellArgs(["docker", ...hangupArgs]),
-												(hangupError, hangup) => {
-													if (hangupError) {
-														settle(false);
-														return;
-													}
-													hangup.on("close", () => settle());
-													hangup.resume();
-													hangup.stderr.resume();
-												},
-											);
-										} catch {
-											settle(false);
-										}
-									});
-								const scans = runHangupScans(scan);
-								const fallback = setTimeout(() => {
-									scans.cancel();
-								}, 30_000);
-								conn.once("close", scans.cancel);
-								void scans.done.then(() => {
-									clearTimeout(fallback);
-									endConnection();
-								});
-							};
-
-							// The shell is already running if the client left while it was opening.
-							if (ws.readyState !== ws.OPEN) {
-								hangUp();
-								return;
-							}
-							ws.on("close", hangUp);
 						});
 					})
 					.on("error", (err) => {
+						clearExecPendingFallback();
+						state.phase = "closed";
+						const scans = state.scans;
+						state.scans = undefined;
+						scans?.cancel();
+						const activeStream = state.stream;
+						state.stream = undefined;
+						activeStream?.end();
 						if (ws.readyState === ws.OPEN) {
 							console.error("SSH connection error:", err);
 							ws.send(`SSH error: ${err.message}`);
 							ws.close();
 						}
-						conn.end();
-					})
-					.connect({
+						closeSsh();
+					});
+
+				try {
+					conn.connect({
 						host,
 						port: server.port,
 						username: server.username,
 						privateKey: server.sshKey?.privateKey,
+						...SSH_KEEPALIVE,
 					});
+				} catch (error) {
+					state.phase = "closed";
+					throw error;
+				}
 			} else {
 				if (IS_CLOUD) {
 					ws.send("This feature is not available in the cloud version.");
@@ -275,6 +380,8 @@ export const setupDockerContainerTerminalWebSocketServer = (
 				if (ws.readyState !== ws.OPEN) {
 					return;
 				}
+
+				stopWhenClientIsSilent(ws);
 
 				const hangUpLocal = () =>
 					runHangupScans(
@@ -301,7 +408,7 @@ export const setupDockerContainerTerminalWebSocketServer = (
 					ws.send(`\nContainer closed with code: ${exitCode}\n`);
 					ws.close();
 				});
-				ws.on("close", () => {
+				ws.once("close", () => {
 					ptyProcess.kill();
 					hangUpLocal();
 				});
