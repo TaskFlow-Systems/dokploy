@@ -29,11 +29,33 @@ export const TRAEFIK_HTTP3_PORT =
 export const TRAEFIK_VERSION =
 	process.env.TRAEFIK_VERSION || PINNED_VERSIONS.traefik;
 
+export const TRAEFIK_LOG_MAX_SIZE = "20m";
+export const TRAEFIK_LOG_MAX_FILE = "5";
+export const TRAEFIK_LOG_CONFIG = {
+	Type: "json-file",
+	Config: {
+		"max-size": TRAEFIK_LOG_MAX_SIZE,
+		"max-file": TRAEFIK_LOG_MAX_FILE,
+	},
+} as const satisfies NonNullable<
+	NonNullable<ContainerCreateOptions["HostConfig"]>["LogConfig"]
+>;
+export const TRAEFIK_SWARM_LOG_DRIVER = {
+	Name: "json-file",
+	Options: {
+		"max-size": TRAEFIK_LOG_MAX_SIZE,
+		"max-file": TRAEFIK_LOG_MAX_FILE,
+	},
+} as const satisfies NonNullable<
+	NonNullable<CreateServiceOptions["TaskTemplate"]>["LogDriver"]
+>;
+
 const traefikContainerOptions = (
 	image: string,
 	restart: string,
 ) => `--name dokploy-traefik \
 	--restart ${restart} \
+	--log-driver json-file --log-opt max-size=${TRAEFIK_LOG_MAX_SIZE} --log-opt max-file=${TRAEFIK_LOG_MAX_FILE} \
 	-v /etc/dokploy/traefik/traefik.yml:/etc/traefik/traefik.yml \
 	-v /etc/dokploy/traefik/dynamic:/etc/dokploy/traefik/dynamic \
 	-v /var/run/docker.sock:/var/run/docker.sock:ro \
@@ -409,6 +431,10 @@ const recreateStandaloneTraefik = async ({
 			RestartPolicy: {
 				Name: "always",
 			},
+			LogConfig: {
+				Type: TRAEFIK_LOG_CONFIG.Type,
+				Config: { ...TRAEFIK_LOG_CONFIG.Config },
+			},
 			Binds: [
 				`${MAIN_TRAEFIK_PATH}/traefik.yml:/etc/traefik/traefik.yml`,
 				`${DYNAMIC_TRAEFIK_PATH}:/etc/dokploy/traefik/dynamic`,
@@ -645,6 +671,10 @@ export const initializeTraefikService = async ({
 						Target: "/var/run/docker.sock",
 					},
 				],
+			},
+			LogDriver: {
+				Name: TRAEFIK_SWARM_LOG_DRIVER.Name,
+				Options: { ...TRAEFIK_SWARM_LOG_DRIVER.Options },
 			},
 			Networks: [{ Target: "dokploy-network" }],
 			Placement: {

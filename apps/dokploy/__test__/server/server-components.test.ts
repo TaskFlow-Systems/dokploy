@@ -914,6 +914,9 @@ describe("buildComponentUpdateScript run order", { timeout: 60_000 }, () => {
 			) ?? "";
 		expect(created).toContain("--restart no");
 		expect(created).not.toContain("--restart always");
+		expect(created).toContain(
+			"--log-driver json-file --log-opt max-size=20m --log-opt max-file=5",
+		);
 		expect(
 			run.calls.indexOf("docker update --restart always dokploy-traefik"),
 		).toBeGreaterThan(run.calls.indexOf("docker start dokploy-traefik"));
@@ -1603,6 +1606,9 @@ describe("buildTraefikCreateCommand", () => {
 		expect(command).toContain("docker create");
 		expect(command).not.toContain("docker run");
 		expect(command).not.toContain("network connect");
+		expect(command).toContain(
+			"--log-driver json-file --log-opt max-size=20m --log-opt max-file=5",
+		);
 		expect(command).toMatch(/-p 443:443\s/);
 		expect(command).toContain("-p 443:443/udp");
 		expect(command).toContain("traefik:v3.7.5");
@@ -1614,9 +1620,12 @@ describe("buildTraefikCreateCommand", () => {
 });
 
 describe("buildTraefikRunCommand", () => {
-	it("publishes HTTPS and HTTP/3 with the requested image and never port 80", () => {
+	it("publishes HTTPS and HTTP/3 with bounded json-file logs, the requested image, and never port 80", () => {
 		const command = buildTraefikRunCommand("3.7.5");
 
+		expect(command).toContain(
+			"--log-driver json-file --log-opt max-size=20m --log-opt max-file=5",
+		);
 		expect(command).toMatch(/-p 443:443\s/);
 		expect(command).not.toMatch(PORT_80_PUBLICATION);
 		expect(command).toContain("-p 443:443/udp");
