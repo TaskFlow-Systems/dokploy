@@ -29,7 +29,7 @@
 		"@types/node": "^26.6.11",
 		"dotenv": "^18.0.10",
 		"esbuild": "^0.28.2",
-		"lint-staged": "^17.6.2",
+		"lint-staged": "^17.6.3",
 		"node-gyp": "^13.1.0",
 		"tsx": "^4.23.15"
 	},
